@@ -363,7 +363,7 @@ fn new_label_instruction(src: &[char]) -> LabelInstruction {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Label {
     pub tag: String,
 }

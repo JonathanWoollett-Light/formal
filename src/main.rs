@@ -21,5 +21,7 @@ fn main() {
     }
 
     // Verify the ast
-    verify(ast, 2);
+    unsafe {
+        verify(ast, 1..3);
+    }
 }
