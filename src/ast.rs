@@ -68,7 +68,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Csrr(Csrr),
     Bnez(Bnez),
@@ -113,7 +113,7 @@ fn new_instruction(src: &[char]) -> Instruction {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Beqz {
     register: Register,
     label: Label,
@@ -126,7 +126,7 @@ fn new_beqz(src: &[char]) -> Beqz {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lb {
     to: Register,
     from: Register,
@@ -147,11 +147,11 @@ fn new_lb(src: &[char]) -> Lb {
     unreachable!()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Blt {
-    lhs: Register,
-    rhs: Register,
-    label: Label,
+    pub lhs: Register,
+    pub rhs: Register,
+    pub label: Label,
 }
 
 fn new_blt(src: &[char]) -> Blt {
@@ -162,11 +162,11 @@ fn new_blt(src: &[char]) -> Blt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Addi {
-    out: Register,
-    lhs: Register,
-    rhs: Immediate,
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Immediate,
 }
 
 fn new_addi(src: &[char]) -> Addi {
@@ -177,11 +177,11 @@ fn new_addi(src: &[char]) -> Addi {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lw {
-    to: Register,
-    from: Register,
-    offset: Offset,
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
 }
 
 fn new_lw(src: &[char]) -> Lw {
@@ -198,11 +198,11 @@ fn new_lw(src: &[char]) -> Lw {
     unreachable!()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sb {
-    to: Register,
-    from: Register,
-    offset: Offset,
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
 }
 
 fn new_sb(src: &[char]) -> Sb {
@@ -219,7 +219,7 @@ fn new_sb(src: &[char]) -> Sb {
     unreachable!()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sw {
     pub to: Register,
     pub from: Register,
@@ -240,9 +240,9 @@ fn new_sw(src: &[char]) -> Sw {
     unreachable!()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Offset {
-    value: Immediate,
+    pub value: Immediate,
 }
 
 fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
@@ -255,12 +255,13 @@ fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Fail;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Data;
 
+#[derive(Clone)]
 pub struct Ascii {
     string: Vec<u8>,
 }
@@ -284,7 +285,7 @@ fn new_ascii(src: &[char]) -> Ascii {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
 pub enum Register {
     X0,
     X1,
@@ -311,7 +312,7 @@ fn new_register(src: &[char]) -> Option<Register> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Li {
     pub register: Register,
     pub immediate: Immediate,
@@ -324,9 +325,9 @@ fn new_li(src: &[char]) -> Li {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Immediate {
-    value: i64,
+    pub value: i64,
 }
 
 fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::Err> {
@@ -338,7 +339,7 @@ fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::
     Ok(Immediate { value })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct La {
     pub register: Register,
     pub label: Label,
@@ -351,7 +352,7 @@ fn new_la(src: &[char]) -> La {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabelInstruction {
     pub tag: Label,
 }
@@ -375,7 +376,7 @@ fn new_label(src: &[char]) -> Label {
 }
 
 /// Control and Status Register Read
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Csrr {
     dest: Register,
     src: Csr,
@@ -389,7 +390,7 @@ fn new_csrr(src: &[char]) -> Csrr {
 }
 
 /// Control and Status Register
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Csr {
     Mhartid,
 }
@@ -401,7 +402,7 @@ fn new_csr(src: &[char]) -> Csr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Bnez {
     src: Register,
     dest: Label,
@@ -414,7 +415,7 @@ fn new_bnez(src: &[char]) -> Bnez {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct J {
     dest: Label,
 }
@@ -425,7 +426,7 @@ fn new_j(src: &[char]) -> J {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Global {
     pub tag: Label,
 }

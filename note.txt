@@ -1,0 +1,6 @@
+Conditional checking works by tracing the values along a single
+path within a single hart and type. We then store a map at the
+type map level of all the AST instructions we touch, if we find
+the path to be invalid then we reset it same as the type map.
+Once a valid path is found we remove all instructions not
+present in the touched map.
