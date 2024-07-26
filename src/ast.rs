@@ -325,7 +325,7 @@ fn new_li(src: &[char]) -> Li {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Immediate {
     pub value: i64,
 }

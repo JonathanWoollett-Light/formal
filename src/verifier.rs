@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::iter;
 use std::num::NonZeroU8;
 use std::ops::Range;
+use std::ops::RangeInclusive;
 use std::ptr;
 use std::{
     alloc::alloc,
@@ -408,7 +409,9 @@ type Excluded = HashSet<BTreeMap<Label, Type>>;
 
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
 enum Branching {
-    True, False, Both
+    True,
+    False,
+    Both,
 }
 
 /// Queues up the next node to evaluate.
@@ -417,16 +420,34 @@ enum Branching {
 /// if its racy, we look at the 2nd hart and queue it up if its not racy,
 /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
 /// up all racy instructions (since we need to evaluate all the possible ordering of them).
-unsafe fn queue_up(prev: NonNull<VerifierNode>, queue: &mut VecDeque<NonNull<VerifierNode>>, branches: &mut HashMap<NonNull<AstNode>, Branching>) {
-    // Get the number of harts of this sub-tree
-    let mut root = prev;
-    while let VerifierPrevNode::Branch(branch) = root.as_ref().prev {
-        root = branch
+unsafe fn queue_up(
+    prev: NonNull<VerifierNode>,
+    queue: &mut VecDeque<NonNull<VerifierNode>>,
+    branches: &mut HashMap<NonNull<AstNode>, Branching>,
+) {
+    // Get the number of harts of this sub-tree and record the path.
+    let mut current = prev;
+    let mut record = Vec::new();
+    while let VerifierPrevNode::Branch(branch) = current.as_ref().prev {
+        let r = branch
+            .as_ref()
+            .next
+            .iter()
+            .position(|&x| x == current)
+            .unwrap();
+        record.push(r);
+        current = branch
     }
-    let VerifierPrevNode::Root(root) = root.as_ref().prev else {
+    let VerifierPrevNode::Root(root) = current.as_ref().prev else {
         unreachable!()
     };
     let harts = root.as_ref().harts;
+    let first_step = root
+        .as_ref()
+        .next
+        .iter()
+        .position(|&x| x == current)
+        .unwrap();
 
     // Search the verifier tree for the fronts of all harts.
     let mut fronts = BTreeMap::new();
@@ -438,26 +459,6 @@ unsafe fn queue_up(prev: NonNull<VerifierNode>, queue: &mut VecDeque<NonNull<Ver
         };
         current = branch.as_ref();
         fronts.entry(current.hart).or_insert(current.node);
-    }
-
-    unsafe fn simple_nonnull(
-        mut prev: NonNull<VerifierNode>,
-        node_ref: &AstNode,
-        hart: u8,
-    ) -> NonNull<VerifierNode> {
-        let ptr = alloc(Layout::new::<VerifierNode>()).cast();
-        ptr::write(
-            ptr,
-            VerifierNode {
-                prev: VerifierPrevNode::Branch(prev),
-                hart,
-                node: node_ref.next.unwrap(),
-                next: Vec::new(),
-            },
-        );
-        let nonull = NonNull::new(ptr).unwrap();
-        prev.as_mut().next.push(nonull);
-        nonull
     }
 
     // The lowest hart non-racy node is enqueued
@@ -476,45 +477,35 @@ unsafe fn queue_up(prev: NonNull<VerifierNode>, queue: &mut VecDeque<NonNull<Ver
             }
             // Non-racy + Conditional
             Instruction::Blt(Blt { rhs, lhs, label }) => {
-                // To find the value looking back, we use a stack for polish notation.
-                let mut eval = Vec::new();
                 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
-                enum Value {
-                    Register(Register),
+                enum Lhs {
                     Label(Label),
-                    Unknown,
-                    Known(i64)
+                    Register(Register),
+                }
+                #[derive(Debug, Clone)]
+                struct Domain {
+                    range: RangeInclusive<Immediate>,
+                }
+                impl From<Immediate> for Domain {
+                    fn from(x: Immediate) -> Self {
+                        Self { range: x..=x }
+                    }
                 }
 
-                let mut values = (0..root.as_ref().next.len()).map(|_|HashMap::new()).collect();
-                let mut stack = root.as_ref().next.iter().enumerate().map(|(i,n)|(i,*n)).collect::<Vec<_>>();
-                // Iterate back through the AST adding all relevant instructions.
-                loop {
-                    // If all statements have been evaluated.
-                    let Some(next) = stack.pop() else {
-                        break;
-                    };
-                    if next
-
-                    // Iterate back.
-                    let VerifierPrevNode::Branch(branch) = current.as_ref().prev else {
-                        todo!()
-                    };
-                    current = branch;
-
-                    let current_instr = &current.as_ref().node.as_ref().this;
-                    match current_instr {
+                // Iterate forward to find the values.
+                let mut values = HashMap::new();
+                let mut current = root.as_ref().next[first_step];
+                for next in record.iter().rev() {
+                    match current.as_ref().node.as_ref().this {
                         Instruction::Li(Li {
                             register,
-                            immediate: _,
+                            immediate,
                         }) => {
-                            if unknown.remove(&Value::Register(*register)) {
-                                eval.push(current_instr.clone());
-                            }
-                        },
-                        Instruction::
+                            values.insert(Lhs::Register(register), Domain::from(immediate));
+                        }
                         _ => todo!(),
                     }
+                    current = current.as_ref().next[*next];
                 }
 
                 todo!();
@@ -539,4 +530,24 @@ unsafe fn queue_up(prev: NonNull<VerifierNode>, queue: &mut VecDeque<NonNull<Ver
             x @ _ => unreachable!("{x:?}"),
         }
     }
+}
+
+unsafe fn simple_nonnull(
+    mut prev: NonNull<VerifierNode>,
+    node_ref: &AstNode,
+    hart: u8,
+) -> NonNull<VerifierNode> {
+    let ptr = alloc(Layout::new::<VerifierNode>()).cast();
+    ptr::write(
+        ptr,
+        VerifierNode {
+            prev: VerifierPrevNode::Branch(prev),
+            hart,
+            node: node_ref.next.unwrap(),
+            next: Vec::new(),
+        },
+    );
+    let nonull = NonNull::new(ptr).unwrap();
+    prev.as_mut().next.push(nonull);
+    nonull
 }
