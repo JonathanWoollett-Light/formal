@@ -1,8 +1,12 @@
+#![feature(let_chains)]
+
 mod ast;
 use ast::*;
 
 mod verifier;
 use verifier::*;
+
+mod draw;
 
 fn main() {
     println!("Hello, world!");
@@ -19,6 +23,8 @@ fn main() {
         println!("{:?}", as_ref.this);
         next_opt = as_ref.next;
     }
+
+    println!();
 
     // Verify the ast
     unsafe {

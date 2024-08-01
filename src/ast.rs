@@ -128,9 +128,9 @@ fn new_beqz(src: &[char]) -> Beqz {
 
 #[derive(Debug, Clone)]
 pub struct Lb {
-    to: Register,
-    from: Register,
-    offset: Offset,
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
 }
 
 fn new_lb(src: &[char]) -> Lb {
@@ -285,7 +285,8 @@ fn new_ascii(src: &[char]) -> Ascii {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[non_exhaustive]
 pub enum Register {
     X0,
     X1,
@@ -299,6 +300,66 @@ pub enum Register {
     X9,
     X10,
     X11,
+    X12,
+    X13,
+    X14,
+    X15,
+    X16,
+    X17,
+    X18,
+    X19,
+    X20,
+    X21,
+    X22,
+    X23,
+    X24,
+    X25,
+    X26,
+    X27,
+    X28,
+    X29,
+    X30,
+    X31,
+}
+
+impl fmt::Debug for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::X0 => write!(f,"x0/zero"),
+            Self::X1 => write!(f,"x1/ra"),
+            Self::X2 => write!(f,"x2/sp"),
+            Self::X3 => write!(f,"x3/gp"),
+            Self::X4 => write!(f,"x4/tp"),
+            Self::X5 => write!(f,"x5/t0"),
+            Self::X6 => write!(f,"x6/t1"),
+            Self::X7 => write!(f,"x7/t2"),
+            Self::X8 => write!(f,"x8/s0/fp"),
+            Self::X9 => write!(f,"x9/s1"),
+            Self::X10 => write!(f,"x10/a0"),
+            Self::X11 => write!(f,"x11/a1"),
+            Self::X12 => write!(f,"x12/a2"),
+            Self::X13 => write!(f,"x13/a3"),
+            Self::X14 => write!(f,"x14/a4"),
+            Self::X15 => write!(f,"x15/a5"),
+            Self::X16 => write!(f,"x16/a6"),
+            Self::X17 => write!(f,"x17/a7"),
+            Self::X18 => write!(f,"x18/s2"),
+            Self::X19 => write!(f,"x19/s3"),
+            Self::X20 => write!(f,"x20/s4"),
+            Self::X21 => write!(f,"x21/s5"),
+            Self::X22 => write!(f,"x22/s6"),
+            Self::X23 => write!(f,"x23/s7"),
+            Self::X24 => write!(f,"x24/s8"),
+            Self::X25 => write!(f,"x25/s9"),
+            Self::X26 => write!(f,"x26/s10"),
+            Self::X27 => write!(f,"x27/s11"),
+            Self::X28 => write!(f,"x28/t3"),
+            Self::X29 => write!(f,"x29/t4"),
+            Self::X30 => write!(f,"x30/t5"),
+            Self::X31 => write!(f,"x31/t6"),
+            _ => todo!()
+        }
+    }
 }
 
 fn new_register(src: &[char]) -> Option<Register> {
@@ -327,12 +388,44 @@ fn new_li(src: &[char]) -> Li {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Immediate {
-    pub value: i64,
+    pub value: u64,
+}
+impl Immediate {
+    pub const ZERO: Immediate = Immediate { value: 0 };
+}
+impl std::ops::Add for Immediate {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            value: self.value + other.value,
+        }
+    }
+}
+impl Immediate {
+    pub fn to_ne_bytes(&self) -> [u8; 8] {
+        self.value.to_ne_bytes()
+    }
+}
+impl From<[u8; 4]> for Immediate {
+    fn from(word: [u8; 4]) -> Self {
+        let bytes = <[u8; 8]>::try_from(
+            [0, 0, 0, 0]
+                .iter()
+                .chain(word.iter())
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        Self {
+            value: u64::from_be_bytes(bytes),
+        }
+    }
 }
 
-fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::Err> {
+fn new_immediate(src: &[char]) -> Result<Immediate, <u64 as std::str::FromStr>::Err> {
     let value = match src {
-        ['0', 'x', rem @ ..] => i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
+        ['0', 'x', rem @ ..] => u64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
         _ => src.iter().collect::<String>().parse()?,
     };
 
@@ -378,8 +471,8 @@ fn new_label(src: &[char]) -> Label {
 /// Control and Status Register Read
 #[derive(Debug, Clone)]
 pub struct Csrr {
-    dest: Register,
-    src: Csr,
+    pub dest: Register,
+    pub src: Csr,
 }
 
 fn new_csrr(src: &[char]) -> Csrr {
@@ -404,8 +497,8 @@ fn new_csr(src: &[char]) -> Csr {
 
 #[derive(Debug, Clone)]
 pub struct Bnez {
-    src: Register,
-    dest: Label,
+    pub src: Register,
+    pub dest: Label,
 }
 
 fn new_bnez(src: &[char]) -> Bnez {
@@ -437,5 +530,5 @@ fn new_global(src: &[char]) -> Global {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Wfi;

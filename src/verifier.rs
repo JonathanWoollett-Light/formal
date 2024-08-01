@@ -4,6 +4,7 @@ use std::alloc::Layout;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::iter;
 use std::num::NonZeroU8;
 use std::ops::Range;
@@ -109,18 +110,109 @@ type NextNode = Vec<Vec<NonNull<VerifierNode>>>;
 /// We use a tree to trace the execution of the program,
 /// then when conditions are required it can resolve them
 /// by looking back at the trace.
-struct VerifierNode {
+pub struct VerifierNode {
     prev: VerifierPrevNode,
     hart: u8,
     node: NonNull<AstNode>,
     next: NextVerifierNode,
 }
 
+type Types = BTreeMap<Label, Type>;
+type Excluded = HashSet<BTreeMap<Label, Type>>;
+
+#[derive(Debug)]
+struct State {
+    registers: Vec<HashMap<Register, RegisterValue>>,
+    memory: HashMap<MemoryLocation, MemoryValue>,
+}
+impl State {
+    fn new(harts: u8) -> Self {
+        Self {
+            registers: (0..harts).map(|_| HashMap::new()).collect(),
+            memory: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+enum MemoryLocation {
+    Data(Label),
+    Heap(RangeInclusive<usize>),
+}
+
+// It is possible to technically store a 4 byte virtual value (e.g. DATA_END)
+// then edit 2 bytes of it. So we will need additional complexity to support this case
+#[derive(Debug)]
+#[non_exhaustive]
+enum MemoryValue {
+    Word([u8; 4]),
+}
+
+use std::cmp::Ordering;
+
+impl PartialOrd for MemoryLocation {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Self::Data(_), Self::Heap(_)) => Some(Ordering::Less),
+            (Self::Heap(_), Self::Data(_)) => Some(Ordering::Greater),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+enum RegisterValue {
+    Immediate(ImmediateRange),
+    Address(Label),
+    Csr(CsrValue),
+}
+impl From<Immediate> for RegisterValue {
+    fn from(imm: Immediate) -> Self {
+        Self::Immediate(ImmediateRange(imm..=imm))
+    }
+}
+impl From<Label> for RegisterValue {
+    fn from(label: Label) -> Self {
+        Self::Address(label)
+    }
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+enum CsrValue {
+    Mhartid,
+}
+
+#[derive(Debug, Clone)]
+struct ImmediateRange(RangeInclusive<Immediate>);
+impl ImmediateRange {
+    pub fn value(&self) -> Option<Immediate> {
+        if self.0.start() == self.0.end() {
+            Some(*self.0.start())
+        } else {
+            None
+        }
+    }
+}
+impl std::ops::Add for ImmediateRange {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self(*self.0.start() + *other.0.start()..=*self.0.end() + *other.0.end())
+    }
+}
+impl std::ops::Add<Immediate> for ImmediateRange {
+    type Output = Self;
+
+    fn add(self, other: Immediate) -> Self {
+        Self(*self.0.start() + other..=*self.0.end() + other)
+    }
+}
+
 pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
     assert!(harts_range.start > 0);
-    let mut data = HashMap::<Label, Vec<u8>>::new();
-    let mut bss = HashMap::<Label, usize>::new();
-    let mut types = HashMap::<Label, Type>::new();
 
     // Intial misc stuff
     let first = ast.unwrap().as_ref();
@@ -144,7 +236,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
     // `[(_start, hart 0), (_start, hart 0), (_start, hart 0)]`
     // where each entry has a number of predeccessors e.g. `(_start, hart 1)`
     // up to the number of harts for that path.
-    let mut roots = harts_range
+    let roots = harts_range
         .map(|harts| {
             let ptr = alloc(Layout::new::<VerifierHarts>()).cast();
             ptr::write(
@@ -158,10 +250,12 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
         })
         .collect::<Vec<_>>();
 
-    loop {
+    let (final_types, final_touched) = loop {
         // Record the current types of variables on the current path.
         let mut types = Types::new();
-        let mut branching = HashMap::new();
+        // To remove uneeded code (e.g. a branch might always be true so we remove the code it skips)
+        // we record all the AST instructions that get touched.
+        let mut touched = HashSet::<NonNull<AstNode>>::new();
 
         let mut queue = roots
             .iter()
@@ -202,9 +296,23 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
             // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
             // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
             let branch = branch_ptr.as_ref();
+            let ast = branch.node;
+
+            // Record all the AST node that are reachable.
+            touched.insert(ast);
+
+            // let this = &branch.node.as_ref().this;
+            // println!("{} {this:?}",branch.hart);
+
+            // Check the instruction is valid and make typing decisions.
             match &branch.node.as_ref().this {
                 // Instructions which cannot be invalid and do not affect types.
-                Instruction::Label(_) | Instruction::Addi(_) | Instruction::Blt(_) => {}
+                Instruction::Li(_)
+                | Instruction::Label(_)
+                | Instruction::Addi(_)
+                | Instruction::Blt(_)
+                | Instruction::Csrr(_)
+                | Instruction::Bnez(_) => {}
                 Instruction::La(La { register: _, label }) => {
                     if !types.contains_key(label) {
                         let next_possible_opt = TYPE_LIST.iter().find(|p| {
@@ -221,9 +329,6 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                             break 'outer;
                         }
                     }
-                }
-                Instruction::Li(_) => {
-                    // Loading an immediate into a register does nothing by itself.
                 }
                 // For any store we need to validate the destination is valid.
                 Instruction::Sw(Sw {
@@ -291,69 +396,66 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                     from,
                     offset,
                 }) => {
-                    // Find value of the `from` register.
-                    let mut current = branch_ptr;
-                    while let VerifierPrevNode::Branch(pred) = current.as_ref().prev {
-                        match &pred.as_ref().node.as_ref().this {
-                            Instruction::La(La { register, label }) => {
-                                if register == from {
-                                    let var_type = types.get(label).unwrap();
-                                    // If attempting to access outside the memory space for the label.
-                                    if size(var_type) < 4 + offset.value.value as usize {
-                                        // The path is invalid, so we add the current types to the
-                                        // excluded list and restart exploration.
-                                        break 'outer;
-                                    } else {
-                                        // We found the label and we can validate that the loading
-                                        // of a word with the given offset is within the address space.
-                                        // So we continue exploration.
-                                        break;
-                                    }
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            Instruction::Li(Li {
-                                register,
-                                immediate: _,
-                            }) => {
-                                if register == from {
-                                    todo!()
-                                }
-                            }
+                    // Collect the state.
+                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                    let state = find_state(&record, root, harts, first_step, &types);
 
-                            Instruction::Sw(_) => {}
-                            Instruction::Lw(Lw {
-                                to: lwto,
-                                from: _,
-                                offset: _,
-                            }) => {
-                                if lwto == from {
-                                    todo!()
-                                }
+                    // Check the destination is valid.
+                    match state.registers[branch.hart as usize].get(from) {
+                        Some(RegisterValue::Address(from_label)) => {
+                            let var_type = types.get(from_label).unwrap();
+                            // If attempting to access outside the memory space for the label.
+                            if size(var_type) < 4 + offset.value.value as usize {
+                                // The path is invalid, so we add the current types to the
+                                // excluded list and restart exploration.
+                                break 'outer;
+                            } else {
+                                // We found the label and we can validate that the loading
+                                // of a word with the given offset is within the address space.
+                                // So we continue exploration.
                             }
-                            Instruction::Addi(Addi {
-                                out,
-                                lhs: _,
-                                rhs: _,
-                            }) => {
-                                if out == from {
-                                    todo!()
-                                }
-                            }
-                            x @ _ => todo!("{x:?}"),
                         }
-                        current = pred;
+                        x @ _ => todo!("{x:?}"),
+                    }
+                }
+                Instruction::Lb(Lb {
+                    to: _,
+                    from,
+                    offset,
+                }) => {
+                    // Collect the state.
+                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                    let state = find_state(&record, root, harts, first_step, &types);
+
+                    dbg!(from);
+                    dbg!(&state);
+
+                    // Check the destination is valid.
+                    match state.registers[branch.hart as usize].get(from) {
+                        Some(RegisterValue::Address(from_label)) => {
+                            let var_type = types.get(from_label).unwrap();
+                            // If attempting to access outside the memory space for the label.
+                            if size(var_type) < 1 + offset.value.value as usize {
+                                // The path is invalid, so we add the current types to the
+                                // excluded list and restart exploration.
+                                break 'outer;
+                            } else {
+                                // We found the label and we can validate that the loading
+                                // of a word with the given offset is within the address space.
+                                // So we continue exploration.
+                            }
+                        }
+                        x @ _ => todo!("{x:?}"),
                     }
                 }
                 x @ _ => todo!("{x:?}"),
             }
-            queue_up(branch_ptr, &mut queue, &mut branching);
+            queue_up(branch_ptr, &mut queue, &types);
         }
 
         // If we have evaluated all nodes in the queue
         if queue.is_empty() {
-            break;
+            break (types, touched);
         }
 
         // This will only be reached for an invalid path.
@@ -372,7 +474,13 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                 dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
             }
         }
-    }
+    };
+
+    // Remove all AST node not present in `final_touched`.
+    todo!();
+
+    // Add the data labels based on `final_types`.
+    todo!();
 
     // When we find a valid path, we also want to clear the tree. When clearing an invalid path
     // we don't clear the roots, but we do here.
@@ -404,28 +512,10 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
     // invalid, so as soon as we know not to explore any path requiring this later).
 }
 
-type Types = BTreeMap<Label, Type>;
-type Excluded = HashSet<BTreeMap<Label, Type>>;
-
-#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
-enum Branching {
-    True,
-    False,
-    Both,
-}
-
-/// Queues up the next node to evaluate.
-///
-/// We look at the next node for the 1st hart and queue this up if its not racy,
-/// if its racy, we look at the 2nd hart and queue it up if its not racy,
-/// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
-/// up all racy instructions (since we need to evaluate all the possible ordering of them).
-unsafe fn queue_up(
+// Get the number of harts of this sub-tree and record the path.
+unsafe fn get_backpath_harts(
     prev: NonNull<VerifierNode>,
-    queue: &mut VecDeque<NonNull<VerifierNode>>,
-    branches: &mut HashMap<NonNull<AstNode>, Branching>,
-) {
-    // Get the number of harts of this sub-tree and record the path.
+) -> (Vec<usize>, NonNull<VerifierHarts>, u8, usize) {
     let mut current = prev;
     let mut record = Vec::new();
     while let VerifierPrevNode::Branch(branch) = current.as_ref().prev {
@@ -448,6 +538,21 @@ unsafe fn queue_up(
         .iter()
         .position(|&x| x == current)
         .unwrap();
+    (record, root, harts, first_step)
+}
+
+/// Queues up the next node to evaluate.
+///
+/// We look at the next node for the 1st hart and queue this up if its not racy,
+/// if its racy, we look at the 2nd hart and queue it up if its not racy,
+/// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
+/// up all racy instructions (since we need to evaluate all the possible ordering of them).
+unsafe fn queue_up(
+    prev: NonNull<VerifierNode>,
+    queue: &mut VecDeque<NonNull<VerifierNode>>,
+    types: &Types,
+) {
+    let (record, root, harts, first_step) = get_backpath_harts(prev);
 
     // Search the verifier tree for the fronts of all harts.
     let mut fronts = BTreeMap::new();
@@ -471,44 +576,82 @@ unsafe fn queue_up(
             Instruction::Label(_)
             | Instruction::La(_)
             | Instruction::Li(_)
-            | Instruction::Addi(_) => {
+            | Instruction::Addi(_)
+            | Instruction::Csrr(_) => {
                 queue.push_back(simple_nonnull(prev, node_ref, hart));
                 return;
             }
             // Non-racy + Conditional
             Instruction::Blt(Blt { rhs, lhs, label }) => {
-                #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
-                enum Lhs {
-                    Label(Label),
-                    Register(Register),
-                }
-                #[derive(Debug, Clone)]
-                struct Domain {
-                    range: RangeInclusive<Immediate>,
-                }
-                impl From<Immediate> for Domain {
-                    fn from(x: Immediate) -> Self {
-                        Self { range: x..=x }
-                    }
-                }
+                let state = find_state(&record, root, harts, first_step, types);
 
-                // Iterate forward to find the values.
-                let mut values = HashMap::new();
-                let mut current = root.as_ref().next[first_step];
-                for next in record.iter().rev() {
-                    match current.as_ref().node.as_ref().this {
-                        Instruction::Li(Li {
-                            register,
-                            immediate,
-                        }) => {
-                            values.insert(Lhs::Register(register), Domain::from(immediate));
+                let lhs = state.registers[hart as usize].get(lhs);
+                let rhs = state.registers[hart as usize].get(rhs);
+                match (lhs, rhs) {
+                    (Some(RegisterValue::Immediate(r)), Some(RegisterValue::Immediate(l))) => {
+                        if let Some(r) = r.value()
+                            && let Some(l) = l.value()
+                        {
+                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                            // don't need to actually visit/evaluate the branch at runtime.
+                            if l < r {
+                                // TODO: Find the AST node for the label
+                                let label_node = todo!();
+                                queue.push_back(simple_nonnull(prev, label_node, hart));
+                            } else {
+                                queue.push_back(simple_nonnull(
+                                    prev,
+                                    node_ref.next.unwrap().as_ref(),
+                                    hart,
+                                ));
+                            }
+                        } else {
+                            todo!()
                         }
-                        _ => todo!(),
                     }
-                    current = current.as_ref().next[*next];
+                    _ => todo!(),
                 }
+                return;
+            }
+            Instruction::Bnez(Bnez { src, dest }) => {
+                let state = find_state(&record, root, harts, first_step, types);
 
-                todo!();
+                let src = state.registers[hart as usize].get(src);
+                match src {
+                    Some(RegisterValue::Immediate(imm)) => {
+                        if let Some(imm) = imm.value() {
+                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                            // don't need to actually visit/evaluate the branch at runtime.
+                            if imm != Immediate::ZERO {
+                                // TODO: Find the AST node for the label
+                                let label_node = todo!();
+                                queue.push_back(simple_nonnull(prev, label_node, hart));
+                            } else {
+                                queue.push_back(simple_nonnull(
+                                    prev,
+                                    node_ref.next.unwrap().as_ref(),
+                                    hart,
+                                ));
+                            }
+                        } else {
+                            todo!()
+                        }
+                    }
+                    Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
+                        if hart != 0 {
+                            // TODO: Find the AST node for the label
+                            let label_node = todo!();
+                            queue.push_back(simple_nonnull(prev, label_node, hart));
+                        } else {
+                            queue.push_back(simple_nonnull(
+                                prev,
+                                node_ref.next.unwrap().as_ref(),
+                                hart,
+                            ));
+                        }
+                    }
+                    x @ _ => todo!("{x:?}"),
+                }
                 return;
             }
             // Racy
@@ -550,4 +693,126 @@ unsafe fn simple_nonnull(
     let nonull = NonNull::new(ptr).unwrap();
     prev.as_mut().next.push(nonull);
     nonull
+}
+
+unsafe fn find_state(
+    record: &[usize],
+    root: NonNull<VerifierHarts>,
+    harts: u8,
+    first_step: usize,
+    types: &Types,
+) -> State {
+    // Iterate forward to find the values.
+    let mut state = State::new(harts);
+    let mut current = root.as_ref().next[first_step];
+    for next in record.iter().rev() {
+        let vnode = current.as_ref();
+        let hart = vnode.hart as usize;
+        match &vnode.node.as_ref().this {
+            // Instructions with no side affects.
+            Instruction::Label(_)
+            | Instruction::Blt(_)
+            | Instruction::Bnez(_)
+            | Instruction::Beqz(_) => {}
+            Instruction::Li(Li {
+                register,
+                immediate,
+            }) => {
+                state.registers[hart].insert(*register, RegisterValue::from(*immediate));
+            }
+            Instruction::La(La { register, label }) => {
+                state.registers[hart].insert(*register, RegisterValue::from(label.clone()));
+            }
+            Instruction::Sw(Sw { to, from, offset }) => {
+                let Offset {
+                    value: Immediate { value: 0 },
+                } = offset
+                else {
+                    todo!()
+                };
+
+                let Some(to_value) = state.registers[hart].get(to) else {
+                    todo!()
+                };
+                let Some(from_value) = state.registers[hart].get(from) else {
+                    todo!()
+                };
+                match to_value {
+                    RegisterValue::Address(to_label) => {
+                        let to_type = types.get(to_label).unwrap();
+                        // We should have already checked the type is large enough for the store.
+                        debug_assert!(size(to_type) >= 4);
+                        match from_value {
+                            RegisterValue::Immediate(from_imm) => {
+                                if let Some(imm) = from_imm.value() {
+                                    state.memory.insert(
+                                        MemoryLocation::Data(to_label.clone()),
+                                        MemoryValue::Word(
+                                            <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap(),
+                                        ),
+                                    );
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    _ => todo!(),
+                }
+            }
+            Instruction::Lw(Lw { to, from, offset }) => {
+                let Offset {
+                    value: Immediate { value: 0 },
+                } = offset
+                else {
+                    todo!()
+                };
+                let Some(from_value) = state.registers[hart].get(from) else {
+                    todo!()
+                };
+                match from_value {
+                    RegisterValue::Address(from_label) => {
+                        let from_type = types.get(from_label).unwrap();
+                        // We should have already checked the type is large enough for the load.
+                        debug_assert!(size(from_type) >= 4);
+                        let Some(memory_value) =
+                            state.memory.get(&MemoryLocation::Data(from_label.clone()))
+                        else {
+                            todo!()
+                        };
+                        match memory_value {
+                            MemoryValue::Word(word) => {
+                                let imm = Immediate::from(*word);
+                                state.registers[hart].insert(
+                                    *to,
+                                    RegisterValue::Immediate(ImmediateRange(imm..=imm)),
+                                );
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    _ => todo!(),
+                }
+            }
+            Instruction::Addi(Addi { out, lhs, rhs }) => {
+                let lhs_value = state.registers[hart].get(lhs).cloned();
+                match lhs_value {
+                    Some(RegisterValue::Immediate(imm)) => {
+                        state.registers[hart].insert(*out, RegisterValue::Immediate(imm + *rhs));
+                    }
+                    _ => todo!(),
+                }
+            }
+            Instruction::Csrr(Csrr { dest, src }) => match src {
+                Csr::Mhartid => {
+                    state.registers[hart].insert(*dest, RegisterValue::Csr(CsrValue::Mhartid));
+                }
+                _ => todo!(),
+            },
+            x @ _ => todo!("{x:?}"),
+        }
+        current = current.as_ref().next[*next];
+    }
+    state
 }
