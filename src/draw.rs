@@ -1,12 +1,16 @@
 use crate::ast::*;
+use crate::verifier::*;
 use std::alloc::dealloc;
 use std::alloc::Layout;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::iter;
+use std::iter::repeat;
 use std::num::NonZeroU8;
+use std::ops::Bound::{Excluded, Included};
 use std::ops::Range;
 use std::ops::RangeInclusive;
 use std::ptr;
@@ -15,10 +19,6 @@ use std::{
     collections::{HashMap, VecDeque},
     ptr::NonNull,
 };
-use crate::verifier::*;
-use std::cmp::Ordering;
-use std::iter::repeat;
-use std::ops::Bound::{Excluded, Included};
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 struct Coordinate {
@@ -41,13 +41,14 @@ impl PartialOrd for Coordinate {
     }
 }
 
+type Type = NonNull<VerifierNode>;
 
 /// Draws a tree.
-pub unsafe fn draw_tree(node: NonNull<VerifierNode>, width_spacing: usize, f: fn(NonNull<VerifierNode>) -> String) -> String {
+pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String) -> String {
     let mut column = 0;
 
     let mut prev_depth = None;
-    let mut coordinates = BTreeMap::<Coordinate, T>::new();
+    let mut coordinates = BTreeMap::<Coordinate, Type>::new();
     let mut stack = vec![(0, node)];
     while let Some((depth, next)) = stack.pop() {
         let display = f(next);
@@ -72,7 +73,7 @@ pub unsafe fn draw_tree(node: NonNull<VerifierNode>, width_spacing: usize, f: fn
         );
 
         // Add new nodes to stack.
-        stack.extend(next.as_ref()..iter().copied().map(|n| (depth + 1, n)));
+        stack.extend(next.as_ref().next.iter().copied().map(|n| (depth + 1, n)));
     }
 
     let mut output = String::new();
@@ -140,7 +141,7 @@ pub unsafe fn draw_tree(node: NonNull<VerifierNode>, width_spacing: usize, f: fn
         output.extend(repeat(' ').take(column_diff));
         column = *x;
 
-        let display = node.to_string();
+        let display = f(*node);
         column += display.chars().count();
         output.push_str(&display);
     }

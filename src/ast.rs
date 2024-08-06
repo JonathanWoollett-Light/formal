@@ -42,6 +42,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
     };
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
+        ['#','?'] => Instruction::Unreachable(Unreachable),
         ['#', ..] => return,
         _ => new_instruction(src),
     };
@@ -88,6 +89,7 @@ pub enum Instruction {
     Lb(Lb),
     Beqz(Beqz),
     Sb(Sb),
+    Unreachable(Unreachable)
 }
 
 fn new_instruction(src: &[char]) -> Instruction {
@@ -113,10 +115,43 @@ fn new_instruction(src: &[char]) -> Instruction {
     }
 }
 
+impl fmt::Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Instruction::*;
+        match self {
+            Csrr(csrr) => write!(f, "{csrr}"),
+            Bnez(bnez) => write!(f, "{bnez}"),
+            J(j) => write!(f, "{j}"),
+            Wfi(wfi) => write!(f, "{wfi}"),
+            Label(label_instruction) => write!(f, "{label_instruction}"),
+            Global(global) => write!(f, "{global}"),
+            Data(data) => write!(f, "{data}"),
+            Ascii(ascii) => write!(f, "{ascii}"),
+            Fail(fail) => write!(f, "{fail}"),
+            La(la) => write!(f, "{la}"),
+            Li(li) => write!(f, "{li}"),
+            Sw(sw) => write!(f, "{sw}"),
+            Lw(lw) => write!(f, "{lw}"),
+            Addi(addi) => write!(f, "{addi}"),
+            Blt(blt) => write!(f, "{blt}"),
+            Lb(lb) => write!(f, "{lb}"),
+            Beqz(beqz) => write!(f, "{beqz}"),
+            Sb(sb) => write!(f, "{sb}"),
+            _ => todo!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Beqz {
     register: Register,
     label: Label,
+}
+
+impl fmt::Display for Beqz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "beqz {}, {}", self.register, self.label)
+    }
 }
 
 fn new_beqz(src: &[char]) -> Beqz {
@@ -131,6 +166,12 @@ pub struct Lb {
     pub to: Register,
     pub from: Register,
     pub offset: Offset,
+}
+
+impl fmt::Display for Lb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "lb {}, {}({})", self.to, self.offset, self.from)
+    }
 }
 
 fn new_lb(src: &[char]) -> Lb {
@@ -154,6 +195,12 @@ pub struct Blt {
     pub label: Label,
 }
 
+impl fmt::Display for Blt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "blt {}, {}, {}", self.lhs, self.rhs, self.label)
+    }
+}
+
 fn new_blt(src: &[char]) -> Blt {
     Blt {
         lhs: new_register(&src[..2]).unwrap(),
@@ -169,6 +216,12 @@ pub struct Addi {
     pub rhs: Immediate,
 }
 
+impl fmt::Display for Addi {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "addi {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
 fn new_addi(src: &[char]) -> Addi {
     Addi {
         out: new_register(&src[0..2]).unwrap(),
@@ -182,6 +235,12 @@ pub struct Lw {
     pub to: Register,
     pub from: Register,
     pub offset: Offset,
+}
+
+impl fmt::Display for Lw {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "lw {}, {}({})", self.to, self.offset, self.from)
+    }
 }
 
 fn new_lw(src: &[char]) -> Lw {
@@ -205,6 +264,12 @@ pub struct Sb {
     pub offset: Offset,
 }
 
+impl fmt::Display for Sb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "sb {}, {}({})", self.from, self.offset, self.to)
+    }
+}
+
 fn new_sb(src: &[char]) -> Sb {
     let from = new_register(&src[..2]).unwrap();
     for i in 4..src.len() {
@@ -226,6 +291,12 @@ pub struct Sw {
     pub offset: Offset,
 }
 
+impl fmt::Display for Sw {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "sw {}, {}({})", self.from, self.offset, self.to)
+    }
+}
+
 fn new_sw(src: &[char]) -> Sw {
     let from = new_register(&src[..2]).unwrap();
     for i in 4..src.len() {
@@ -245,6 +316,17 @@ pub struct Offset {
     pub value: Immediate,
 }
 
+impl fmt::Display for Offset {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let x = if self.value == Immediate::ZERO {
+            String::new()
+        } else {
+            self.value.to_string()
+        };
+        write!(f, "{x}")
+    }
+}
+
 fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
     Ok(Offset {
         value: if src.len() == 0 {
@@ -256,14 +338,41 @@ fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Unreachable;
+
+impl fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#?")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Fail;
+
+impl fmt::Display for Fail {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#!")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Data;
 
+impl fmt::Display for Data {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, ".data")
+    }
+}
+
 #[derive(Clone)]
 pub struct Ascii {
     string: Vec<u8>,
+}
+
+impl fmt::Display for Ascii {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, ".ascii {:?}", std::str::from_utf8(&self.string))
+    }
 }
 
 impl fmt::Debug for Ascii {
@@ -322,42 +431,82 @@ pub enum Register {
     X31,
 }
 
+impl fmt::Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::X0 => write!(f, "zero"),
+            Self::X1 => write!(f, "ra"),
+            Self::X2 => write!(f, "sp"),
+            Self::X3 => write!(f, "gp"),
+            Self::X4 => write!(f, "tp"),
+            Self::X5 => write!(f, "t0"),
+            Self::X6 => write!(f, "t1"),
+            Self::X7 => write!(f, "t2"),
+            Self::X8 => write!(f, "s0"),
+            Self::X9 => write!(f, "s1"),
+            Self::X10 => write!(f, "a0"),
+            Self::X11 => write!(f, "a1"),
+            Self::X12 => write!(f, "a2"),
+            Self::X13 => write!(f, "a3"),
+            Self::X14 => write!(f, "a4"),
+            Self::X15 => write!(f, "a5"),
+            Self::X16 => write!(f, "a6"),
+            Self::X17 => write!(f, "a7"),
+            Self::X18 => write!(f, "s2"),
+            Self::X19 => write!(f, "s3"),
+            Self::X20 => write!(f, "s4"),
+            Self::X21 => write!(f, "s5"),
+            Self::X22 => write!(f, "s6"),
+            Self::X23 => write!(f, "s7"),
+            Self::X24 => write!(f, "s8"),
+            Self::X25 => write!(f, "s9"),
+            Self::X26 => write!(f, "s10"),
+            Self::X27 => write!(f, "s11"),
+            Self::X28 => write!(f, "t3"),
+            Self::X29 => write!(f, "t4"),
+            Self::X30 => write!(f, "t5"),
+            Self::X31 => write!(f, "t6"),
+            _ => todo!(),
+        }
+    }
+}
+
 impl fmt::Debug for Register {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::X0 => write!(f,"x0/zero"),
-            Self::X1 => write!(f,"x1/ra"),
-            Self::X2 => write!(f,"x2/sp"),
-            Self::X3 => write!(f,"x3/gp"),
-            Self::X4 => write!(f,"x4/tp"),
-            Self::X5 => write!(f,"x5/t0"),
-            Self::X6 => write!(f,"x6/t1"),
-            Self::X7 => write!(f,"x7/t2"),
-            Self::X8 => write!(f,"x8/s0/fp"),
-            Self::X9 => write!(f,"x9/s1"),
-            Self::X10 => write!(f,"x10/a0"),
-            Self::X11 => write!(f,"x11/a1"),
-            Self::X12 => write!(f,"x12/a2"),
-            Self::X13 => write!(f,"x13/a3"),
-            Self::X14 => write!(f,"x14/a4"),
-            Self::X15 => write!(f,"x15/a5"),
-            Self::X16 => write!(f,"x16/a6"),
-            Self::X17 => write!(f,"x17/a7"),
-            Self::X18 => write!(f,"x18/s2"),
-            Self::X19 => write!(f,"x19/s3"),
-            Self::X20 => write!(f,"x20/s4"),
-            Self::X21 => write!(f,"x21/s5"),
-            Self::X22 => write!(f,"x22/s6"),
-            Self::X23 => write!(f,"x23/s7"),
-            Self::X24 => write!(f,"x24/s8"),
-            Self::X25 => write!(f,"x25/s9"),
-            Self::X26 => write!(f,"x26/s10"),
-            Self::X27 => write!(f,"x27/s11"),
-            Self::X28 => write!(f,"x28/t3"),
-            Self::X29 => write!(f,"x29/t4"),
-            Self::X30 => write!(f,"x30/t5"),
-            Self::X31 => write!(f,"x31/t6"),
-            _ => todo!()
+            Self::X0 => write!(f, "x0/zero"),
+            Self::X1 => write!(f, "x1/ra"),
+            Self::X2 => write!(f, "x2/sp"),
+            Self::X3 => write!(f, "x3/gp"),
+            Self::X4 => write!(f, "x4/tp"),
+            Self::X5 => write!(f, "x5/t0"),
+            Self::X6 => write!(f, "x6/t1"),
+            Self::X7 => write!(f, "x7/t2"),
+            Self::X8 => write!(f, "x8/s0/fp"),
+            Self::X9 => write!(f, "x9/s1"),
+            Self::X10 => write!(f, "x10/a0"),
+            Self::X11 => write!(f, "x11/a1"),
+            Self::X12 => write!(f, "x12/a2"),
+            Self::X13 => write!(f, "x13/a3"),
+            Self::X14 => write!(f, "x14/a4"),
+            Self::X15 => write!(f, "x15/a5"),
+            Self::X16 => write!(f, "x16/a6"),
+            Self::X17 => write!(f, "x17/a7"),
+            Self::X18 => write!(f, "x18/s2"),
+            Self::X19 => write!(f, "x19/s3"),
+            Self::X20 => write!(f, "x20/s4"),
+            Self::X21 => write!(f, "x21/s5"),
+            Self::X22 => write!(f, "x22/s6"),
+            Self::X23 => write!(f, "x23/s7"),
+            Self::X24 => write!(f, "x24/s8"),
+            Self::X25 => write!(f, "x25/s9"),
+            Self::X26 => write!(f, "x26/s10"),
+            Self::X27 => write!(f, "x27/s11"),
+            Self::X28 => write!(f, "x28/t3"),
+            Self::X29 => write!(f, "x29/t4"),
+            Self::X30 => write!(f, "x30/t5"),
+            Self::X31 => write!(f, "x31/t6"),
+            _ => todo!(),
         }
     }
 }
@@ -379,6 +528,12 @@ pub struct Li {
     pub immediate: Immediate,
 }
 
+impl fmt::Display for Li {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "li {}, {}", self.register, self.immediate)
+    }
+}
+
 fn new_li(src: &[char]) -> Li {
     Li {
         register: new_register(&src[..2]).unwrap(),
@@ -390,9 +545,17 @@ fn new_li(src: &[char]) -> Li {
 pub struct Immediate {
     pub value: u64,
 }
+
+impl fmt::Display for Immediate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
 impl Immediate {
     pub const ZERO: Immediate = Immediate { value: 0 };
 }
+
 impl std::ops::Add for Immediate {
     type Output = Self;
 
@@ -402,11 +565,13 @@ impl std::ops::Add for Immediate {
         }
     }
 }
+
 impl Immediate {
     pub fn to_ne_bytes(&self) -> [u8; 8] {
         self.value.to_ne_bytes()
     }
 }
+
 impl From<[u8; 4]> for Immediate {
     fn from(word: [u8; 4]) -> Self {
         let bytes = <[u8; 8]>::try_from(
@@ -438,6 +603,12 @@ pub struct La {
     pub label: Label,
 }
 
+impl fmt::Display for La {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "la {}, {}", self.register, self.label)
+    }
+}
+
 fn new_la(src: &[char]) -> La {
     La {
         register: new_register(&src[..2]).unwrap(),
@@ -450,6 +621,12 @@ pub struct LabelInstruction {
     pub tag: Label,
 }
 
+impl fmt::Display for LabelInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:", self.tag)
+    }
+}
+
 fn new_label_instruction(src: &[char]) -> LabelInstruction {
     assert_eq!(src[src.len() - 1], ':', "{src:?}");
     LabelInstruction {
@@ -460,6 +637,12 @@ fn new_label_instruction(src: &[char]) -> LabelInstruction {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Label {
     pub tag: String,
+}
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.tag)
+    }
 }
 
 fn new_label(src: &[char]) -> Label {
@@ -475,6 +658,12 @@ pub struct Csrr {
     pub src: Csr,
 }
 
+impl fmt::Display for Csrr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "csrr {}, {}", self.dest, self.src)
+    }
+}
+
 fn new_csrr(src: &[char]) -> Csrr {
     Csrr {
         dest: new_register(&src[0..2]).unwrap(),
@@ -484,8 +673,18 @@ fn new_csrr(src: &[char]) -> Csrr {
 
 /// Control and Status Register
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Csr {
     Mhartid,
+}
+
+impl fmt::Display for Csr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Csr::Mhartid => write!(f, "mhartid"),
+            _ => todo!(),
+        }
+    }
 }
 
 fn new_csr(src: &[char]) -> Csr {
@@ -501,6 +700,12 @@ pub struct Bnez {
     pub dest: Label,
 }
 
+impl fmt::Display for Bnez {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "bnez {}, {}", self.src, self.dest)
+    }
+}
+
 fn new_bnez(src: &[char]) -> Bnez {
     Bnez {
         src: new_register(&src[0..2]).unwrap(),
@@ -508,9 +713,16 @@ fn new_bnez(src: &[char]) -> Bnez {
     }
 }
 
+/// Jump
 #[derive(Debug, Clone)]
 pub struct J {
     dest: Label,
+}
+
+impl fmt::Display for J {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "j {}", self.dest)
+    }
 }
 
 fn new_j(src: &[char]) -> J {
@@ -524,6 +736,12 @@ pub struct Global {
     pub tag: Label,
 }
 
+impl fmt::Display for Global {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, ".global {}", self.tag)
+    }
+}
+
 fn new_global(src: &[char]) -> Global {
     Global {
         tag: new_label(src),
@@ -532,3 +750,9 @@ fn new_global(src: &[char]) -> Global {
 
 #[derive(Debug, Clone)]
 pub struct Wfi;
+
+impl fmt::Display for Wfi {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "wfi")
+    }
+}

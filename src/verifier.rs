@@ -67,6 +67,7 @@ enum VerifierPrevNode {
     Branch(NonNull<VerifierNode>),
     Root(NonNull<VerifierHarts>),
 }
+
 impl VerifierPrevNode {
     unsafe fn next(&mut self) -> &mut NextVerifierNode {
         match self {
@@ -75,46 +76,15 @@ impl VerifierPrevNode {
         }
     }
 }
-/// Each instruction will have a number of possible following instructions.
-/// In some cases multiple possible next instructions will need to be checked
-/// to form a valid path.
-///
-/// e.g.
-/// ```text
-/// if typeof x = u8
-///     a
-/// b
-/// ```
-/// is `[[a], [b]]`
-///
-/// e.g.
-/// ```text
-//// if x = 1
-///     a
-/// b
-/// ```
-/// is `[[a,b]]`
-///
-/// ### considering multiple harts
-///
-/// e.g.
-/// ```text
-/// a
-/// x += 1
-/// ```
-/// is `[[("x += 1", hart 0), ("x += 1", hart 1), ("x += 1", hart 2)]]`
-///
-/// For leaf nodes where the next nodes to explore haven't been evaluated it will be `None`.
-type NextNode = Vec<Vec<NonNull<VerifierNode>>>;
 
 /// We use a tree to trace the execution of the program,
 /// then when conditions are required it can resolve them
 /// by looking back at the trace.
 pub struct VerifierNode {
-    prev: VerifierPrevNode,
-    hart: u8,
-    node: NonNull<AstNode>,
-    next: NextVerifierNode,
+    pub prev: VerifierPrevNode,
+    pub hart: u8,
+    pub node: NonNull<AstNode>,
+    pub next: NextVerifierNode,
 }
 
 type Types = BTreeMap<Label, Type>;
@@ -250,6 +220,8 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
         })
         .collect::<Vec<_>>();
 
+    #[cfg(debug_assertions)]
+    let mut check = 0;
     let (final_types, final_touched) = loop {
         // Record the current types of variables on the current path.
         let mut types = Types::new();
@@ -427,8 +399,15 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                     let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
                     let state = find_state(&record, root, harts, first_step, &types);
 
-                    dbg!(from);
-                    dbg!(&state);
+                    // dbg!(from);
+                    // dbg!(&state);
+                    // for rooter in &root.as_ref().next {
+                    //     let tree = crate::draw::draw_tree(*rooter, 1, |x| {
+                    //         x.as_ref().node.as_ref().this.to_string()
+                    //     });
+                    //     println!("{tree}");
+                    //     println!();
+                    // }
 
                     // Check the destination is valid.
                     match state.registers[branch.hart as usize].get(from) {
@@ -448,15 +427,20 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                         x @ _ => todo!("{x:?}"),
                     }
                 }
+                // If any fail is encountered then the path is invalid.
+                Instruction::Fail(_) => break 'outer,
                 x @ _ => todo!("{x:?}"),
             }
             queue_up(branch_ptr, &mut queue, &types);
         }
 
+
         // If we have evaluated all nodes in the queue
         if queue.is_empty() {
             break (types, touched);
         }
+
+        
 
         // This will only be reached for an invalid path.
 
@@ -473,6 +457,21 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                 stack.extend(next.as_ref().next.iter());
                 dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
             }
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            check += 1;
+            println!("{types:?}");
+            println!("{excluded:?}");
+            if check > 10 {
+                panic!();
+            }
+        }
+
+        // TODO: Don't use a panic here.
+        if types.is_empty() {
+            panic!("No valid path"); 
         }
     };
 
@@ -588,20 +587,19 @@ unsafe fn queue_up(
                 let lhs = state.registers[hart as usize].get(lhs);
                 let rhs = state.registers[hart as usize].get(rhs);
                 match (lhs, rhs) {
-                    (Some(RegisterValue::Immediate(r)), Some(RegisterValue::Immediate(l))) => {
+                    (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
                         if let Some(r) = r.value()
                             && let Some(l) = l.value()
                         {
                             // Since in this case the path is determinate, we either queue up the label or the next ast node and
                             // don't need to actually visit/evaluate the branch at runtime.
                             if l < r {
-                                // TODO: Find the AST node for the label
-                                let label_node = todo!();
-                                queue.push_back(simple_nonnull(prev, label_node, hart));
+                                let label_node = find_label(node,label).unwrap();
+                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                             } else {
                                 queue.push_back(simple_nonnull(
                                     prev,
-                                    node_ref.next.unwrap().as_ref(),
+                                    node_ref,
                                     hart,
                                 ));
                             }
@@ -617,19 +615,20 @@ unsafe fn queue_up(
                 let state = find_state(&record, root, harts, first_step, types);
 
                 let src = state.registers[hart as usize].get(src);
+
+                // dbg!(&src);
                 match src {
                     Some(RegisterValue::Immediate(imm)) => {
                         if let Some(imm) = imm.value() {
                             // Since in this case the path is determinate, we either queue up the label or the next ast node and
                             // don't need to actually visit/evaluate the branch at runtime.
                             if imm != Immediate::ZERO {
-                                // TODO: Find the AST node for the label
-                                let label_node = todo!();
-                                queue.push_back(simple_nonnull(prev, label_node, hart));
+                                let label_node = find_label(node,dest).unwrap();
+                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                             } else {
                                 queue.push_back(simple_nonnull(
                                     prev,
-                                    node_ref.next.unwrap().as_ref(),
+                                    node_ref,
                                     hart,
                                 ));
                             }
@@ -640,12 +639,13 @@ unsafe fn queue_up(
                     Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
                         if hart != 0 {
                             // TODO: Find the AST node for the label
-                            let label_node = todo!();
-                            queue.push_back(simple_nonnull(prev, label_node, hart));
+                            let label_node = find_label(node,dest).unwrap();
+                            queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                         } else {
+                            // dbg!("here");
                             queue.push_back(simple_nonnull(
                                 prev,
-                                node_ref.next.unwrap().as_ref(),
+                                node_ref,
                                 hart,
                             ));
                         }
@@ -655,7 +655,7 @@ unsafe fn queue_up(
                 return;
             }
             // Racy
-            Instruction::Sw(_) | Instruction::Lw(_) => continue,
+            Instruction::Sw(_) | Instruction::Lw(_) | Instruction::Lb(_) => continue,
             x @ _ => todo!("{x:?}"),
         }
     }
@@ -664,11 +664,10 @@ unsafe fn queue_up(
     for (hart, node) in fronts.iter().map(|(a, b)| (*a, *b)) {
         let node_ref = node.as_ref();
         match &node_ref.this {
-            // Non-conditional
-            Instruction::Sw(_) | Instruction::Lw(_) => {
+            // Racy
+            Instruction::Sw(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
                 queue.push_back(simple_nonnull(prev, node_ref, hart));
             }
-            // Racy
             // Since this can only be reached when all nodes are racy, most nodes should not be reachable here.
             x @ _ => unreachable!("{x:?}"),
         }
@@ -693,6 +692,33 @@ unsafe fn simple_nonnull(
     let nonull = NonNull::new(ptr).unwrap();
     prev.as_mut().next.push(nonull);
     nonull
+}
+
+unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<AstNode>> {
+    // Check start
+    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this && tag == label {
+        return Some(node);
+    }
+
+    // Trace backwards.
+    let mut back = node;
+    while let Some(prev) = back.as_ref().prev {
+        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this && tag == label {
+            return Some(prev);
+        }
+        back = prev;
+    }
+
+    // Trace forward.
+    let mut front = node;
+    while let Some(next) = front.as_ref().next {
+        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this && tag == label {
+            return Some(next);
+        }
+        front = next;
+    }
+
+    None
 }
 
 unsafe fn find_state(

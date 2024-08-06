@@ -36,6 +36,7 @@ _write_uart:
 
 _wait:
     wfi
+    #?
 
 .data
 welcome:
