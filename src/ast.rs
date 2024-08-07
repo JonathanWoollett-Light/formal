@@ -110,7 +110,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
         ['s', 'b', ' ', rem @ ..] => Instruction::Sb(new_sb(rem)),
-        _ => Instruction::Label(new_label_instruction(src)),
+        [.., ':'] => Instruction::Label(new_label_instruction(src)),
         x @ _ => todo!("{x:?}"),
     }
 }
@@ -144,8 +144,8 @@ impl fmt::Display for Instruction {
 
 #[derive(Debug, Clone)]
 pub struct Beqz {
-    register: Register,
-    label: Label,
+    pub register: Register,
+    pub label: Label,
 }
 
 impl fmt::Display for Beqz {
@@ -466,7 +466,6 @@ impl fmt::Display for Register {
             Self::X29 => write!(f, "t4"),
             Self::X30 => write!(f, "t5"),
             Self::X31 => write!(f, "t6"),
-            _ => todo!(),
         }
     }
 }
@@ -506,7 +505,6 @@ impl fmt::Debug for Register {
             Self::X29 => write!(f, "x29/t4"),
             Self::X30 => write!(f, "x30/t5"),
             Self::X31 => write!(f, "x31/t6"),
-            _ => todo!(),
         }
     }
 }
@@ -575,7 +573,7 @@ impl Immediate {
 impl From<[u8; 4]> for Immediate {
     fn from(word: [u8; 4]) -> Self {
         let bytes = <[u8; 8]>::try_from(
-            [0, 0, 0, 0]
+            [0u8, 0u8, 0u8, 0u8]
                 .iter()
                 .chain(word.iter())
                 .copied()
@@ -583,7 +581,23 @@ impl From<[u8; 4]> for Immediate {
         )
         .unwrap();
         Self {
-            value: u64::from_be_bytes(bytes),
+            value: u64::from_ne_bytes(bytes),
+        }
+    }
+}
+
+impl From<u8> for Immediate {
+    fn from(byte: u8) -> Self {
+        let bytes = <[u8; 8]>::try_from(
+            [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
+                .iter()
+                .chain(std::iter::once(&byte))
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        Self {
+            value: u64::from_ne_bytes(bytes),
         }
     }
 }
