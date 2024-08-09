@@ -31,7 +31,7 @@ fn main() {
     }
 }
 
-// Re-allocates AST node contingously to be more cache efficient.
+// Re-allocates AST node contiguously to be more cache efficient.
 fn compress(root: &mut Option<NonNull<AstNode>>) {
     unsafe {
         // Counts
