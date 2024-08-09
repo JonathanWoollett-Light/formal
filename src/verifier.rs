@@ -90,45 +90,41 @@ pub struct VerifierNode {
 type Types = BTreeMap<Label, Type>;
 type Excluded = HashSet<BTreeMap<Label, Type>>;
 
-
 #[derive(Debug)]
 struct MemoryMap {
-    map: HashMap<Label, MemoryValue>
+    map: HashMap<Label, MemoryValue>,
 }
 
 impl MemoryMap {
-    fn get_byte(&self, MemoryLocation{ label, offset}: &MemoryLocation) -> Option<&u8> {
+    fn get_byte(&self, MemoryLocation { label, offset }: &MemoryLocation) -> Option<&u8> {
         let value = self.map.get(label)?;
         match value {
             MemoryValue::Ascii(ascii) => ascii.get(*offset),
             MemoryValue::Word(word) => word.get(*offset),
-            _ => todo!()
+            _ => todo!(),
         }
     }
-    fn get_word(&self, MemoryLocation{ label, offset}: &MemoryLocation) -> Option<&[u8;4]> {
+    fn get_word(&self, MemoryLocation { label, offset }: &MemoryLocation) -> Option<&[u8; 4]> {
         let value = self.map.get(label)?;
         match value {
             MemoryValue::Word(word) => (*offset == 0).then_some(word),
-            _ => todo!()
+            _ => todo!(),
         }
     }
-    fn set_word(&mut self, MemoryLocation{ label, offset}: &MemoryLocation, value: [u8;4]) {
+    fn set_word(&mut self, MemoryLocation { label, offset }: &MemoryLocation, value: [u8; 4]) {
         if let Some(existing) = self.map.get_mut(label) {
             match existing {
                 MemoryValue::Word(word) => {
                     *word = value;
                 }
-                _ => todo!()
+                _ => todo!(),
             }
-        }
-        else {
+        } else {
             if *offset == 0 {
                 self.map.insert(label.clone(), MemoryValue::Word(value));
-            }
-            else {
+            } else {
                 todo!()
             }
-            
         }
     }
 }
@@ -142,7 +138,9 @@ impl State {
     fn new(harts: u8) -> Self {
         Self {
             registers: (0..harts).map(|_| HashMap::new()).collect(),
-            memory: MemoryMap { map: HashMap::new() },
+            memory: MemoryMap {
+                map: HashMap::new(),
+            },
         }
     }
 }
@@ -151,22 +149,19 @@ impl State {
 #[non_exhaustive]
 struct MemoryLocation {
     label: Label,
-    offset: usize
+    offset: usize,
 }
 
 impl From<Label> for MemoryLocation {
     fn from(label: Label) -> MemoryLocation {
-        MemoryLocation {
-            label,
-            offset: 0
-        }
+        MemoryLocation { label, offset: 0 }
     }
 }
 impl From<&Label> for MemoryLocation {
     fn from(label: &Label) -> MemoryLocation {
         MemoryLocation {
             label: label.clone(),
-            offset: 0
+            offset: 0,
         }
     }
 }
@@ -177,7 +172,7 @@ impl From<&Label> for MemoryLocation {
 #[non_exhaustive]
 enum MemoryValue {
     Word([u8; 4]),
-    Ascii(Vec<u8>)
+    Ascii(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -236,7 +231,7 @@ impl std::ops::Add<Immediate> for ImmediateRange {
 // for valid use cases it will be slower as it needs to explore and validate paths it
 // doesn't need to theoritically do.
 
-pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
+pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>, list_len: usize) {
     assert!(harts_range.start > 0);
 
     // Intial misc stuff
@@ -491,13 +486,10 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
             queue_up(branch_ptr, &mut queue, &types);
         }
 
-
         // If we have evaluated all nodes in the queue
         if queue.is_empty() {
             break (types, touched);
         }
-
-        
 
         // This will only be reached for an invalid path.
 
@@ -528,7 +520,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
 
         // TODO: Don't use a panic here.
         if types.is_empty() {
-            panic!("No valid path"); 
+            panic!("No valid path");
         }
     };
 
@@ -651,14 +643,10 @@ unsafe fn queue_up(
                             // Since in this case the path is determinate, we either queue up the label or the next ast node and
                             // don't need to actually visit/evaluate the branch at runtime.
                             if l < r {
-                                let label_node = find_label(node,label).unwrap();
+                                let label_node = find_label(node, label).unwrap();
                                 queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                             } else {
-                                queue.push_back(simple_nonnull(
-                                    prev,
-                                    node_ref,
-                                    hart,
-                                ));
+                                queue.push_back(simple_nonnull(prev, node_ref, hart));
                             }
                         } else {
                             todo!()
@@ -680,14 +668,10 @@ unsafe fn queue_up(
                             // Since in this case the path is determinate, we either queue up the label or the next ast node and
                             // don't need to actually visit/evaluate the branch at runtime.
                             if imm != Immediate::ZERO {
-                                let label_node = find_label(node,dest).unwrap();
+                                let label_node = find_label(node, dest).unwrap();
                                 queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                             } else {
-                                queue.push_back(simple_nonnull(
-                                    prev,
-                                    node_ref,
-                                    hart,
-                                ));
+                                queue.push_back(simple_nonnull(prev, node_ref, hart));
                             }
                         } else {
                             todo!()
@@ -695,15 +679,11 @@ unsafe fn queue_up(
                     }
                     Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
                         if hart != 0 {
-                            let label_node = find_label(node,dest).unwrap();
+                            let label_node = find_label(node, dest).unwrap();
                             queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                         } else {
                             // dbg!("here");
-                            queue.push_back(simple_nonnull(
-                                prev,
-                                node_ref,
-                                hart,
-                            ));
+                            queue.push_back(simple_nonnull(prev, node_ref, hart));
                         }
                     }
                     x @ _ => todo!("{x:?}"),
@@ -722,14 +702,10 @@ unsafe fn queue_up(
                             // Since in this case the path is determinate, we either queue up the label or the next ast node and
                             // don't need to actually visit/evaluate the branch at runtime.
                             if imm == Immediate::ZERO {
-                                let label_node = find_label(node,label).unwrap();
+                                let label_node = find_label(node, label).unwrap();
                                 queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                             } else {
-                                queue.push_back(simple_nonnull(
-                                    prev,
-                                    node_ref,
-                                    hart,
-                                ));
+                                queue.push_back(simple_nonnull(prev, node_ref, hart));
                             }
                         } else {
                             todo!()
@@ -737,15 +713,11 @@ unsafe fn queue_up(
                     }
                     Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
                         if hart == 0 {
-                            let label_node = find_label(node,label).unwrap();
+                            let label_node = find_label(node, label).unwrap();
                             queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
                         } else {
                             // dbg!("here");
-                            queue.push_back(simple_nonnull(
-                                prev,
-                                node_ref,
-                                hart,
-                            ));
+                            queue.push_back(simple_nonnull(prev, node_ref, hart));
                         }
                     }
                     x @ _ => todo!("{x:?}"),
@@ -800,14 +772,18 @@ unsafe fn simple_nonnull(
 
 unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<AstNode>> {
     // Check start
-    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this && tag == label {
+    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this
+        && tag == label
+    {
         return Some(node);
     }
 
     // Trace backwards.
     let mut back = node;
     while let Some(prev) = back.as_ref().prev {
-        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this && tag == label {
+        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this
+            && tag == label
+        {
             return Some(prev);
         }
         back = prev;
@@ -816,7 +792,9 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace forward.
     let mut front = node;
     while let Some(next) = front.as_ref().next {
-        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this && tag == label {
+        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this
+            && tag == label
+        {
             return Some(next);
         }
         front = next;
@@ -877,7 +855,7 @@ unsafe fn find_state(
                                 if let Some(imm) = from_imm.value() {
                                     state.memory.set_word(
                                         &MemoryLocation::from(to_label),
-                                        <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap()
+                                        <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap(),
                                     );
                                 } else {
                                     todo!()
@@ -904,16 +882,13 @@ unsafe fn find_state(
                         let from_type = types.get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 4);
-                        let Some(word) =
-                            state.memory.get_word(&MemoryLocation::from(from_label))
+                        let Some(word) = state.memory.get_word(&MemoryLocation::from(from_label))
                         else {
                             todo!()
                         };
                         let imm = Immediate::from(*word);
-                        state.registers[hart].insert(
-                            *to,
-                            RegisterValue::Immediate(ImmediateRange(imm..=imm)),
-                        );
+                        state.registers[hart]
+                            .insert(*to, RegisterValue::Immediate(ImmediateRange(imm..=imm)));
                     }
                     _ => todo!(),
                 }
@@ -933,16 +908,13 @@ unsafe fn find_state(
                         let from_type = types.get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 1);
-                        let Some(byte) =
-                            state.memory.get_byte(&MemoryLocation::from(from_label))
+                        let Some(byte) = state.memory.get_byte(&MemoryLocation::from(from_label))
                         else {
                             todo!("{from_label:?}")
                         };
                         let imm = Immediate::from(*byte);
-                        state.registers[hart].insert(
-                            *to,
-                            RegisterValue::Immediate(ImmediateRange(imm..=imm)),
-                        );
+                        state.registers[hart]
+                            .insert(*to, RegisterValue::Immediate(ImmediateRange(imm..=imm)));
                     }
                     _ => todo!(),
                 }

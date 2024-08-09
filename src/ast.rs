@@ -42,7 +42,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
     };
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
-        ['#','?'] => Instruction::Unreachable(Unreachable),
+        ['#', '?'] => Instruction::Unreachable(Unreachable),
         ['#', ..] => return,
         _ => new_instruction(src),
     };
@@ -89,7 +89,10 @@ pub enum Instruction {
     Lb(Lb),
     Beqz(Beqz),
     Sb(Sb),
-    Unreachable(Unreachable)
+    Unreachable(Unreachable),
+    Bge(Bge),
+    Ld(Ld),
+    Bne(Bne),
 }
 
 fn new_instruction(src: &[char]) -> Instruction {
@@ -110,6 +113,9 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
         ['s', 'b', ' ', rem @ ..] => Instruction::Sb(new_sb(rem)),
+        ['b', 'g', 'e', ' ', rem @ ..] => Instruction::Bge(new_bge(rem)),
+        ['l', 'd', ' ', rem @ ..] => Instruction::Ld(new_ld(rem)),
+        ['b', 'n', 'e', ' ', rem @ ..] => Instruction::Bne(new_bne(rem)),
         [.., ':'] => Instruction::Label(new_label_instruction(src)),
         x @ _ => todo!("{x:?}"),
     }
@@ -137,8 +143,70 @@ impl fmt::Display for Instruction {
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
             Sb(sb) => write!(f, "{sb}"),
-            _ => todo!(),
+            Bge(bge) => write!(f, "{bge}"),
+            Ld(ld) => write!(f, "{ld}"),
+            Bne(bne) => write!(f, "{bne}"),
+            Unreachable(unreachable) => write!(f, "{unreachable}"),
+            x @ _ => todo!("{x:?}"),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Bne {
+    pub lhs: Register,
+    pub rhs: Register,
+    pub out: Label,
+}
+
+impl fmt::Display for Bne {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "bne {}, {}, {}", self.lhs, self.rhs, self.out)
+    }
+}
+
+fn new_bne(src: &[char]) -> Bne {
+    let lhs = &src[0..2];
+    let rhs = &src[4..6];
+    let out = src
+        .iter()
+        .skip(8)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
+    Bne {
+        lhs: new_register(lhs).unwrap(),
+        rhs: new_register(rhs).unwrap(),
+        out: new_label(&out),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Bge {
+    pub lhs: Register,
+    pub rhs: Register,
+    pub out: Label,
+}
+
+impl fmt::Display for Bge {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "bge {}, {}, {}", self.lhs, self.rhs, self.out)
+    }
+}
+
+fn new_bge(src: &[char]) -> Bge {
+    let lhs = &src[0..2];
+    let rhs = &src[4..6];
+    let out = src
+        .iter()
+        .skip(8)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
+    Bge {
+        lhs: new_register(lhs).unwrap(),
+        rhs: new_register(rhs).unwrap(),
+        out: new_label(&out),
     }
 }
 
@@ -202,10 +270,16 @@ impl fmt::Display for Blt {
 }
 
 fn new_blt(src: &[char]) -> Blt {
+    let label = src
+        .iter()
+        .skip(8)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
     Blt {
         lhs: new_register(&src[..2]).unwrap(),
         rhs: new_register(&src[4..6]).unwrap(),
-        label: new_label(&src[8..]),
+        label: new_label(&label),
     }
 }
 
@@ -223,10 +297,16 @@ impl fmt::Display for Addi {
 }
 
 fn new_addi(src: &[char]) -> Addi {
+    let rhs = src
+        .iter()
+        .skip(8)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
     Addi {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
-        rhs: new_immediate(&src[8..]).unwrap(),
+        rhs: new_immediate(&rhs).unwrap(),
     }
 }
 
@@ -247,9 +327,48 @@ fn new_lw(src: &[char]) -> Lw {
     let to = new_register(&src[..2]).unwrap();
     for i in 4..src.len() {
         if src[i] == '(' {
+            let from = src
+                .iter()
+                .skip(i + 1)
+                .take_while(|&&c| c != ')')
+                .copied()
+                .collect::<Vec<_>>();
             return Lw {
                 to,
-                from: new_register(&src[i + 1..src.len() - 1]).unwrap(),
+                from: new_register(&from).unwrap(),
+                offset: new_offset(&src[4..i]).unwrap(),
+            };
+        }
+    }
+    unreachable!()
+}
+
+#[derive(Debug, Clone)]
+pub struct Ld {
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
+}
+
+impl fmt::Display for Ld {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ld {}, {}({})", self.to, self.offset, self.from)
+    }
+}
+
+fn new_ld(src: &[char]) -> Ld {
+    let to = new_register(&src[..2]).unwrap();
+    for i in 4..src.len() {
+        if src[i] == '(' {
+            let from = src
+                .iter()
+                .skip(i + 1)
+                .take_while(|&&c| c != ')')
+                .copied()
+                .collect::<Vec<_>>();
+            return Ld {
+                to,
+                from: new_register(&from).unwrap(),
                 offset: new_offset(&src[4..i]).unwrap(),
             };
         }
@@ -514,6 +633,8 @@ fn new_register(src: &[char]) -> Option<Register> {
         ['t', '0'] => Some(Register::X5),
         ['t', '1'] => Some(Register::X6),
         ['t', '2'] => Some(Register::X7),
+        ['t', '3'] => Some(Register::X28),
+        ['t', '4'] => Some(Register::X29),
         ['a', '0'] => Some(Register::X10),
         ['a', '1'] => Some(Register::X11),
         _ => None,
@@ -533,15 +654,21 @@ impl fmt::Display for Li {
 }
 
 fn new_li(src: &[char]) -> Li {
+    let imm = src
+        .iter()
+        .skip(4)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
     Li {
         register: new_register(&src[..2]).unwrap(),
-        immediate: new_immediate(&src[4..]).unwrap(),
+        immediate: new_immediate(&imm).unwrap(),
     }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Immediate {
-    pub value: u64,
+    pub value: i64,
 }
 
 impl fmt::Display for Immediate {
@@ -581,7 +708,7 @@ impl From<[u8; 4]> for Immediate {
         )
         .unwrap();
         Self {
-            value: u64::from_ne_bytes(bytes),
+            value: i64::from_ne_bytes(bytes),
         }
     }
 }
@@ -597,14 +724,15 @@ impl From<u8> for Immediate {
         )
         .unwrap();
         Self {
-            value: u64::from_ne_bytes(bytes),
+            value: i64::from_ne_bytes(bytes),
         }
     }
 }
 
-fn new_immediate(src: &[char]) -> Result<Immediate, <u64 as std::str::FromStr>::Err> {
+fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::Err> {
     let value = match src {
-        ['0', 'x', rem @ ..] => u64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
+        ['-', rem @ ..] => -1i64 * rem.iter().collect::<String>().parse::<i64>()?,
+        ['0', 'x', rem @ ..] => i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
         _ => src.iter().collect::<String>().parse()?,
     };
 
@@ -721,9 +849,15 @@ impl fmt::Display for Bnez {
 }
 
 fn new_bnez(src: &[char]) -> Bnez {
+    let dest = src
+        .iter()
+        .skip(4)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
     Bnez {
         src: new_register(&src[0..2]).unwrap(),
-        dest: new_label(&src[4..]),
+        dest: new_label(&dest),
     }
 }
 

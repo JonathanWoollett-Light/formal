@@ -1,6 +1,22 @@
-Conditional checking works by tracing the values along a single
-path within a single hart and type. We then store a map at the
-type map level of all the AST instructions we touch, if we find
-the path to be invalid then we reset it same as the type map.
-Once a valid path is found we remove all instructions not
-present in the touched map.
+There needs to be an optimization that pulls failure conditions to the earliest positions they can be.
+
+E.g.
+```
+if typeof x != U8 U16 U32
+    fail
+```
+would be very expensive if there was a large path we needed to explore before reaching this to fail
+when checking the other types.
+
+This check could be pulled to the start of the program so exploring the other paths is faster
+and we reach the valid path in a reasonable time.
+
+
+Structure of type structure will be:
+```
+struct Type {
+  type: u64, // e.g. 0 if u8 or 1 if list
+  len: u64, // e.g. 1 if u8 or N if list
+  addr: *Type // points to types in list if list, else null
+}
+```
