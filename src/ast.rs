@@ -15,6 +15,7 @@ pub fn new_ast(src: &[char]) -> Option<NonNull<AstNode>> {
     let mut b = 0;
     while b < src.len() {
         if src[b] == '\n' {
+            println!("src[a..b]: {:?}", &src[a..b]);
             alloc_node(&src[a..b], &mut front_opt);
             a = b + 1;
         }
@@ -43,6 +44,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
+        ['#', '$', ' ', rem @ ..] => Instruction::Cast(new_cast(rem)),
         ['#', ..] => return,
         _ => new_instruction(src),
     };
@@ -93,6 +95,7 @@ pub enum Instruction {
     Bge(Bge),
     Ld(Ld),
     Bne(Bne),
+    Cast(Cast),
 }
 
 fn new_instruction(src: &[char]) -> Instruction {
@@ -147,9 +150,89 @@ impl fmt::Display for Instruction {
             Ld(ld) => write!(f, "{ld}"),
             Bne(bne) => write!(f, "{bne}"),
             Unreachable(unreachable) => write!(f, "{unreachable}"),
-            x @ _ => todo!("{x:?}"),
+            Cast(cast) => write!(f, "{cast}"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Type {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    List(Vec<Type>),
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Type::U8 => write!(f, "u8"),
+            Type::I8 => write!(f, "i8"),
+            Type::U16 => write!(f, "u16"),
+            Type::I16 => write!(f, "i16"),
+            Type::U32 => write!(f, "u32"),
+            Type::I32 => write!(f, "i32"),
+            Type::U64 => write!(f, "u64"),
+            Type::I64 => write!(f, "i64"),
+            Type::List(types) => write!(
+                f,
+                "{}",
+                types
+                    .iter()
+                    .map(|t| t.to_string())
+                    .intersperse(String::from(" "))
+                    .collect::<String>()
+            ),
+        }
+    }
+}
+
+fn new_type(src: &[char]) -> Type {
+    let types = src.split(|c| *c == ' ').collect::<Vec<_>>();
+    if let [single] = types.as_slice() {
+        match single {
+            ['u', '8'] => Type::U8,
+            ['i', '8'] => Type::I8,
+            ['u', '1', '6'] => Type::U16,
+            ['i', '1', '6'] => Type::I16,
+            ['u', '3', '2'] => Type::U32,
+            ['i', '3', '2'] => Type::I32,
+            ['u', '6', '4'] => Type::U64,
+            ['i', '6', '4'] => Type::I64,
+            x @ _ => todo!("{x:?}"),
+        }
+    } else {
+        Type::List(types.iter().map(|c| new_type(c)).collect())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Cast {
+    pub label: Label,
+    pub cast: Type,
+}
+
+impl fmt::Display for Cast {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#$ {}, {}", self.label, self.cast)
+    }
+}
+
+fn new_cast(src: &[char]) -> Cast {
+    for i in 0..src.len() {
+        if src[i] == ' ' {
+            return Cast {
+                label: new_label(&src[..i]),
+                cast: new_type(&src[i + 1..]),
+            };
+        }
+    }
+    unreachable!()
 }
 
 #[derive(Debug, Clone)]
@@ -709,6 +792,14 @@ impl From<[u8; 4]> for Immediate {
         .unwrap();
         Self {
             value: i64::from_ne_bytes(bytes),
+        }
+    }
+}
+
+impl From<[u8; 8]> for Immediate {
+    fn from(doubleword: [u8; 8]) -> Self {
+        Self {
+            value: i64::from_ne_bytes(doubleword),
         }
     }
 }

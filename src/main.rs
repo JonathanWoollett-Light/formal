@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(iter_intersperse)]
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
@@ -27,7 +28,7 @@ fn main() {
 
     // Verify the ast
     unsafe {
-        verify(ast, 1..3, 15);
+        verify(ast, 1..3);
     }
 }
 
