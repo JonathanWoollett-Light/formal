@@ -96,6 +96,7 @@ pub enum Instruction {
     Ld(Ld),
     Bne(Bne),
     Cast(Cast),
+    Lat(Lat),
 }
 
 fn new_instruction(src: &[char]) -> Instruction {
@@ -119,6 +120,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['b', 'g', 'e', ' ', rem @ ..] => Instruction::Bge(new_bge(rem)),
         ['l', 'd', ' ', rem @ ..] => Instruction::Ld(new_ld(rem)),
         ['b', 'n', 'e', ' ', rem @ ..] => Instruction::Bne(new_bne(rem)),
+        ['l', 'a', 't', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
         [.., ':'] => Instruction::Label(new_label_instruction(src)),
         x @ _ => todo!("{x:?}"),
     }
@@ -128,6 +130,7 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use Instruction::*;
         match self {
+            Lat(lat) => write!(f, "{lat}"),
             Csrr(csrr) => write!(f, "{csrr}"),
             Bnez(bnez) => write!(f, "{bnez}"),
             J(j) => write!(f, "{j}"),
@@ -155,6 +158,51 @@ impl fmt::Display for Instruction {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u64)]
+pub enum FlatType {
+    U8 = 0,
+    I8 = 1,
+    U16 = 2,
+    I16 = 3,
+    U32 = 4,
+    I32 = 5,
+    U64 = 6,
+    I64 = 7,
+    List = 8,
+}
+
+impl From<&Type> for FlatType {
+    fn from(t: &Type) -> Self {
+        match t {
+            Type::U8 => FlatType::U8,
+            Type::I8 => FlatType::I8,
+            Type::U16 => FlatType::U16,
+            Type::I16 => FlatType::I16,
+            Type::U32 => FlatType::U32,
+            Type::I32 => FlatType::I32,
+            Type::U64 => FlatType::U64,
+            Type::I64 => FlatType::I64,
+            Type::List(_) => FlatType::List,
+        }
+    }
+}
+impl From<Type> for FlatType {
+    fn from(t: Type) -> Self {
+        match t {
+            Type::U8 => FlatType::U8,
+            Type::I8 => FlatType::I8,
+            Type::U16 => FlatType::U16,
+            Type::I16 => FlatType::I16,
+            Type::U32 => FlatType::U32,
+            Type::I32 => FlatType::I32,
+            Type::U64 => FlatType::U64,
+            Type::I64 => FlatType::I64,
+            Type::List(_) => FlatType::List,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Type {
     U8,
@@ -166,6 +214,14 @@ pub enum Type {
     U64,
     I64,
     List(Vec<Type>),
+}
+impl Type {
+    pub fn list_mut(&mut self) -> &mut Vec<Type> {
+        match self {
+            Self::List(list) => list,
+            _ => panic!(),
+        }
+    }
 }
 
 impl fmt::Display for Type {
@@ -844,6 +900,26 @@ impl fmt::Display for La {
 
 fn new_la(src: &[char]) -> La {
     La {
+        register: new_register(&src[..2]).unwrap(),
+        label: new_label(&src[4..]),
+    }
+}
+
+/// Load address type
+#[derive(Debug, Clone)]
+pub struct Lat {
+    pub register: Register,
+    pub label: Label,
+}
+
+impl fmt::Display for Lat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "lat {}, {}", self.register, self.label)
+    }
+}
+
+fn new_lat(src: &[char]) -> Lat {
+    Lat {
         register: new_register(&src[..2]).unwrap(),
         label: new_label(&src[4..]),
     }

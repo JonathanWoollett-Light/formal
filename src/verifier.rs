@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::iter;
+use std::iter::once;
 use std::num::NonZeroU8;
 use std::ops::Range;
 use std::ops::RangeInclusive;
@@ -16,6 +17,7 @@ use std::{
     ptr::NonNull,
 };
 
+/// Compile time size
 fn size(t: &Type) -> usize {
     use Type::*;
     match t {
@@ -27,6 +29,7 @@ fn size(t: &Type) -> usize {
         I32 => 4,
         U64 => 8,
         I64 => 8,
+        List(_) => 3 * size(&Type::U64),
         _ => todo!(),
     }
 }
@@ -73,7 +76,7 @@ pub struct VerifierNode {
     pub node: NonNull<AstNode>,
     pub next: NextVerifierNode,
 }
-
+use std::iter::Peekable;
 type Types = BTreeMap<Label, Type>;
 
 #[derive(Debug)]
@@ -82,33 +85,38 @@ struct MemoryMap {
 }
 
 impl MemoryMap {
-    fn get_byte(&self, MemoryLocation { label, offset }: &MemoryLocation) -> Option<&u8> {
-        let value = self.map.get(label)?;
+    fn get_byte(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<&u8> {
+        let value = self.map.get(tag)?;
         match value {
             MemoryValue::Ascii(ascii) => ascii.get(*offset),
             MemoryValue::Word(word) => word.get(*offset),
             _ => todo!(),
         }
     }
-    fn get_word(&self, MemoryLocation { label, offset }: &MemoryLocation) -> Option<&[u8; 4]> {
-        let value = self.map.get(label)?;
+    fn get_word(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<&[u8; 4]> {
+        let value = self.map.get(tag)?;
         match value {
             MemoryValue::Word(word) => (*offset == 0).then_some(word),
             _ => todo!(),
         }
     }
-    fn get_doubleword(
-        &self,
-        MemoryLocation { label, offset }: &MemoryLocation,
-    ) -> Option<&[u8; 8]> {
-        let value = self.map.get(label)?;
+    fn get_doubleword(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<[u8; 8]> {
+        let value = self.map.get(tag)?;
         match value {
-            MemoryValue::DoubleWord(doubleword) => (*offset == 0).then_some(doubleword),
-            _ => todo!(),
+            MemoryValue::DoubleWord(doubleword) => (*offset == 0).then_some(*doubleword),
+            MemoryValue::Type(typetype) => match offset {
+                0 => Some((typetype.type_value as u64).to_ne_bytes()),
+                // The address is a label which cannot be known at comptime.
+                1 => todo!(),
+                2 => Some((typetype.length as u64).to_ne_bytes()),
+                // An offset outside the type is invalid.
+                _ => todo!()
+            }
+            x @ _ => todo!("{x:?}"),
         }
     }
-    fn set_word(&mut self, MemoryLocation { label, offset }: &MemoryLocation, value: [u8; 4]) {
-        if let Some(existing) = self.map.get_mut(label) {
+    fn set_word(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: [u8; 4]) {
+        if let Some(existing) = self.map.get_mut(tag) {
             match existing {
                 MemoryValue::Word(word) => {
                     *word = value;
@@ -117,11 +125,81 @@ impl MemoryMap {
             }
         } else {
             if *offset == 0 {
-                self.map.insert(label.clone(), MemoryValue::Word(value));
+                self.map.insert(tag.clone(), MemoryValue::Word(value));
             } else {
                 todo!()
             }
         }
+    }
+    // TODO This should be improved, I'm pretty sure the current approach is bad.
+    fn set_type(
+        &mut self,
+        value: &Type,
+        tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
+    ) -> Label {
+        let mut vec = Vec::new();
+        vec.push((None, value.clone()));
+        let mut right = 0;
+        // Fill queue with all types
+        while right < vec.len() {
+            if let Type::List(list) = &vec[right].1 {
+                for offset in 0..list.len() {
+                    let t = vec[right].1.list_mut()[offset].clone();
+                    vec.insert(right + offset + 1, (None, t));
+                }
+            }
+            right += 1;
+        }
+        println!();
+        println!("map: {:?}", self.map);
+        println!();
+        println!("vec: {vec:?}");
+
+        let mut left = right;
+        while left > 0 {
+            left -= 1;
+            if let (None, Type::List(_)) = &vec[left] {
+                let memory_types = vec
+                    .drain(left + 1..right)
+                    .map(|(addr, t)| MemoryValueType {
+                        type_value: FlatType::from(&t),
+                        addr,
+                        length: if let Type::List(l) = &t { l.len() } else { 0 },
+                    })
+                    .collect::<Vec<_>>();
+                let tag = tag_iter.next().unwrap();
+                vec[left].0 = Some(tag.clone());
+                self.map.insert(tag, MemoryValue::Types(memory_types));
+                right = left;
+            }
+        }
+
+        println!();
+        println!("map: {:?}", self.map);
+
+        let final_tag = tag_iter.next().unwrap();
+        match vec.remove(0) {
+            (addr @ Some(_),Type::List(list)) => {
+                self.map.insert(final_tag.clone(),MemoryValue::Type(MemoryValueType {
+                    type_value: FlatType::List,
+                    addr,
+                    length: list.len()
+                }));
+            },
+            (None, t) => {
+                self.map.insert(final_tag.clone(), MemoryValue::Type(MemoryValueType {
+                    type_value: FlatType::from(t),
+                    addr: None,
+                    length: 0
+                }));
+            },
+            _ => unreachable!(),
+        }
+
+        println!();
+        println!("map: {:?}", self.map);
+
+        final_tag
     }
 }
 
@@ -147,39 +225,51 @@ impl State {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 #[non_exhaustive]
 struct MemoryLocation {
-    label: Label,
+    tag: Label,
     offset: usize,
 }
-
 impl From<Label> for MemoryLocation {
-    fn from(label: Label) -> MemoryLocation {
-        MemoryLocation { label, offset: 0 }
-    }
-}
-impl From<&Label> for MemoryLocation {
-    fn from(label: &Label) -> MemoryLocation {
-        MemoryLocation {
-            label: label.clone(),
-            offset: 0,
-        }
+    fn from(tag: Label) -> Self {
+        Self { tag, offset: 0 }
     }
 }
 
 // It is possible to technically store a 4 byte virtual value (e.g. DATA_END)
 // then edit 2 bytes of it. So we will need additional complexity to support this case
 #[derive(Debug)]
-#[non_exhaustive]
 enum MemoryValue {
+    Type(MemoryValueType),
+    Types(Vec<MemoryValueType>),
     DoubleWord([u8; 8]),
     Word([u8; 4]),
     Ascii(Vec<u8>),
 }
 
+use std::mem::transmute;
+
+#[derive(Debug)]
+struct MemoryValueType {
+    // null = { 0, 0, 0 }
+    // u8 = { 1, 0, 0 }
+    // [u8,i16] = { 2, 0xABCD, 2 }
+    // etc.
+    type_value: FlatType,
+    addr: Option<Label>,
+    length: usize,
+}
+impl MemoryValueType {
+    unsafe fn to_bytes(self) -> [u8; size_of::<Self>()] {
+        transmute(self)
+    }
+    unsafe fn from_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
+        transmute(bytes)
+    }
+}
+
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 enum RegisterValue {
     Immediate(ImmediateRange),
     Address(Label),
@@ -283,7 +373,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
         // different inputs and often follow different execution paths (effectively having a different AST).
         let mut initial_types = harts_range
             .clone()
-            .map(|harts| (harts-1, Types::new()))
+            .map(|harts| (harts - 1, Types::new()))
             .collect::<BTreeMap<_, _>>();
         // To remove uneeded code (e.g. a branch might always be true so we remove the code it skips)
         // we record all the AST instructions that get touched.
@@ -356,6 +446,30 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                         .unwrap()
                         .entry(label.clone())
                         .or_insert(cast.clone());
+                }
+                Instruction::Lat(Lat { register: _, label }) => {
+                    // TODO We need to update initial types to include `Type::List([u64,u64,u64])` for the type type that describes `label` here.
+                    if !initial_types.get(&hart).unwrap().contains_key(label) {
+                        let next_possible_opt = TYPE_LIST.iter().find(|p| {
+                            let mut test_initial_types = initial_types.clone();
+                            test_initial_types
+                                .get_mut(&hart)
+                                .unwrap()
+                                .insert(label.clone(), (*p).clone());
+                            !excluded.contains(&test_initial_types)
+                        });
+                        if let Some(next_possible) = next_possible_opt {
+                            initial_types
+                                .get_mut(&hart)
+                                .unwrap()
+                                .insert(label.clone(), next_possible.clone());
+                        } else {
+                            // When there is no possible type the current types cannot be used
+                            // as they lead to this block. So add them to the excluded list and
+                            // restart exploration.
+                            break 'outer;
+                        }
+                    }
                 }
                 Instruction::La(La { register: _, label }) => {
                     if !initial_types.get(&hart).unwrap().contains_key(label) {
@@ -653,6 +767,7 @@ unsafe fn queue_up(
             // Non-racy + Non-conditional
             Instruction::Label(_)
             | Instruction::La(_)
+            | Instruction::Lat(_)
             | Instruction::Li(_)
             | Instruction::Addi(_)
             | Instruction::Csrr(_)
@@ -888,16 +1003,27 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 }
 
 unsafe fn find_state(
-    record: &[usize],
-    root: NonNull<VerifierHarts>,
-    harts: u8,
-    first_step: usize,
-    initial_types: &BTreeMap<u8, Types>,
+    record: &[usize], // The record of which children to follow from the root to reach the current position.
+    root: NonNull<VerifierHarts>, // The root of the verification tree.
+    harts: u8,        // The number of hardware threads in the current path.
+    first_step: usize, // The child node of the root which forms the current path (will correlate with `harts`).
+    initial_types: &BTreeMap<u8, Types>, // Initial types for variables for each thread.
 ) -> State {
+    // Iterator to generate unique labels.
+    const N: u8 = b'z' - b'a';
+    let mut tag_iter = (0..)
+        .map(|index| {
+            Label { tag: once('_')
+                .chain((0..index / N).map(|_| 'z'))
+                .chain(once(char::from_u32(((index % N) + b'a') as u32).unwrap()))
+                .collect::<String>()}
+        })
+        .peekable();
+
     // Iterate forward to find the values.
     let mut state = State::new(harts, initial_types);
     let mut current = root.as_ref().next[first_step];
-    for next in record.iter().rev() {
+    for (count, next) in record.iter().rev().enumerate() {
         let vnode = current.as_ref();
         let hart = vnode.hart;
         let hartu = hart as usize;
@@ -918,6 +1044,15 @@ unsafe fn find_state(
                 immediate,
             }) => {
                 state.registers[hartu].insert(*register, RegisterValue::from(*immediate));
+            }
+            Instruction::Lat(Lat { register, label }) => {
+                let typeof_type = state.types.get(&hart).unwrap().get(label).unwrap();
+                let loc = state.memory.set_type(typeof_type, &mut tag_iter);
+                state.registers[hartu].insert(*register, RegisterValue::Address(loc.clone()));
+
+                // Each type type should have its own unique label.
+                let existing = state.types.get_mut(&hart).unwrap().insert(loc, Type::List(vec![Type::U64,Type::U64,Type::U64]));
+                debug_assert!(existing.is_none());
             }
             Instruction::La(La { register, label }) => {
                 state.registers[hartu].insert(*register, RegisterValue::from(label.clone()));
@@ -945,7 +1080,7 @@ unsafe fn find_state(
                             RegisterValue::Immediate(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
                                     state.memory.set_word(
-                                        &MemoryLocation::from(to_label),
+                                        &MemoryLocation::from(to_label.clone()),
                                         <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap(),
                                     );
                                 } else {
@@ -975,11 +1110,11 @@ unsafe fn find_state(
                         debug_assert!(size(from_type) >= 8);
                         let Some(doubleword) = state
                             .memory
-                            .get_doubleword(&MemoryLocation::from(from_label))
+                            .get_doubleword(&MemoryLocation::from(from_label.clone()))
                         else {
                             todo!()
                         };
-                        let imm = Immediate::from(*doubleword);
+                        let imm = Immediate::from(doubleword);
                         state.registers[hartu]
                             .insert(*to, RegisterValue::Immediate(ImmediateRange(imm..=imm)));
                     }
@@ -1001,7 +1136,9 @@ unsafe fn find_state(
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 4);
-                        let Some(word) = state.memory.get_word(&MemoryLocation::from(from_label))
+                        let Some(word) = state
+                            .memory
+                            .get_word(&MemoryLocation::from(from_label.clone()))
                         else {
                             todo!()
                         };
@@ -1027,7 +1164,9 @@ unsafe fn find_state(
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 1);
-                        let Some(byte) = state.memory.get_byte(&MemoryLocation::from(from_label))
+                        let Some(byte) = state
+                            .memory
+                            .get_byte(&MemoryLocation::from(from_label.clone()))
                         else {
                             todo!("{from_label:?}")
                         };

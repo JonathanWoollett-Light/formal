@@ -1,5 +1,6 @@
 #![feature(let_chains)]
 #![feature(iter_intersperse)]
+#![feature(generic_arg_infer)]
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;

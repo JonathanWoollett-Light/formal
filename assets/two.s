@@ -30,7 +30,7 @@ _start:
 
     # Declare string
     # Get address of type structure
-    la t0, typeof welcome
+    lat t0, welcome
 
     # Check variable is list
     li t2, 1 # Load list type number

@@ -16,7 +16,7 @@ Structure of type structure will be:
 ```
 struct Type {
   type: u64, // e.g. 0 if u8 or 1 if list
-  len: u64, // e.g. 1 if u8 or N if list
+  len: u64, // e.g. 0 if u8 or N if list
   addr: *Type // points to types in list if list, else null
 }
 ```
