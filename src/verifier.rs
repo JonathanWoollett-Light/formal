@@ -1,5 +1,4 @@
 use crate::ast::*;
-use std::alloc::dealloc;
 use std::alloc::Layout;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -42,9 +41,9 @@ const TYPE_LIST: [Type; 8] = [
     Type::I64,
 ];
 
-struct VerifierHarts {
-    harts: u8,
-    next: NextVerifierNode,
+pub struct VerifierHarts {
+    pub harts: u8,
+    pub next: NextVerifierNode,
 }
 
 type NextVerifierNode = Vec<NonNull<VerifierNode>>;
@@ -326,76 +325,293 @@ impl std::ops::Add<Immediate> for ImmediateRange {
 // doesn't need to theoritically do.
 
 pub struct Explorerer {
+    pub harts_range: Range<u8>,
 
+    pub excluded: HashSet<BTreeMap<u8, Types>>,
+    pub second_ptr: NonNull<AstNode>,
+    pub roots: Vec<NonNull<VerifierHarts>>,
 }
-impl Explorerer {
-    pub fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
-        todo!()
-    }
-    pub fn next_step(&mut self) {
-        todo!()
-    }
-    pub fn next_path(&mut self) {
-        todo!()
-    }
+/// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
+pub struct ExplorererPath<'a> {
+    pub explorerer: &'a mut Explorerer,
+    pub initial_types: BTreeMap<u8, Types>,
+    pub touched: HashSet<NonNull<AstNode>>,
+    pub queue: VecDeque<NonNull<VerifierNode>>,
 }
 
-pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
-    // You cannot verify a program that starts running on 0 harts.
-    assert!(harts_range.start > 0);
+pub enum ExplorePathResult<'a> {
+    Valid {
+        initial_types: BTreeMap<u8, Types>,
+        touched: HashSet<NonNull<AstNode>>,
+    },
+    Invalid {
+        initial_types: BTreeMap<u8, Types>,
+    },
+    Continue(ExplorererPath<'a>),
+}
 
-    // Intial misc stuff
-    let first = ast.unwrap().as_ref();
-    let second_ptr = first.next.unwrap();
-    let second = second_ptr.as_ref();
-    match &first.this {
-        Instruction::Global(Global { tag: start_tag }) => match &second.this {
-            Instruction::Label(LabelInstruction { tag }) => {
-                assert_eq!(start_tag, tag);
+impl<'a> ExplorererPath<'a> {
+    pub unsafe fn next_step(
+        Self {
+            explorerer,
+            mut initial_types,
+            mut touched,
+            mut queue,
+        }: Self,
+    ) -> ExplorePathResult<'a> {
+        let Some(branch_ptr) = queue.pop_front() else {
+            return ExplorePathResult::Valid {
+                initial_types,
+                touched,
+            };
+        };
+
+        // If a variable is used that has not yet been defined, add the cheapest
+        // possible data type for this variable to `types`. To avoid retreading the
+        // steps of the same types, when the end of a invalid path is reached the
+        // type map is added to `excluded`, we then check all values in `excluded`
+        // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
+        // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
+        let branch = branch_ptr.as_ref();
+        let ast = branch.node;
+        let hart = branch.hart;
+
+        // Record all the AST node that are reachable.
+        touched.insert(ast);
+
+        // Check the instruction is valid and make typing decisions.
+        match &branch.node.as_ref().this {
+            // Instructions which cannot be invalid and do not affect type exploration.
+            Instruction::Unreachable(_)
+            | Instruction::Li(_)
+            | Instruction::Label(_)
+            | Instruction::Addi(_)
+            | Instruction::Blt(_)
+            | Instruction::Csrr(_)
+            | Instruction::Bne(_)
+            | Instruction::Bnez(_)
+            | Instruction::Beqz(_)
+            | Instruction::Bge(_)
+            | Instruction::Wfi(_) => {}
+            // If the first encounter of a variable is a cast, we simply add this as the
+            // assumed initial type.
+            Instruction::Cast(Cast { label, cast }) => {
+                // If the type doesn't have an existing initial type entry, add the initial type as `cast`.
+                initial_types
+                    .get_mut(&hart)
+                    .unwrap()
+                    .entry(label.clone())
+                    .or_insert(cast.clone());
             }
-            _ => panic!("The second node must be the start label"),
-        },
-        _ => panic!("The first node must be the global start label definition"),
+            Instruction::Lat(Lat { register: _, label }) => {
+                // TODO We need to update initial types to include `Type::List([u64,u64,u64])` for the type type that describes `label` here.
+                if !initial_types.get(&hart).unwrap().contains_key(label) {
+                    let next_possible_opt = TYPE_LIST.iter().find(|p| {
+                        let mut test_initial_types = initial_types.clone();
+                        test_initial_types
+                            .get_mut(&hart)
+                            .unwrap()
+                            .insert(label.clone(), (*p).clone());
+                        !explorerer.excluded.contains(&test_initial_types)
+                    });
+                    if let Some(next_possible) = next_possible_opt {
+                        initial_types
+                            .get_mut(&hart)
+                            .unwrap()
+                            .insert(label.clone(), next_possible.clone());
+                    } else {
+                        // When there is no possible type the current types cannot be used
+                        // as they lead to this block. So add them to the excluded list and
+                        // restart exploration.
+                        return ExplorePathResult::Invalid { initial_types };
+                    }
+                }
+            }
+            Instruction::La(La { register: _, label }) => {
+                if !initial_types.get(&hart).unwrap().contains_key(label) {
+                    let next_possible_opt = TYPE_LIST.iter().find(|p| {
+                        let mut test_initial_types = initial_types.clone();
+                        test_initial_types
+                            .get_mut(&hart)
+                            .unwrap()
+                            .insert(label.clone(), (*p).clone());
+                        !explorerer.excluded.contains(&test_initial_types)
+                    });
+                    if let Some(next_possible) = next_possible_opt {
+                        initial_types
+                            .get_mut(&hart)
+                            .unwrap()
+                            .insert(label.clone(), next_possible.clone());
+                    } else {
+                        // When there is no possible type the current types cannot be used
+                        // as they lead to this block. So add them to the excluded list and
+                        // restart exploration.
+                        return ExplorePathResult::Invalid { initial_types };
+                    }
+                }
+            }
+            // For any store we need to validate the destination is valid.
+            Instruction::Sw(Sw {
+                to,
+                from: _,
+                offset,
+            }) => {
+                // Collect the state.
+                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                let state = find_state(&record, root, harts, first_step, &initial_types);
+
+                // Check the destination is valid.
+                match state.registers[hart as usize].get(to) {
+                    Some(RegisterValue::Address(from_label)) => {
+                        // The current types for the current hart (each hart may treat varioables as different types at different points).
+                        let current_local_types = state.types.get(&hart).unwrap();
+                        // The type of the variable in question (at this point on this hart).
+                        let var_type = current_local_types.get(from_label).unwrap();
+                        // If attempting to access outside the memory space for the label.
+                        if size(var_type) < 4 + offset.value.value as usize {
+                            // The path is invalid, so we add the current types to the
+                            // excluded list and restart exploration.
+                            return ExplorePathResult::Invalid { initial_types };
+                        } else {
+                            // We found the label and we can validate that the loading
+                            // of a word with the given offset is within the address space.
+                            // So we continue exploration.
+                        }
+                    }
+                    x => todo!("{x:?}"),
+                }
+            }
+            // For any load we need to validate the destination is valid.
+            Instruction::Ld(Ld {
+                to: _,
+                from,
+                offset,
+            }) => {
+                // Collect the state.
+                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                let state = find_state(&record, root, harts, first_step, &initial_types);
+
+                // Check the destination is valid.
+                match state.registers[branch.hart as usize].get(from) {
+                    Some(RegisterValue::Address(from_label)) => {
+                        // The current types for the current hart (each hart may treat varioables as different types at different points).
+                        let current_local_types = state.types.get(&hart).unwrap();
+                        // The type of the variable in question (at this point on this hart).
+                        let var_type = current_local_types.get(from_label).unwrap();
+                        // If attempting to access outside the memory space for the label.
+                        if size(var_type) < 8 + offset.value.value as usize {
+                            // The path is invalid, so we add the current types to the
+                            // excluded list and restart exploration.
+                            return ExplorePathResult::Invalid { initial_types };
+                        } else {
+                            // We found the label and we can validate that the loading
+                            // of a word with the given offset is within the address space.
+                            // So we continue exploration.
+                        }
+                    }
+                    x => todo!("{x:?}"),
+                }
+            }
+            Instruction::Lw(Lw {
+                to: _,
+                from,
+                offset,
+            }) => {
+                // Collect the state.
+                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                let state = find_state(&record, root, harts, first_step, &initial_types);
+
+                // Check the destination is valid.
+                match state.registers[branch.hart as usize].get(from) {
+                    Some(RegisterValue::Address(from_label)) => {
+                        // The current types for the current hart (each hart may treat varioables as different types at different points).
+                        let current_local_types = state.types.get(&hart).unwrap();
+                        // The type of the variable in question (at this point on this hart).
+                        let var_type = current_local_types.get(from_label).unwrap();
+                        // If attempting to access outside the memory space for the label.
+                        if size(var_type) < 4 + offset.value.value as usize {
+                            // The path is invalid, so we add the current types to the
+                            // excluded list and restart exploration.
+                            return ExplorePathResult::Invalid { initial_types };
+                        } else {
+                            // We found the label and we can validate that the loading
+                            // of a word with the given offset is within the address space.
+                            // So we continue exploration.
+                        }
+                    }
+                    x => todo!("{x:?}"),
+                }
+            }
+            Instruction::Lb(Lb {
+                to: _,
+                from,
+                offset,
+            }) => {
+                // Collect the state.
+                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                let state = find_state(&record, root, harts, first_step, &initial_types);
+
+                // Check the destination is valid.
+                match state.registers[branch.hart as usize].get(from) {
+                    Some(RegisterValue::Address(from_label)) => {
+                        // The current types for the current hart (each hart may treat varioables as different types at different points).
+                        let current_local_types = state.types.get(&hart).unwrap();
+                        // The type of the variable in question (at this point on this hart).
+                        let var_type = current_local_types.get(from_label).unwrap();
+                        // If attempting to access outside the memory space for the label.
+                        if size(var_type) < 1 + offset.value.value as usize {
+                            // The path is invalid, so we add the current types to the
+                            // excluded list and restart exploration.
+                            return ExplorePathResult::Invalid { initial_types };
+                        } else {
+                            // We found the label and we can validate that the loading
+                            // of a word with the given offset is within the address space.
+                            // So we continue exploration.
+                        }
+                    }
+                    x => todo!("{x:?}"),
+                }
+            }
+            // If any fail is encountered then the path is invalid.
+            Instruction::Fail(_) => return ExplorePathResult::Invalid { initial_types },
+            x => todo!("{x:?}"),
+        }
+        queue_up(branch_ptr, &mut queue, &initial_types);
+
+        return ExplorePathResult::Continue(Self {
+            explorerer,
+            initial_types,
+            touched,
+            queue,
+        });
     }
+}
 
-    // Record the types of variables we have previously found form invalid paths.
-    let mut excluded = HashSet::new();
+pub enum ExplorererResult {
+    Invalid,
+    Continued(Explorerer),
+    Valid {
+        initial_types: BTreeMap<u8, Types>,
+        touched: HashSet<NonNull<AstNode>>,
+    },
+}
 
-    // The queue of nodes to explore along this path.
-    // When we have 1..=3 harts the initial queue will contain
-    // `[(_start, hart 0), (_start, hart 0), (_start, hart 0)]`
-    // where each entry has a number of predeccessors e.g. `(_start, hart 1)`
-    // up to the number of harts for that path.
-    let roots = harts_range
-        .clone()
-        .map(|harts| {
-            let ptr = alloc(Layout::new::<VerifierHarts>()).cast();
-            ptr::write(
-                ptr,
-                VerifierHarts {
-                    harts,
-                    next: Vec::new(),
-                },
-            );
-            NonNull::new(ptr).unwrap()
-        })
-        .collect::<Vec<_>>();
-
-    #[cfg(debug_assertions)]
-    let mut check = 0;
-    let (final_types, final_touched) = loop {
+impl Explorerer {
+    pub unsafe fn new_path(&mut self) -> ExplorererPath<'_> {
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
         // different inputs and often follow different execution paths (effectively having a different AST).
-        let mut initial_types = harts_range
+        let initial_types = self
+            .harts_range
             .clone()
             .map(|harts| (harts - 1, Types::new()))
             .collect::<BTreeMap<_, _>>();
         // To remove uneeded code (e.g. a branch might always be true so we remove the code it skips)
         // we record all the AST instructions that get touched.
-        let mut touched = HashSet::<NonNull<AstNode>>::new();
+        let touched = HashSet::<NonNull<AstNode>>::new();
 
-        let mut queue = roots
+        let queue = self
+            .roots
             .iter()
             .enumerate()
             .map(|(harts, root)| {
@@ -409,7 +625,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                             VerifierNode {
                                 prev,
                                 hart,
-                                node: second_ptr,
+                                node: self.second_ptr,
                                 next: Vec::new(),
                             },
                         );
@@ -426,298 +642,61 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
             })
             .collect::<VecDeque<_>>();
 
-        'outer: while let Some(branch_ptr) = queue.pop_front() {
-            // If a variable is used that has not yet been defined, add the cheapest
-            // possible data type for this variable to `types`. To avoid retreading the
-            // steps of the same types, when the end of a invalid path is reached the
-            // type map is added to `excluded`, we then check all values in `excluded`
-            // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
-            // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
-            let branch = branch_ptr.as_ref();
-            let ast = branch.node;
-            let hart = branch.hart;
-
-            // Record all the AST node that are reachable.
-            touched.insert(ast);
-
-            // Check the instruction is valid and make typing decisions.
-            match &branch.node.as_ref().this {
-                // Instructions which cannot be invalid and do not affect type exploration.
-                Instruction::Unreachable(_)
-                | Instruction::Li(_)
-                | Instruction::Label(_)
-                | Instruction::Addi(_)
-                | Instruction::Blt(_)
-                | Instruction::Csrr(_)
-                | Instruction::Bne(_)
-                | Instruction::Bnez(_)
-                | Instruction::Beqz(_)
-                | Instruction::Bge(_)
-                | Instruction::Wfi(_) => {}
-                // If the first encounter of a variable is a cast, we simply add this as the
-                // assumed initial type.
-                Instruction::Cast(Cast { label, cast }) => {
-                    // If the type doesn't have an existing initial type entry, add the initial type as `cast`.
-                    initial_types
-                        .get_mut(&hart)
-                        .unwrap()
-                        .entry(label.clone())
-                        .or_insert(cast.clone());
-                }
-                Instruction::Lat(Lat { register: _, label }) => {
-                    // TODO We need to update initial types to include `Type::List([u64,u64,u64])` for the type type that describes `label` here.
-                    if !initial_types.get(&hart).unwrap().contains_key(label) {
-                        let next_possible_opt = TYPE_LIST.iter().find(|p| {
-                            let mut test_initial_types = initial_types.clone();
-                            test_initial_types
-                                .get_mut(&hart)
-                                .unwrap()
-                                .insert(label.clone(), (*p).clone());
-                            !excluded.contains(&test_initial_types)
-                        });
-                        if let Some(next_possible) = next_possible_opt {
-                            initial_types
-                                .get_mut(&hart)
-                                .unwrap()
-                                .insert(label.clone(), next_possible.clone());
-                        } else {
-                            // When there is no possible type the current types cannot be used
-                            // as they lead to this block. So add them to the excluded list and
-                            // restart exploration.
-                            break 'outer;
-                        }
-                    }
-                }
-                Instruction::La(La { register: _, label }) => {
-                    if !initial_types.get(&hart).unwrap().contains_key(label) {
-                        let next_possible_opt = TYPE_LIST.iter().find(|p| {
-                            let mut test_initial_types = initial_types.clone();
-                            test_initial_types
-                                .get_mut(&hart)
-                                .unwrap()
-                                .insert(label.clone(), (*p).clone());
-                            !excluded.contains(&test_initial_types)
-                        });
-                        if let Some(next_possible) = next_possible_opt {
-                            initial_types
-                                .get_mut(&hart)
-                                .unwrap()
-                                .insert(label.clone(), next_possible.clone());
-                        } else {
-                            // When there is no possible type the current types cannot be used
-                            // as they lead to this block. So add them to the excluded list and
-                            // restart exploration.
-                            break 'outer;
-                        }
-                    }
-                }
-                // For any store we need to validate the destination is valid.
-                Instruction::Sw(Sw {
-                    to,
-                    from: _,
-                    offset,
-                }) => {
-                    // Collect the state.
-                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                    let state = find_state(&record, root, harts, first_step, &initial_types);
-
-                    // Check the destination is valid.
-                    match state.registers[hart as usize].get(to) {
-                        Some(RegisterValue::Address(from_label)) => {
-                            // The current types for the current hart (each hart may treat varioables as different types at different points).
-                            let current_local_types = state.types.get(&hart).unwrap();
-                            // The type of the variable in question (at this point on this hart).
-                            let var_type = current_local_types.get(from_label).unwrap();
-                            // If attempting to access outside the memory space for the label.
-                            if size(var_type) < 4 + offset.value.value as usize {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                break 'outer;
-                            } else {
-                                // We found the label and we can validate that the loading
-                                // of a word with the given offset is within the address space.
-                                // So we continue exploration.
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                // For any load we need to validate the destination is valid.
-                Instruction::Ld(Ld {
-                    to: _,
-                    from,
-                    offset,
-                }) => {
-                    // Collect the state.
-                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                    let state = find_state(&record, root, harts, first_step, &initial_types);
-
-                    // Check the destination is valid.
-                    match state.registers[branch.hart as usize].get(from) {
-                        Some(RegisterValue::Address(from_label)) => {
-                            // The current types for the current hart (each hart may treat varioables as different types at different points).
-                            let current_local_types = state.types.get(&hart).unwrap();
-                            // The type of the variable in question (at this point on this hart).
-                            let var_type = current_local_types.get(from_label).unwrap();
-                            // If attempting to access outside the memory space for the label.
-                            if size(var_type) < 8 + offset.value.value as usize {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                break 'outer;
-                            } else {
-                                // We found the label and we can validate that the loading
-                                // of a word with the given offset is within the address space.
-                                // So we continue exploration.
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                Instruction::Lw(Lw {
-                    to: _,
-                    from,
-                    offset,
-                }) => {
-                    // Collect the state.
-                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                    let state = find_state(&record, root, harts, first_step, &initial_types);
-
-                    // Check the destination is valid.
-                    match state.registers[branch.hart as usize].get(from) {
-                        Some(RegisterValue::Address(from_label)) => {
-                            // The current types for the current hart (each hart may treat varioables as different types at different points).
-                            let current_local_types = state.types.get(&hart).unwrap();
-                            // The type of the variable in question (at this point on this hart).
-                            let var_type = current_local_types.get(from_label).unwrap();
-                            // If attempting to access outside the memory space for the label.
-                            if size(var_type) < 4 + offset.value.value as usize {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                break 'outer;
-                            } else {
-                                // We found the label and we can validate that the loading
-                                // of a word with the given offset is within the address space.
-                                // So we continue exploration.
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                Instruction::Lb(Lb {
-                    to: _,
-                    from,
-                    offset,
-                }) => {
-                    // Collect the state.
-                    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                    let state = find_state(&record, root, harts, first_step, &initial_types);
-
-                    // Check the destination is valid.
-                    match state.registers[branch.hart as usize].get(from) {
-                        Some(RegisterValue::Address(from_label)) => {
-                            // The current types for the current hart (each hart may treat varioables as different types at different points).
-                            let current_local_types = state.types.get(&hart).unwrap();
-                            // The type of the variable in question (at this point on this hart).
-                            let var_type = current_local_types.get(from_label).unwrap();
-                            // If attempting to access outside the memory space for the label.
-                            if size(var_type) < 1 + offset.value.value as usize {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                break 'outer;
-                            } else {
-                                // We found the label and we can validate that the loading
-                                // of a word with the given offset is within the address space.
-                                // So we continue exploration.
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                // If any fail is encountered then the path is invalid.
-                Instruction::Fail(_) => break 'outer,
-                x => todo!("{x:?}"),
-            }
-            queue_up(branch_ptr, &mut queue, &initial_types);
+        ExplorererPath {
+            explorerer: self,
+            initial_types,
+            touched,
+            queue,
         }
-
-        // If we have evaluated all nodes in the queue
-        if queue.is_empty() {
-            break (initial_types, touched);
-        }
-
-        // This will only be reached for an invalid path.
-
-        // Since there is an indefinite number of types we can never reduce the types.
-        // E.g. you might think if we have excluded `[a:u8,b:u8]` and `[a:u8,b:u16]` (etc.
-        // with b being all integer types) we can exclude `[a:u8]` but this doesn't work
-        // since lists can be indefinitely long.
-        excluded.insert(initial_types.clone());
-
-        // Dealloc the current tree so we can restart.
-        for mut root in roots.iter().copied() {
-            let stack = &mut root.as_mut().next;
-            while let Some(next) = stack.pop() {
-                stack.extend(next.as_ref().next.iter());
-                dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
-            }
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            check += 1;
-            dbg!();
-            println!("{initial_types:?}");
-            println!("{excluded:?}");
-            dbg!();
-            if check > 100 {
-                panic!();
-            }
-        }
-
-        // TODO Make this explanation better.
-        // This case only occurs when all types are excluded thus it continually breaks out
-        // of the exploration loop with empty `initial_types`. This case means there is no
-        // valid type combination and thus no valid path.
-        // TODO: Don't use a panic here.
-        if initial_types.is_empty() {
-            panic!("No valid path");
-        }
-    };
-
-    // Remove all AST node not present in `final_touched`.
-    todo!();
-
-    // Add the data labels based on `final_types`.
-    todo!();
-
-    // When we find a valid path, we also want to clear the tree. When clearing an invalid path
-    // we don't clear the roots, but we do here.
-    for mut root in roots.into_iter() {
-        let stack = &mut root.as_mut().next;
-        while let Some(next) = stack.pop() {
-            stack.extend(next.as_ref().next.iter());
-            dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
-        }
-        dealloc(root.as_ptr().cast(), Layout::new::<VerifierHarts>());
     }
+    pub unsafe fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
+        // You cannot verify a program that starts running on 0 harts.
+        assert!(harts_range.start > 0);
 
-    // For the lowest number of harts in the range, we explore the tree
-    // until finding a valid full path for that number of harts.
-    // We then explore the tree for the next number of harts, attempting to
-    // find a valid full path with matching variable types (in the future it
-    // will also need to find a path with a matching ast, given macro functions).
+        // Intial misc stuff
+        let first = ast.unwrap().as_ref();
+        let second_ptr = first.next.unwrap();
+        let second = second_ptr.as_ref();
+        match &first.this {
+            Instruction::Global(Global { tag: start_tag }) => match &second.this {
+                Instruction::Label(LabelInstruction { tag }) => {
+                    assert_eq!(start_tag, tag);
+                }
+                _ => panic!("The second node must be the start label"),
+            },
+            _ => panic!("The first node must be the global start label definition"),
+        }
 
-    // Since the number of types is indefinite (given lists can be of any length)
-    // to find the best path through the full tree, we use a greedy approach where
-    // we return the first valid path we find, we always pick the best (smallest)
-    // possible variable at each stage, only exploring other variables if we find
-    // this type doesn't form a valid path.
+        // To avoid retracing paths we record type combinations that have been found to be invalid.
+        let excluded = HashSet::new();
 
-    // When we find a path is invalid, we discard/deallocate already explored nodes
-    // belonging exclusively to this invalid path and we store the intersection of
-    // types as invalid (if x:u8,y:u16,z:i64 is found as a valid path for 1 hart,
-    // but then x:u8,y:u16 is found to be invalid for 2 harts, we store x:u8,y:u16 as
-    // invalid, so as soon as we know not to explore any path requiring this later).
+        // The queue of nodes to explore along this path.
+        // When we have 1..=3 harts the initial queue will contain
+        // `[(_start, hart 0), (_start, hart 0), (_start, hart 0)]`
+        // where each entry has a number of predeccessors e.g. `(_start, hart 1)`
+        // up to the number of harts for that path.
+        let roots = harts_range
+            .clone()
+            .map(|harts| {
+                let ptr = alloc(Layout::new::<VerifierHarts>()).cast();
+                ptr::write(
+                    ptr,
+                    VerifierHarts {
+                        harts,
+                        next: Vec::new(),
+                    },
+                );
+                NonNull::new(ptr).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        Self {
+            harts_range,
+            roots,
+            second_ptr,
+            excluded,
+        }
+    }
 }
 
 // Get the number of harts of this sub-tree and record the path.
