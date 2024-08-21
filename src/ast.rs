@@ -122,7 +122,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['b', 'n', 'e', ' ', rem @ ..] => Instruction::Bne(new_bne(rem)),
         ['l', 'a', 't', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
         [.., ':'] => Instruction::Label(new_label_instruction(src)),
-        x @ _ => todo!("{x:?}"),
+        x => todo!("{x:?}"),
     }
 }
 
@@ -260,7 +260,7 @@ fn new_type(src: &[char]) -> Type {
             ['i', '3', '2'] => Type::I32,
             ['u', '6', '4'] => Type::U64,
             ['i', '6', '4'] => Type::I64,
-            x @ _ => todo!("{x:?}"),
+            x => todo!("{x:?}"),
         }
     } else {
         Type::List(types.iter().map(|c| new_type(c)).collect())
@@ -587,7 +587,7 @@ impl fmt::Display for Offset {
 
 fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
     Ok(Offset {
-        value: if src.len() == 0 {
+        value: if src.is_empty() {
             Immediate { value: 0 }
         } else {
             new_immediate(src)?
@@ -878,7 +878,7 @@ impl From<u8> for Immediate {
 
 fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::Err> {
     let value = match src {
-        ['-', rem @ ..] => -1i64 * rem.iter().collect::<String>().parse::<i64>()?,
+        ['-', rem @ ..] => -rem.iter().collect::<String>().parse::<i64>()?,
         ['0', 'x', rem @ ..] => i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
         _ => src.iter().collect::<String>().parse()?,
     };

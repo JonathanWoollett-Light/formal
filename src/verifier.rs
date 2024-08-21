@@ -2,12 +2,9 @@ use crate::ast::*;
 use std::alloc::dealloc;
 use std::alloc::Layout;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::iter;
 use std::iter::once;
-use std::num::NonZeroU8;
 use std::ops::Range;
 use std::ops::RangeInclusive;
 use std::ptr;
@@ -110,9 +107,9 @@ impl MemoryMap {
                 1 => todo!(),
                 2 => Some((typetype.length as u64).to_ne_bytes()),
                 // An offset outside the type is invalid.
-                _ => todo!()
-            }
-            x @ _ => todo!("{x:?}"),
+                _ => todo!(),
+            },
+            x => todo!("{x:?}"),
         }
     }
     fn set_word(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: [u8; 4]) {
@@ -123,12 +120,10 @@ impl MemoryMap {
                 }
                 _ => todo!(),
             }
+        } else if *offset == 0 {
+            self.map.insert(tag.clone(), MemoryValue::Word(value));
         } else {
-            if *offset == 0 {
-                self.map.insert(tag.clone(), MemoryValue::Word(value));
-            } else {
-                todo!()
-            }
+            todo!()
         }
     }
     // TODO This should be improved, I'm pretty sure the current approach is bad.
@@ -179,20 +174,26 @@ impl MemoryMap {
 
         let final_tag = tag_iter.next().unwrap();
         match vec.remove(0) {
-            (addr @ Some(_),Type::List(list)) => {
-                self.map.insert(final_tag.clone(),MemoryValue::Type(MemoryValueType {
-                    type_value: FlatType::List,
-                    addr,
-                    length: list.len()
-                }));
-            },
+            (addr @ Some(_), Type::List(list)) => {
+                self.map.insert(
+                    final_tag.clone(),
+                    MemoryValue::Type(MemoryValueType {
+                        type_value: FlatType::List,
+                        addr,
+                        length: list.len(),
+                    }),
+                );
+            }
             (None, t) => {
-                self.map.insert(final_tag.clone(), MemoryValue::Type(MemoryValueType {
-                    type_value: FlatType::from(t),
-                    addr: None,
-                    length: 0
-                }));
-            },
+                self.map.insert(
+                    final_tag.clone(),
+                    MemoryValue::Type(MemoryValueType {
+                        type_value: FlatType::from(t),
+                        addr: None,
+                        length: 0,
+                    }),
+                );
+            }
             _ => unreachable!(),
         }
 
@@ -324,6 +325,21 @@ impl std::ops::Add<Immediate> for ImmediateRange {
 // for valid use cases it will be slower as it needs to explore and validate paths it
 // doesn't need to theoritically do.
 
+pub struct Explorerer {
+
+}
+impl Explorerer {
+    pub fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
+        todo!()
+    }
+    pub fn next_step(&mut self) {
+        todo!()
+    }
+    pub fn next_path(&mut self) {
+        todo!()
+    }
+}
+
 pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
     // You cannot verify a program that starts running on 0 harts.
     assert!(harts_range.start > 0);
@@ -427,7 +443,8 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
             // Check the instruction is valid and make typing decisions.
             match &branch.node.as_ref().this {
                 // Instructions which cannot be invalid and do not affect type exploration.
-                Instruction::Li(_)
+                Instruction::Unreachable(_)
+                | Instruction::Li(_)
                 | Instruction::Label(_)
                 | Instruction::Addi(_)
                 | Instruction::Blt(_)
@@ -522,7 +539,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                                 // So we continue exploration.
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 // For any load we need to validate the destination is valid.
@@ -553,7 +570,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                                 // So we continue exploration.
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 Instruction::Lw(Lw {
@@ -583,7 +600,7 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                                 // So we continue exploration.
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 Instruction::Lb(Lb {
@@ -613,12 +630,12 @@ pub unsafe fn verify(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) {
                                 // So we continue exploration.
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 // If any fail is encountered then the path is invalid.
                 Instruction::Fail(_) => break 'outer,
-                x @ _ => todo!("{x:?}"),
+                x => todo!("{x:?}"),
             }
             queue_up(branch_ptr, &mut queue, &initial_types);
         }
@@ -764,7 +781,7 @@ unsafe fn queue_up(
     for (hart, node) in fronts.iter().map(|(a, b)| (*a, *b)) {
         let node_ref = node.as_ref();
         match &node_ref.this {
-            // Non-racy + Non-conditional
+            // Non-racy + Non-conditional.
             Instruction::Label(_)
             | Instruction::La(_)
             | Instruction::Lat(_)
@@ -775,7 +792,7 @@ unsafe fn queue_up(
                 queue.push_back(simple_nonnull(prev, node_ref, hart));
                 return;
             }
-            // Non-racy + Conditional
+            // Non-racy + Conditional.
             Instruction::Blt(Blt { rhs, lhs, label }) => {
                 let state = find_state(&record, root, harts, first_step, initial_types);
 
@@ -857,7 +874,7 @@ unsafe fn queue_up(
                             queue.push_back(simple_nonnull(prev, node_ref, hart));
                         }
                     }
-                    x @ _ => todo!("{x:?}"),
+                    x => todo!("{x:?}"),
                 }
                 return;
             }
@@ -891,7 +908,7 @@ unsafe fn queue_up(
                             queue.push_back(simple_nonnull(prev, node_ref, hart));
                         }
                     }
-                    x @ _ => todo!("{x:?}"),
+                    x => todo!("{x:?}"),
                 }
                 return;
             }
@@ -921,13 +938,15 @@ unsafe fn queue_up(
                 }
                 return;
             }
-            // Racy
+            // Racy.
             Instruction::Sw(_) | Instruction::Ld(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
                 continue
             }
             // See note on `wfi`.
             Instruction::Wfi(_) => continue,
-            x @ _ => todo!("{x:?}"),
+            // Blocking.
+            Instruction::Unreachable(_) => continue,
+            x => todo!("{x:?}"),
         }
     }
 
@@ -935,7 +954,7 @@ unsafe fn queue_up(
     for (hart, node) in fronts.iter().map(|(a, b)| (*a, *b)) {
         let node_ref = node.as_ref();
         match &node_ref.this {
-            // Racy
+            // Racy.
             Instruction::Sw(_) | Instruction::Ld(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
                 queue.push_back(simple_nonnull(prev, node_ref, hart));
             }
@@ -943,8 +962,10 @@ unsafe fn queue_up(
             Instruction::Wfi(_) => {
                 queue.push_back(simple_nonnull(prev, node_ref, hart));
             }
+            // Blocking.
+            Instruction::Unreachable(_) => continue,
             // Since this can only be reached when all nodes are racy, most nodes should not be reachable here.
-            x @ _ => unreachable!("{x:?}"),
+            x => unreachable!("{x:?}"),
         }
     }
 }
@@ -1012,11 +1033,11 @@ unsafe fn find_state(
     // Iterator to generate unique labels.
     const N: u8 = b'z' - b'a';
     let mut tag_iter = (0..)
-        .map(|index| {
-            Label { tag: once('_')
+        .map(|index| Label {
+            tag: once('_')
                 .chain((0..index / N).map(|_| 'z'))
                 .chain(once(char::from_u32(((index % N) + b'a') as u32).unwrap()))
-                .collect::<String>()}
+                .collect::<String>(),
         })
         .peekable();
 
@@ -1051,7 +1072,11 @@ unsafe fn find_state(
                 state.registers[hartu].insert(*register, RegisterValue::Address(loc.clone()));
 
                 // Each type type should have its own unique label.
-                let existing = state.types.get_mut(&hart).unwrap().insert(loc, Type::List(vec![Type::U64,Type::U64,Type::U64]));
+                let existing = state
+                    .types
+                    .get_mut(&hart)
+                    .unwrap()
+                    .insert(loc, Type::List(vec![Type::U64, Type::U64, Type::U64]));
                 debug_assert!(existing.is_none());
             }
             Instruction::La(La { register, label }) => {
@@ -1192,7 +1217,9 @@ unsafe fn find_state(
                 }
                 _ => todo!(),
             },
-            x @ _ => todo!("{x:?}"),
+            // TODO Some interrupt state is likely affected here so this needs to be added.
+            Instruction::Wfi(_) => {}
+            x => todo!("{x:?}"),
         }
         current = current.as_ref().next[*next];
     }
