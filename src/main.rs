@@ -41,33 +41,11 @@ fn main() {
             }
             path = match ExplorererPath::next_step(path) {
                 ExplorePathResult::Continue(p) => p,
-                // TODO Stuff more of this functionality into a destructor or something so the semantics are more iterator-like and nice.
-                ExplorePathResult::Invalid { initial_types } => {
-                    // Since there is an indefinite number of types we can never reduce the types.
-                    // E.g. you might think if we have excluded `[a:u8,b:u8]` and `[a:u8,b:u16]` (etc.
-                    // with b being all integer types) we can exclude `[a:u8]` but this doesn't work
-                    // since lists can be indefinitely long and there might be a valid combination `[a:u8, b:[u8,u8]]`.
-                    explorerer.excluded.insert(initial_types.clone());
 
-                    // Dealloc the current tree so we can restart.
-                    for mut root in explorerer.roots.iter().copied() {
-                        let stack = &mut root.as_mut().next;
-                        while let Some(next) = stack.pop() {
-                            stack.extend(next.as_ref().next.iter());
-                            dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
-                        }
-                    }
-
-                    // TODO Make this explanation better and doublecheck if this is actually correct behaviour.
-                    // This case only occurs when all types are excluded thus it continually breaks out
-                    // of the exploration loop with empty `initial_types`. This case means there is no
-                    // valid type combination and thus no valid path.
-                    if initial_types.is_empty() {
-                        break None;
-                    }
-
-                    explorerer.new_path()
-                }
+                // The path was invalid and there is no other valid path.
+                ExplorePathResult::Invalid(true) => break None,
+                // The path was invalid but there may be another valid path.
+                ExplorePathResult::Invalid(false) => explorerer.new_path(),
                 ExplorePathResult::Valid {
                     initial_types,
                     touched,

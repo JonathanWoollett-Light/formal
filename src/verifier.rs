@@ -40,7 +40,7 @@ const TYPE_LIST: [Type; 8] = [
     Type::U64,
     Type::I64,
 ];
-
+use std::alloc::dealloc;
 pub struct VerifierHarts {
     pub harts: u8,
     pub next: NextVerifierNode,
@@ -344,9 +344,7 @@ pub enum ExplorePathResult<'a> {
         initial_types: BTreeMap<u8, Types>,
         touched: HashSet<NonNull<AstNode>>,
     },
-    Invalid {
-        initial_types: BTreeMap<u8, Types>,
-    },
+    Invalid(bool),
     Continue(ExplorererPath<'a>),
 }
 
@@ -423,7 +421,7 @@ impl<'a> ExplorererPath<'a> {
                         // When there is no possible type the current types cannot be used
                         // as they lead to this block. So add them to the excluded list and
                         // restart exploration.
-                        return ExplorePathResult::Invalid { initial_types };
+                        return invalid_path(explorerer, initial_types);
                     }
                 }
             }
@@ -446,7 +444,7 @@ impl<'a> ExplorererPath<'a> {
                         // When there is no possible type the current types cannot be used
                         // as they lead to this block. So add them to the excluded list and
                         // restart exploration.
-                        return ExplorePathResult::Invalid { initial_types };
+                        return invalid_path(explorerer, initial_types);
                     }
                 }
             }
@@ -471,7 +469,7 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 4 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return ExplorePathResult::Invalid { initial_types };
+                            return invalid_path(explorerer, initial_types);
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -502,7 +500,7 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 8 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return ExplorePathResult::Invalid { initial_types };
+                            return invalid_path(explorerer, initial_types);
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -532,7 +530,7 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 4 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return ExplorePathResult::Invalid { initial_types };
+                            return invalid_path(explorerer, initial_types);
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -562,7 +560,7 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 1 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return ExplorePathResult::Invalid { initial_types };
+                            return invalid_path(explorerer, initial_types);
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -573,7 +571,7 @@ impl<'a> ExplorererPath<'a> {
                 }
             }
             // If any fail is encountered then the path is invalid.
-            Instruction::Fail(_) => return ExplorePathResult::Invalid { initial_types },
+            Instruction::Fail(_) => return invalid_path(explorerer, initial_types),
             x => todo!("{x:?}"),
         }
         queue_up(branch_ptr, &mut queue, &initial_types);
@@ -586,14 +584,30 @@ impl<'a> ExplorererPath<'a> {
         });
     }
 }
+unsafe fn invalid_path(
+    explorerer: &mut Explorerer,
+    initial_types: BTreeMap<u8, Types>,
+) -> ExplorePathResult<'_> {
+    // Since there is an indefinite number of types we can never reduce the types.
+    // E.g. you might think if we have excluded `[a:u8,b:u8]` and `[a:u8,b:u16]` (etc.
+    // with b being all integer types) we can exclude `[a:u8]` but this doesn't work
+    // since lists can be indefinitely long and there might be a valid combination `[a:u8, b:[u8,u8]]`.
+    explorerer.excluded.insert(initial_types.clone());
 
-pub enum ExplorererResult {
-    Invalid,
-    Continued(Explorerer),
-    Valid {
-        initial_types: BTreeMap<u8, Types>,
-        touched: HashSet<NonNull<AstNode>>,
-    },
+    // Dealloc the current tree so we can restart.
+    for mut root in explorerer.roots.iter().copied() {
+        let stack = &mut root.as_mut().next;
+        while let Some(next) = stack.pop() {
+            stack.extend(next.as_ref().next.iter());
+            dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
+        }
+    }
+
+    // TODO Make this explanation better and doublecheck if this is actually correct behaviour.
+    // This case only occurs when all types are excluded thus it continually breaks out
+    // of the exploration loop with empty `initial_types`. This case means there is no
+    // valid type combination and thus no valid path.
+    ExplorePathResult::Invalid(initial_types.is_empty())
 }
 
 impl Explorerer {
@@ -1023,7 +1037,7 @@ unsafe fn find_state(
     // Iterate forward to find the values.
     let mut state = State::new(harts, initial_types);
     let mut current = root.as_ref().next[first_step];
-    for (count, next) in record.iter().rev().enumerate() {
+    for next in record.iter().rev() {
         let vnode = current.as_ref();
         let hart = vnode.hart;
         let hartu = hart as usize;
