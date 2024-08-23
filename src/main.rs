@@ -31,6 +31,8 @@ fn main() {
     // Verify the ast
     unsafe {
         // verify(ast, 1..3);
+
+        // TODO Simplify this iteration.
         let mut explorerer = Explorerer::new(ast, 1..3);
         let mut path = explorerer.new_path();
         let mut check = 0;
@@ -41,7 +43,6 @@ fn main() {
             }
             path = match ExplorererPath::next_step(path) {
                 ExplorePathResult::Continue(p) => p,
-
                 // The path was invalid and there is no other valid path.
                 ExplorePathResult::Invalid(true) => break None,
                 // The path was invalid but there may be another valid path.
@@ -103,4 +104,117 @@ fn print_ast(root: Option<NonNull<AstNode>>) {
     }
     println!();
     println!("{:?}", now.elapsed());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use draw::draw_tree;
+    use tracing_test::traced_test;
+
+    #[test]
+    #[traced_test]
+    fn two() {
+        let source = std::fs::read_to_string("./assets/two.s").unwrap();
+        let chars = source.chars().collect::<Vec<_>>();
+
+        // Parse
+        let mut ast = new_ast(&chars);
+
+        // Compress
+        compress(&mut ast);
+
+        // Print
+        print_ast(ast);
+
+        let width_spacing = 2;
+        let closure = |x: NonNull<VerifierNode>| unsafe {
+            let y = x.as_ref();
+            format!("({}| {})", y.hart, y.node.as_ref().this.to_string())
+        };
+        let seperator = (0..1)
+            .map(|_| format!("{}\n", "-".repeat(20)))
+            .collect::<String>();
+
+        // Checks that there exists a log containing `prefix` and that the
+        // most recent instance of this ends with `suffix`.
+        macro_rules! log_assertion {
+            ($prefix:expr, $suffix: expr) => {{
+                logs_assert(|lines: &[&str]| {
+                    let found = lines.iter().rev()
+                        .find(|line|line.contains($prefix))
+                        .ok_or(format!("Could not find log contains {:?}", $prefix));
+                    match found {
+                        Ok(line) => match line.ends_with($suffix)   {
+                            true => Ok(()),
+                            false => Err(format!("Most recent instance of a log containing {:?} ({:?}) does not end with {:?}.", $prefix, line, $suffix))
+                        },
+                        Err(err) => Err(err),
+                    }
+                });
+            }};
+        }
+
+        // Verify the ast
+        unsafe {
+            let mut explorerer = Explorerer::new(ast, 1..3);
+            let path = explorerer.new_path();
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {}, 1: {}}");
+            log_assertion!("branch_ptr node:", "_start:"); // the 1st instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "1"); // when 1 harts are running
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {}, 1: {}}");
+            log_assertion!("branch_ptr node:", "_start:"); // the 1st instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "2"); // when 2 harts are running
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {}, 1: {}}");
+            log_assertion!("branch_ptr node:", "la t0, value"); // the 2nd instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "1"); // when 1 harts are running.
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
+            log_assertion!("branch_ptr node:", "la t0, value"); // the 2nd instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "2"); // when 2 harts are running.
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
+            log_assertion!("branch_ptr node:", "li t1, 0"); // the 3rd instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "1"); // when 1 harts are running.
+
+            // The next step continues, exploring:
+            let path = ExplorererPath::next_step(path).continued().unwrap();
+            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
+            log_assertion!("branch_ptr node:", "li t1, 0"); // the 3rd instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+            log_assertion!("harts:", "2"); // when 2 harts are running.
+
+            // The next step encounter an invalid instruction for the initial type assumptions.
+            // i.e. you cannot store a word (4 bytes) in a u8 (1 byte).
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
+            log_assertion!("branch_ptr node:", "sw t1, (t0)"); // the 3rd instruction
+            log_assertion!("hart:", "0"); // for the 1st hart
+
+            let path = explorerer.new_path();
+
+            todo!();
+        }
+    }
 }

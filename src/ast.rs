@@ -943,11 +943,15 @@ fn new_label_instruction(src: &[char]) -> LabelInstruction {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Label {
     pub tag: String,
 }
-
+impl fmt::Debug for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.tag)
+    }
+}
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.tag)

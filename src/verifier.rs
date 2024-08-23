@@ -12,6 +12,7 @@ use std::{
     collections::{HashMap, VecDeque},
     ptr::NonNull,
 };
+use tracing::trace;
 
 /// Compile time size
 fn size(t: &Type) -> usize {
@@ -347,8 +348,17 @@ pub enum ExplorePathResult<'a> {
     Invalid(bool),
     Continue(ExplorererPath<'a>),
 }
-
+impl<'a> ExplorePathResult<'a> {
+    pub fn continued(self) -> Option<ExplorererPath<'a>> {
+        match self {
+            Self::Continue(c) => Some(c),
+            _ => None,
+        }
+    }
+}
+use tracing::debug;
 impl<'a> ExplorererPath<'a> {
+    #[tracing::instrument(skip_all)]
     pub unsafe fn next_step(
         Self {
             explorerer,
@@ -357,12 +367,18 @@ impl<'a> ExplorererPath<'a> {
             mut queue,
         }: Self,
     ) -> ExplorePathResult<'a> {
+        debug!("initial_types: {initial_types:?}");
+
         let Some(branch_ptr) = queue.pop_front() else {
             return ExplorePathResult::Valid {
                 initial_types,
                 touched,
             };
         };
+        debug!(
+            "branch_ptr node: {}",
+            branch_ptr.as_ref().node.as_ref().this
+        );
 
         // If a variable is used that has not yet been defined, add the cheapest
         // possible data type for this variable to `types`. To avoid retreading the
@@ -373,6 +389,8 @@ impl<'a> ExplorererPath<'a> {
         let branch = branch_ptr.as_ref();
         let ast = branch.node;
         let hart = branch.hart;
+
+        debug!("hart: {hart}");
 
         // Record all the AST node that are reachable.
         touched.insert(ast);
@@ -584,6 +602,8 @@ impl<'a> ExplorererPath<'a> {
         });
     }
 }
+
+#[tracing::instrument(skip_all)]
 unsafe fn invalid_path(
     explorerer: &mut Explorerer,
     initial_types: BTreeMap<u8, Types>,
@@ -611,6 +631,7 @@ unsafe fn invalid_path(
 }
 
 impl Explorerer {
+    #[tracing::instrument(skip_all)]
     pub unsafe fn new_path(&mut self) -> ExplorererPath<'_> {
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
@@ -663,6 +684,7 @@ impl Explorerer {
             queue,
         }
     }
+    #[tracing::instrument(skip_all)]
     pub unsafe fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
         // You cannot verify a program that starts running on 0 harts.
         assert!(harts_range.start > 0);
@@ -714,6 +736,7 @@ impl Explorerer {
 }
 
 // Get the number of harts of this sub-tree and record the path.
+#[tracing::instrument(skip_all)]
 unsafe fn get_backpath_harts(
     prev: NonNull<VerifierNode>,
 ) -> (Vec<usize>, NonNull<VerifierHarts>, u8, usize) {
@@ -748,6 +771,7 @@ unsafe fn get_backpath_harts(
 /// if its racy, we look at the 2nd hart and queue it up if its not racy,
 /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
 /// up all racy instructions (since we need to evaluate all the possible ordering of them).
+#[tracing::instrument(skip_all)]
 unsafe fn queue_up(
     prev: NonNull<VerifierNode>,
     queue: &mut VecDeque<NonNull<VerifierNode>>,
@@ -755,6 +779,7 @@ unsafe fn queue_up(
     initial_types: &BTreeMap<u8, Types>,
 ) {
     let (record, root, harts, first_step) = get_backpath_harts(prev);
+    debug!("harts: {harts}");
 
     // Search the verifier tree for the fronts of all harts.
     let mut fronts = BTreeMap::new();
@@ -767,6 +792,14 @@ unsafe fn queue_up(
         current = branch.as_ref();
         fronts.entry(current.hart).or_insert(current.node);
     }
+
+    trace!(
+        "fronts: {:?}",
+        fronts
+            .iter()
+            .map(|(hart, ast)| (hart, ast.as_ref().this.to_string()))
+            .collect::<Vec<_>>()
+    );
 
     // The lowest hart non-racy node is enqueued
     // (or possibly multiples nodes in the case of a conditional jump where
