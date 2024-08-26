@@ -22,6 +22,8 @@ name = "formal"
 version = "0.1.0"
 dependencies = [
  "tracing",
+ "tracing-assertions",
+ "tracing-subscriber",
  "tracing-test",
 ]
 
@@ -187,6 +189,17 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-assertions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d2882d9ec8b7b2516ebe162e0f67c312a7a70ef077aa408b98b1fb6b1ee67f6"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
 ]
 
 [[package]]

@@ -1,0 +1,1031 @@
+8-26T05:26:12.062640Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.062648Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.062655Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.062661Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.062673Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.062687Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.062695Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.062702Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.062708Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.062727Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.062741Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.062749Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.062756Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.062763Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.062791Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.062805Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U16}}
+2024-08-26T05:26:12.062814Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.062821Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.062828Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.062840Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.062853Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U16}}
+2024-08-26T05:26:12.062861Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.062868Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.062875Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.062888Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.062905Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U16}}
+2024-08-26T05:26:12.062914Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.062921Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.062927Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.062966Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.062975Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.062984Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.062991Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063004Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063018Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063025Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.063032Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.063039Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063051Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063065Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063073Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.063080Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063087Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063105Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063118Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.063127Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.063133Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063140Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.063167Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063182Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I16}}
+2024-08-26T05:26:12.063190Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.063197Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.063204Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063216Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063229Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I16}}
+2024-08-26T05:26:12.063238Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.063245Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.063251Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.063263Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063277Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I16}}
+2024-08-26T05:26:12.063286Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.063295Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.063302Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063336Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063345Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.063351Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.063358Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063370Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063384Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063392Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.063399Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.063405Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063418Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063432Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063440Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.063446Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063453Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063470Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063484Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.063493Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.063499Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063506Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.063538Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063552Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U32}}
+2024-08-26T05:26:12.063561Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.063568Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.063574Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063586Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063600Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U32}}
+2024-08-26T05:26:12.063609Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.063626Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.063633Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.063645Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063660Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U32}}
+2024-08-26T05:26:12.063668Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.063675Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.063682Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063720Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063730Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.063737Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.063743Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063755Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063770Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063777Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.063784Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.063791Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063803Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063817Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.063825Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.063832Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063838Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063856Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.063872Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.063880Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.063888Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.063898Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.063937Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.063952Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I32}}
+2024-08-26T05:26:12.063960Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.063967Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.063974Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.063986Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064000Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I32}}
+2024-08-26T05:26:12.064008Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.064015Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.064022Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.064034Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064048Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I32}}
+2024-08-26T05:26:12.064057Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.064063Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.064070Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064105Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064114Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.064121Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064128Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064140Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064154Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064162Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.064169Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064175Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064187Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064201Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064209Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.064216Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.064222Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064239Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064253Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.064262Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.064268Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.064275Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.064319Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064333Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U64}}
+2024-08-26T05:26:12.064342Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.064351Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.064358Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064371Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064385Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U64}}
+2024-08-26T05:26:12.064393Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.064400Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.064406Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.064418Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064432Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": U64}}
+2024-08-26T05:26:12.064441Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.064448Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.064455Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064490Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064499Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.064506Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064512Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064524Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064538Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064546Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.064553Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064559Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064572Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064589Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064602Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.064612Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.064619Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064639Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064654Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.064668Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.064678Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.064685Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.064739Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064754Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I64}}
+2024-08-26T05:26:12.064763Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.064770Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.064776Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064789Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064803Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I64}}
+2024-08-26T05:26:12.064811Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.064818Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.064825Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.064837Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.064851Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {"value": I64}}
+2024-08-26T05:26:12.064860Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.064867Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.064874Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064922Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064932Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.064939Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064945Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.064958Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.064972Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.064980Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.064986Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.064993Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065005Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065020Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065027Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.065034Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065041Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065059Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065073Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.065081Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.065088Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065095Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.065141Z DEBUG next_step: formal::verifier: cannot load "value" into hart 1 with: {0: {"value": I8}, 1: {}}
+2024-08-26T05:26:12.065168Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065176Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.065183Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065190Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065202Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065216Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065224Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.065231Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065237Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065249Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065264Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065272Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.065278Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065285Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065308Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065322Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.065330Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.065337Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065344Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.065362Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065376Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U8}}
+2024-08-26T05:26:12.065385Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.065392Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.065398Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065411Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065425Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U8}}
+2024-08-26T05:26:12.065433Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.065440Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.065446Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.065459Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065473Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U8}}
+2024-08-26T05:26:12.065481Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.065488Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.065495Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065535Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065544Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.065551Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065558Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065570Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065584Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065592Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.065599Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065605Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065617Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065632Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065639Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.065646Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065653Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065674Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065688Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.065697Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.065704Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.065710Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.065731Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065745Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I8}}
+2024-08-26T05:26:12.065754Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.065761Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.065767Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065780Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065793Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I8}}
+2024-08-26T05:26:12.065802Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.065809Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.065815Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.065828Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065842Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I8}}
+2024-08-26T05:26:12.065850Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.065857Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.065864Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065902Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065911Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.065918Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065925Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065937Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.065951Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.065959Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.065966Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.065972Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.065985Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.065999Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066007Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.066013Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066020Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066041Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066056Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.066064Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.066071Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066077Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066103Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066117Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U16}}
+2024-08-26T05:26:12.066126Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.066132Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066139Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066151Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066165Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U16}}
+2024-08-26T05:26:12.066174Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.066181Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066187Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066199Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066213Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U16}}
+2024-08-26T05:26:12.066225Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.066232Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.066238Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066274Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066282Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.066289Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.066296Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066308Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066322Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066330Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.066337Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.066343Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066356Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066370Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066378Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.066384Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066391Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066412Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066427Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.066435Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.066442Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066449Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066480Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066494Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I16}}
+2024-08-26T05:26:12.066503Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.066509Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066516Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066528Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066542Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I16}}
+2024-08-26T05:26:12.066551Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.066557Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066564Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066576Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066590Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I16}}
+2024-08-26T05:26:12.066599Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.066605Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.066612Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066652Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066662Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.066669Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.066675Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066687Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066702Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066709Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.066716Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.066723Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066735Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066749Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.066757Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.066764Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066770Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066792Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066806Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.066814Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.066821Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.066828Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066865Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066880Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U32}}
+2024-08-26T05:26:12.066889Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.066900Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066907Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.066919Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.066933Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U32}}
+2024-08-26T05:26:12.066942Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.066949Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.066955Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.066967Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.066982Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U32}}
+2024-08-26T05:26:12.066990Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.066997Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.067004Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067040Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.067049Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.067056Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.067062Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067074Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.067089Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.067096Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.067103Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.067110Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067122Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.067136Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.067144Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.067151Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.067157Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067179Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.067193Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.067201Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.067208Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.067215Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.067259Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.067274Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I32}}
+2024-08-26T05:26:12.067282Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.067290Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.067296Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067309Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.067323Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I32}}
+2024-08-26T05:26:12.067331Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.067338Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.067345Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.067357Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.067371Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I32}}
+2024-08-26T05:26:12.067380Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.067386Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.067393Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067433Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.067442Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.067449Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.067456Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.067468Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.067482Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.067490Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.067497Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.067504Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.079879Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.079913Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.079926Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.079936Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.079944Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.079976Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.079994Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.080006Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.080014Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.080023Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.080088Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080108Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U64}}
+2024-08-26T05:26:12.080119Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.080127Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.080136Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080151Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080169Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U64}}
+2024-08-26T05:26:12.080180Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.080188Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.080197Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.080212Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080230Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": U64}}
+2024-08-26T05:26:12.080241Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.080249Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.080258Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080310Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080321Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.080330Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.080338Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080357Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080389Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080401Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.080409Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.080418Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080434Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080451Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080459Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.080472Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.080479Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080501Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080516Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.080525Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.080532Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.080539Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.080599Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080614Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I64}}
+2024-08-26T05:26:12.080623Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.080630Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.080637Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080649Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080664Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I64}}
+2024-08-26T05:26:12.080673Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.080679Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.080686Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.080699Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080713Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {"value": I64}}
+2024-08-26T05:26:12.080722Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.080729Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.080736Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080787Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080798Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.080805Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.080812Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080824Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080839Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080847Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.080854Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.080860Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080872Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.080888Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.080901Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.080908Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.080915Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.080938Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.080953Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.080962Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.080969Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.080975Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.081015Z DEBUG next_step: formal::verifier: cannot load "value" into hart 1 with: {0: {"value": U16}, 1: {}}
+2024-08-26T05:26:12.081045Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081054Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.081061Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081068Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081080Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081094Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081102Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.081109Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081116Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081128Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081143Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081151Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.081158Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081165Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081190Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081205Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.081214Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.081221Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081228Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.081245Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081260Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U8}}
+2024-08-26T05:26:12.081268Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.081275Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.081282Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081294Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081309Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U8}}
+2024-08-26T05:26:12.081318Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.081325Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.081332Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.081344Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081359Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U8}}
+2024-08-26T05:26:12.081368Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.081375Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.081382Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081417Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081426Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.081433Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081440Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081452Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081467Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081475Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.081481Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081488Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081500Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081515Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081523Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.081530Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081536Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081563Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081577Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.081586Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.081593Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081600Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.081621Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081637Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I8}}
+2024-08-26T05:26:12.081645Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.081652Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.081659Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081672Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081686Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I8}}
+2024-08-26T05:26:12.081695Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.081702Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.081708Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.081721Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081735Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I8}}
+2024-08-26T05:26:12.081744Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.081751Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.081758Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081801Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081811Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.081818Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081825Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081837Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081852Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081860Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.081867Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.081874Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081887Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.081906Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.081915Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.081922Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081928Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.081955Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.081970Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.081978Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.081985Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.081992Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082020Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082035Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U16}}
+2024-08-26T05:26:12.082044Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.082050Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082057Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082069Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082084Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U16}}
+2024-08-26T05:26:12.082093Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.082100Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082107Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082119Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082133Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U16}}
+2024-08-26T05:26:12.082142Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.082149Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.082156Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082193Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082202Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.082209Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.082215Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082228Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082242Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082251Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.082258Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.082264Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082277Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082291Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082299Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.082306Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.082313Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082339Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082354Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.082363Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.082370Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.082377Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082411Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082426Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I16}}
+2024-08-26T05:26:12.082434Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.082441Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082448Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082460Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082475Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I16}}
+2024-08-26T05:26:12.082484Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.082490Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082497Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082509Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082524Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I16}}
+2024-08-26T05:26:12.082533Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.082540Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.082546Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082583Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082592Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.082599Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.082606Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082618Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082633Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082641Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.082648Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.082654Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082666Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082681Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.082689Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.082696Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.082703Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082729Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082744Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.082752Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.082759Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.082766Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082807Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082822Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U32}}
+2024-08-26T05:26:12.082831Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.082837Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082844Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082856Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.082871Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U32}}
+2024-08-26T05:26:12.082880Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.082891Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.082897Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.082910Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.082925Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U32}}
+2024-08-26T05:26:12.082934Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.082941Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.082948Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.082993Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083003Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.083010Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083017Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083029Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083044Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083053Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.083059Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083066Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083078Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083093Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083101Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.083108Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.083115Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083141Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083156Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.083165Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.083171Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.083178Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.083227Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083242Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I32}}
+2024-08-26T05:26:12.083251Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.083258Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.083265Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083277Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083292Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I32}}
+2024-08-26T05:26:12.083300Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.083307Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.083314Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.083326Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083341Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I32}}
+2024-08-26T05:26:12.083350Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.083357Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.083364Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083402Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083411Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.083418Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083425Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083437Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083452Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083460Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.083467Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083473Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083485Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083500Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083508Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.083515Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.083522Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083548Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083563Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.083571Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.083578Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.083585Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.083642Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083657Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U64}}
+2024-08-26T05:26:12.083666Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.083673Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.083680Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083692Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083706Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U64}}
+2024-08-26T05:26:12.083715Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.083722Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.083729Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.083741Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083756Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": U64}}
+2024-08-26T05:26:12.083764Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.083771Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.083779Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083818Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083827Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.083834Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083841Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083853Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083868Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083876Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.083883Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.083894Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083906Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.083921Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.083929Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.083936Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.083942Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.083969Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.083984Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.083992Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.083999Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.084006Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084055Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084070Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I64}}
+2024-08-26T05:26:12.084079Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.084085Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.084092Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084104Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084119Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I64}}
+2024-08-26T05:26:12.084127Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.084134Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.084140Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084153Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084167Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {"value": I64}}
+2024-08-26T05:26:12.084176Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.084183Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.084190Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084235Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084245Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.084252Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.084259Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084271Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084286Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084294Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.084301Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.084307Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084320Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084335Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084342Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.084349Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.084356Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084383Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084398Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.084406Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.084413Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.084419Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084463Z DEBUG next_step: formal::verifier: cannot load "value" into hart 1 with: {0: {"value": I16}, 1: {}}
+2024-08-26T05:26:12.084494Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084502Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.084508Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.084515Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084527Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084542Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084550Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.084556Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.084563Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084575Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084590Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084598Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.084604Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.084611Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084644Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084670Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {}}
+2024-08-26T05:26:12.084685Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.084693Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.084699Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084721Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084737Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U8}}
+2024-08-26T05:26:12.084746Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.084753Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.084760Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084772Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084787Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U8}}
+2024-08-26T05:26:12.084796Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.084802Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.084809Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084821Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.084836Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U8}}
+2024-08-26T05:26:12.084845Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.084851Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.084858Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084880Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.084900Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U8}}
+2024-08-26T05:26:12.084909Z DEBUG next_step: formal::verifier: queue: ["(1, sw t1, (t0))", "(0, lw t1, (t0))"]
+2024-08-26T05:26:12.084916Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.084923Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.084961Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.084970Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.084977Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.084983Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.084995Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085010Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.085018Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.085025Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.085032Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085044Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.085059Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.085067Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.085074Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.085080Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085112Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085127Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {}}
+2024-08-26T05:26:12.085135Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.085142Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.085149Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.085172Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.085187Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I8}}
+2024-08-26T05:26:12.085196Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.085203Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.085209Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085222Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085237Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I8}}
+2024-08-26T05:26:12.085246Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.085252Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.085259Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.085271Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.085286Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I8}}
+2024-08-26T05:26:12.085295Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.085302Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.085309Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085358Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085375Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I8}}
+2024-08-26T05:26:12.085384Z DEBUG next_step: formal::verifier: queue: ["(1, sw t1, (t0))", "(0, lw t1, (t0))"]
+2024-08-26T05:26:12.085391Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.085398Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.085445Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.085455Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.085462Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.085468Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085481Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085496Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.085504Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.085511Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.085517Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085529Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.085545Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.085553Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.085559Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.085566Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085599Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.085614Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {}}
+2024-08-26T05:26:12.085622Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.085629Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.085635Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.085665Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.085681Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U16}}
+2024-08-26T05:26:12.085689Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.085696Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.085703Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.085715Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.086890Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U16}}
+2024-08-26T05:26:12.086903Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.086910Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.086917Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.086930Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.086945Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U16}}
+2024-08-26T05:26:12.086954Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.086961Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.086967Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.086990Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087006Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U16}}
+2024-08-26T05:26:12.087015Z DEBUG next_step: formal::verifier: queue: ["(1, sw t1, (t0))", "(0, lw t1, (t0))"]
+2024-08-26T05:26:12.087022Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.087029Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087069Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087078Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.087085Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.087091Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087104Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087119Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087127Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.087134Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.087140Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087153Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087168Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087176Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.087183Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.087190Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087222Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087237Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {}}
+2024-08-26T05:26:12.087247Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.087253Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.087260Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087298Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087313Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I16}}
+2024-08-26T05:26:12.087322Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.087329Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.087335Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087347Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087362Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I16}}
+2024-08-26T05:26:12.087371Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.087378Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.087385Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087397Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087412Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I16}}
+2024-08-26T05:26:12.087421Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.087428Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.087435Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087455Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087471Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": I16}}
+2024-08-26T05:26:12.087480Z DEBUG next_step: formal::verifier: queue: ["(1, sw t1, (t0))", "(0, lw t1, (t0))"]
+2024-08-26T05:26:12.087486Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.087493Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087531Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087540Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, _start:)"]
+2024-08-26T05:26:12.087547Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.087554Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087566Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087581Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087590Z DEBUG next_step: formal::verifier: queue: ["(0, _start:)", "(0, la t0, value)"]
+2024-08-26T05:26:12.087596Z DEBUG next_step: formal::verifier: branch_ptr node: _start:
+2024-08-26T05:26:12.087603Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087615Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087630Z DEBUG next_step: formal::verifier: initial_types: {0: {}, 1: {}}
+2024-08-26T05:26:12.087638Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(1, la t0, value)"]
+2024-08-26T05:26:12.087645Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.087652Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087684Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087699Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {}}
+2024-08-26T05:26:12.087707Z DEBUG next_step: formal::verifier: queue: ["(1, la t0, value)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.087714Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.087721Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087766Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087781Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.087790Z DEBUG next_step: formal::verifier: queue: ["(0, li t1, 0)", "(1, li t1, 0)"]
+2024-08-26T05:26:12.087797Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.087804Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087816Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087831Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.087840Z DEBUG next_step: formal::verifier: queue: ["(1, li t1, 0)", "(0, sw t1, (t0))"]
+2024-08-26T05:26:12.087847Z DEBUG next_step: formal::verifier: branch_ptr node: li t1, 0
+2024-08-26T05:26:12.087853Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087866Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.087881Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.087891Z DEBUG next_step: formal::verifier: queue: ["(0, sw t1, (t0))", "(1, sw t1, (t0))"]
+2024-08-26T05:26:12.087901Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.087908Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.087929Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.087944Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.087953Z DEBUG next_step: formal::verifier: queue: ["(1, sw t1, (t0))", "(0, lw t1, (t0))"]
+2024-08-26T05:26:12.087960Z DEBUG next_step: formal::verifier: branch_ptr node: sw t1, (t0)
+2024-08-26T05:26:12.087967Z DEBUG next_step: formal::verifier: hart: 1
+2024-08-26T05:26:12.087987Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.088004Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.088013Z DEBUG next_step: formal::verifier: queue: ["(0, lw t1, (t0))", "(0, la t0, value)"]
+2024-08-26T05:26:12.088020Z DEBUG next_step: formal::verifier: branch_ptr node: lw t1, (t0)
+2024-08-26T05:26:12.088028Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.088050Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+2024-08-26T05:26:12.088069Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.088078Z DEBUG next_step: formal::verifier: queue: ["(0, la t0, value)", "(0, addi t1, t1, 1)"]
+2024-08-26T05:26:12.088085Z DEBUG next_step: formal::verifier: branch_ptr node: la t0, value
+2024-08-26T05:26:12.088092Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.088106Z DEBUG next_step:queue_up: formal::verifier: harts: 2
+2024-08-26T05:26:12.088123Z DEBUG next_step: formal::verifier: initial_types: {0: {"value": U32}, 1: {"value": U32}}
+2024-08-26T05:26:12.088132Z DEBUG next_step: formal::verifier: queue: ["(0, addi t1, t1, 1)", "(0, li t1, 0)"]
+2024-08-26T05:26:12.088139Z DEBUG next_step: formal::verifier: branch_ptr node: addi t1, t1, 1
+2024-08-26T05:26:12.088146Z DEBUG next_step: formal::verifier: hart: 0
+2024-08-26T05:26:12.088159Z DEBUG next_step:queue_up: formal::verifier: harts: 1
+test tests::two ... FAILED
+
+failures:
+
+---- tests::two stdout ----
+thread 'tests::two' panicked at src/main.rs:381:13:
+not yet implemented
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::two
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `--bin formal`
+jonathan@jonathan-MS-7D75:~/Documents/formal$ 

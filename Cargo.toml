@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features =["valuable"]}
 
 [dev-dependencies]
 tracing-test = "0.2.5"
+tracing-subscriber = "0.3.18"
+tracing-assertions = "0.1.1"

@@ -1,7 +1,7 @@
 use crate::ast::*;
 use std::alloc::Layout;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::iter::once;
 use std::ops::Range;
@@ -12,6 +12,7 @@ use std::{
     collections::{HashMap, VecDeque},
     ptr::NonNull,
 };
+use tracing::info;
 use tracing::trace;
 
 /// Compile time size
@@ -31,7 +32,7 @@ fn size(t: &Type) -> usize {
     }
 }
 
-const TYPE_LIST: [Type; 8] = [
+pub const TYPE_LIST: [Type; 8] = [
     Type::U8,
     Type::I8,
     Type::U16,
@@ -145,10 +146,6 @@ impl MemoryMap {
             }
             right += 1;
         }
-        println!();
-        println!("map: {:?}", self.map);
-        println!();
-        println!("vec: {vec:?}");
 
         let mut left = right;
         while left > 0 {
@@ -168,9 +165,6 @@ impl MemoryMap {
                 right = left;
             }
         }
-
-        println!();
-        println!("map: {:?}", self.map);
 
         let final_tag = tag_iter.next().unwrap();
         match vec.remove(0) {
@@ -196,9 +190,6 @@ impl MemoryMap {
             }
             _ => unreachable!(),
         }
-
-        println!();
-        println!("map: {:?}", self.map);
 
         final_tag
     }
@@ -328,22 +319,55 @@ impl std::ops::Add<Immediate> for ImmediateRange {
 pub struct Explorerer {
     pub harts_range: Range<u8>,
 
-    pub excluded: HashSet<BTreeMap<u8, Types>>,
+    pub excluded: BTreeSet<InitialTypes>,
     pub second_ptr: NonNull<AstNode>,
     pub roots: Vec<NonNull<VerifierHarts>>,
 }
+
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
 pub struct ExplorererPath<'a> {
     pub explorerer: &'a mut Explorerer,
-    pub initial_types: BTreeMap<u8, Types>,
-    pub touched: HashSet<NonNull<AstNode>>,
+    pub initial_types: InitialTypes,
+    pub touched: BTreeSet<NonNull<AstNode>>,
     pub queue: VecDeque<NonNull<VerifierNode>>,
+}
+
+// We are searching for a value of `InitialTypes` that creates a valid path.
+type InitialTypes = BTreeMap<u8, Types>;
+
+/// Attempts to modify initial types to include a new variable, if it cannot it adds the existing to excluded, then returns true.
+///
+/// # Returns
+///
+/// - `true` the path is valid.
+/// - `false` the path is invalid.
+fn load_label(
+    label: &Label,
+    initial_types: &mut InitialTypes,
+    hart: u8,
+    excluded: &mut BTreeSet<InitialTypes>,
+) -> bool {
+    if initial_types.get(&hart).unwrap().contains_key(label) {
+        return true;
+    }
+
+    let opt = TYPE_LIST.iter().find_map(|t| {
+        let mut x = initial_types.clone();
+        x.get_mut(&hart).unwrap().insert(label.clone(), t.clone());
+        (!excluded.contains(&x)).then_some(x)
+    });
+    if let Some(new) = opt {
+        *initial_types = new;
+        true
+    } else {
+        false
+    }
 }
 
 pub enum ExplorePathResult<'a> {
     Valid {
-        initial_types: BTreeMap<u8, Types>,
-        touched: HashSet<NonNull<AstNode>>,
+        initial_types: InitialTypes,
+        touched: BTreeSet<NonNull<AstNode>>,
     },
     Invalid(bool),
     Continue(ExplorererPath<'a>),
@@ -367,7 +391,33 @@ impl<'a> ExplorererPath<'a> {
             mut queue,
         }: Self,
     ) -> ExplorePathResult<'a> {
+        trace!("excluded: {:?}", explorerer.excluded);
         debug!("initial_types: {initial_types:?}");
+
+        debug!(
+            "queue: [{}]",
+            queue
+                .iter()
+                .map(|item| {
+                    let mut current = item.as_ref().prev;
+                    while let VerifierPrevNode::Branch(prev) = current {
+                        current = prev.as_ref().prev;
+                    }
+                    let VerifierPrevNode::Root(root) = current else {
+                        unreachable!()
+                    };
+
+                    let item_ref = item.as_ref();
+                    format!(
+                        "{{ hart: {}/{}, instruction: \"{}\" }}",
+                        item_ref.hart + 1,
+                        root.as_ref().harts,
+                        item_ref.node.as_ref().this
+                    )
+                })
+                .intersperse(String::from(", "))
+                .collect::<String>()
+        );
 
         let Some(branch_ptr) = queue.pop_front() else {
             return ExplorePathResult::Valid {
@@ -375,10 +425,6 @@ impl<'a> ExplorererPath<'a> {
                 touched,
             };
         };
-        debug!(
-            "branch_ptr node: {}",
-            branch_ptr.as_ref().node.as_ref().this
-        );
 
         // If a variable is used that has not yet been defined, add the cheapest
         // possible data type for this variable to `types`. To avoid retreading the
@@ -390,7 +436,21 @@ impl<'a> ExplorererPath<'a> {
         let ast = branch.node;
         let hart = branch.hart;
 
-        debug!("hart: {hart}");
+        {
+            let mut current = branch_ptr.as_ref().prev;
+            while let VerifierPrevNode::Branch(prev) = current {
+                current = prev.as_ref().prev;
+            }
+            let VerifierPrevNode::Root(root) = current else {
+                unreachable!()
+            };
+            debug!(
+                "current: {{ hart: {}/{}, instruction: \"{}\" }}",
+                hart + 1,
+                root.as_ref().harts,
+                branch_ptr.as_ref().node.as_ref().this
+            );
+        }
 
         // Record all the AST node that are reachable.
         touched.insert(ast);
@@ -420,50 +480,13 @@ impl<'a> ExplorererPath<'a> {
                     .or_insert(cast.clone());
             }
             Instruction::Lat(Lat { register: _, label }) => {
-                // TODO We need to update initial types to include `Type::List([u64,u64,u64])` for the type type that describes `label` here.
-                if !initial_types.get(&hart).unwrap().contains_key(label) {
-                    let next_possible_opt = TYPE_LIST.iter().find(|p| {
-                        let mut test_initial_types = initial_types.clone();
-                        test_initial_types
-                            .get_mut(&hart)
-                            .unwrap()
-                            .insert(label.clone(), (*p).clone());
-                        !explorerer.excluded.contains(&test_initial_types)
-                    });
-                    if let Some(next_possible) = next_possible_opt {
-                        initial_types
-                            .get_mut(&hart)
-                            .unwrap()
-                            .insert(label.clone(), next_possible.clone());
-                    } else {
-                        // When there is no possible type the current types cannot be used
-                        // as they lead to this block. So add them to the excluded list and
-                        // restart exploration.
-                        return invalid_path(explorerer, initial_types);
-                    }
+                if !load_label(label, &mut initial_types, hart, &mut explorerer.excluded) {
+                    return invalid_path(explorerer, initial_types);
                 }
             }
             Instruction::La(La { register: _, label }) => {
-                if !initial_types.get(&hart).unwrap().contains_key(label) {
-                    let next_possible_opt = TYPE_LIST.iter().find(|p| {
-                        let mut test_initial_types = initial_types.clone();
-                        test_initial_types
-                            .get_mut(&hart)
-                            .unwrap()
-                            .insert(label.clone(), (*p).clone());
-                        !explorerer.excluded.contains(&test_initial_types)
-                    });
-                    if let Some(next_possible) = next_possible_opt {
-                        initial_types
-                            .get_mut(&hart)
-                            .unwrap()
-                            .insert(label.clone(), next_possible.clone());
-                    } else {
-                        // When there is no possible type the current types cannot be used
-                        // as they lead to this block. So add them to the excluded list and
-                        // restart exploration.
-                        return invalid_path(explorerer, initial_types);
-                    }
+                if !load_label(label, &mut initial_types, hart, &mut explorerer.excluded) {
+                    return invalid_path(explorerer, initial_types);
                 }
             }
             // For any store we need to validate the destination is valid.
@@ -608,11 +631,10 @@ unsafe fn invalid_path(
     explorerer: &mut Explorerer,
     initial_types: BTreeMap<u8, Types>,
 ) -> ExplorePathResult<'_> {
-    // Since there is an indefinite number of types we can never reduce the types.
-    // E.g. you might think if we have excluded `[a:u8,b:u8]` and `[a:u8,b:u16]` (etc.
-    // with b being all integer types) we can exclude `[a:u8]` but this doesn't work
-    // since lists can be indefinitely long and there might be a valid combination `[a:u8, b:[u8,u8]]`.
+    // We need to track covered ground so we don't retread it.
     explorerer.excluded.insert(initial_types.clone());
+
+    trace!("excluded: {:?}", explorerer.excluded);
 
     // Dealloc the current tree so we can restart.
     for mut root in explorerer.roots.iter().copied() {
@@ -627,7 +649,7 @@ unsafe fn invalid_path(
     // This case only occurs when all types are excluded thus it continually breaks out
     // of the exploration loop with empty `initial_types`. This case means there is no
     // valid type combination and thus no valid path.
-    ExplorePathResult::Invalid(initial_types.is_empty())
+    ExplorePathResult::Invalid(initial_types.iter().all(|(_, t)| t.is_empty()))
 }
 
 impl Explorerer {
@@ -643,7 +665,7 @@ impl Explorerer {
             .collect::<BTreeMap<_, _>>();
         // To remove uneeded code (e.g. a branch might always be true so we remove the code it skips)
         // we record all the AST instructions that get touched.
-        let touched = HashSet::<NonNull<AstNode>>::new();
+        let touched = BTreeSet::<NonNull<AstNode>>::new();
 
         let queue = self
             .roots
@@ -704,7 +726,7 @@ impl Explorerer {
         }
 
         // To avoid retracing paths we record type combinations that have been found to be invalid.
-        let excluded = HashSet::new();
+        let excluded = BTreeSet::new();
 
         // The queue of nodes to explore along this path.
         // When we have 1..=3 harts the initial queue will contain
@@ -779,7 +801,6 @@ unsafe fn queue_up(
     initial_types: &BTreeMap<u8, Types>,
 ) {
     let (record, root, harts, first_step) = get_backpath_harts(prev);
-    debug!("harts: {harts}");
 
     // Search the verifier tree for the fronts of all harts.
     let mut fronts = BTreeMap::new();
@@ -798,207 +819,227 @@ unsafe fn queue_up(
         fronts
             .iter()
             .map(|(hart, ast)| (hart, ast.as_ref().this.to_string()))
-            .collect::<Vec<_>>()
+            .collect::<BTreeMap<_, _>>()
     );
 
-    // The lowest hart non-racy node is enqueued
-    // (or possibly multiples nodes in the case of a conditional jump where
-    // we cannot deteremine the condition).
-    for (hart, node) in fronts.iter().map(|(a, b)| (*a, *b)) {
-        let node_ref = node.as_ref();
-        match &node_ref.this {
-            // Non-racy + Non-conditional.
+    let followup = |node: NonNull<AstNode>,
+                    hart: u8|
+     -> Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>> {
+        match &node.as_ref().this {
+            // Non-racy.
             Instruction::Label(_)
             | Instruction::La(_)
             | Instruction::Lat(_)
             | Instruction::Li(_)
             | Instruction::Addi(_)
             | Instruction::Csrr(_)
-            | Instruction::Cast(_) => {
-                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                return;
-            }
-            // Non-racy + Conditional.
-            Instruction::Blt(Blt { rhs, lhs, label }) => {
-                let state = find_state(&record, root, harts, first_step, initial_types);
-
-                let lhs = state.registers[hart as usize].get(lhs);
-                let rhs = state.registers[hart as usize].get(rhs);
-                match (lhs, rhs) {
-                    (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                        if let Some(r) = r.value()
-                            && let Some(l) = l.value()
-                        {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if l < r {
-                                let label_node = find_label(node, label).unwrap();
-                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                            } else {
-                                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    _ => todo!(),
-                }
-                return;
-            }
-            Instruction::Bne(Bne { rhs, lhs, out }) => {
-                let state = find_state(&record, root, harts, first_step, initial_types);
-
-                let lhs = state.registers[hart as usize].get(lhs);
-                let rhs = state.registers[hart as usize].get(rhs);
-                match (lhs, rhs) {
-                    (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                        if let Some(r) = r.value()
-                            && let Some(l) = l.value()
-                        {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if l != r {
-                                let label_node = find_label(node, out).unwrap();
-                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                            } else {
-                                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    _ => todo!(),
-                }
-                return;
-            }
-            Instruction::Bnez(Bnez { src, dest }) => {
-                let state = find_state(&record, root, harts, first_step, initial_types);
-
-                let src = state.registers[hart as usize].get(src);
-
-                match src {
-                    Some(RegisterValue::Immediate(imm)) => {
-                        if let Some(imm) = imm.value() {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if imm != Immediate::ZERO {
-                                let label_node = find_label(node, dest).unwrap();
-                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                            } else {
-                                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
-                        if hart != 0 {
-                            let label_node = find_label(node, dest).unwrap();
-                            queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                        } else {
-                            // dbg!("here");
-                            queue.push_back(simple_nonnull(prev, node_ref, hart));
-                        }
-                    }
-                    x => todo!("{x:?}"),
-                }
-                return;
-            }
-            Instruction::Beqz(Beqz { register, label }) => {
-                let state = find_state(&record, root, harts, first_step, initial_types);
-
-                let src = state.registers[hart as usize].get(register);
-
-                // dbg!(&src);
-                match src {
-                    Some(RegisterValue::Immediate(imm)) => {
-                        if let Some(imm) = imm.value() {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if imm == Immediate::ZERO {
-                                let label_node = find_label(node, label).unwrap();
-                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                            } else {
-                                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
-                        if hart == 0 {
-                            let label_node = find_label(node, label).unwrap();
-                            queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                        } else {
-                            // dbg!("here");
-                            queue.push_back(simple_nonnull(prev, node_ref, hart));
-                        }
-                    }
-                    x => todo!("{x:?}"),
-                }
-                return;
-            }
-            Instruction::Bge(Bge { lhs, rhs, out }) => {
-                let state = find_state(&record, root, harts, first_step, initial_types);
-
-                let lhs = state.registers[hart as usize].get(lhs);
-                let rhs = state.registers[hart as usize].get(rhs);
-                match (lhs, rhs) {
-                    (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                        if let Some(r) = r.value()
-                            && let Some(l) = l.value()
-                        {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if l > r {
-                                let label_node = find_label(node, out).unwrap();
-                                queue.push_back(simple_nonnull(prev, label_node.as_ref(), hart));
-                            } else {
-                                queue.push_back(simple_nonnull(prev, node_ref, hart));
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    _ => todo!(),
-                }
-                return;
-            }
+            | Instruction::Cast(_) 
+            | Instruction::Blt(_)
+            | Instruction::Bne(_)
+            | Instruction::Bnez(_)
+            | Instruction::Beqz(_) 
+            | Instruction::Bge(_)
+            | Instruction::Fail(_) => Some(Err((hart, node))),
             // Racy.
             Instruction::Sw(_) | Instruction::Ld(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
-                continue
+                Some(Ok((hart, node)))
             }
             // See note on `wfi`.
-            Instruction::Wfi(_) => continue,
-            // Blocking.
-            Instruction::Unreachable(_) => continue,
-            x => todo!("{x:?}"),
+            Instruction::Wfi(_) => Some(Ok((hart, node))),
+            x @ _ => todo!("{x:?}"),
         }
-    }
+    };
 
-    // If all next nodes are racy, then all nodes are enqueued.
-    for (hart, node) in fronts.iter().map(|(a, b)| (*a, *b)) {
-        let node_ref = node.as_ref();
-        match &node_ref.this {
-            // Racy.
-            Instruction::Sw(_) | Instruction::Ld(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
-                queue.push_back(simple_nonnull(prev, node_ref, hart));
+    // The lowest hart non-racy node is enqueued.
+    // (or possibly multiples nodes in the case of a conditional jump where
+    // we cannot deteremine the condition).
+
+    let next_nodes = fronts
+        .iter()
+        .rev()
+        .filter_map(|(&hart, &node)| {
+            let node_ref = node.as_ref();
+            match &node_ref.this {
+                // Conditional.
+                Instruction::Blt(Blt { rhs, lhs, label }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    let lhs = state.registers[hart as usize].get(lhs);
+                    let rhs = state.registers[hart as usize].get(rhs);
+                    match (lhs, rhs) {
+                        (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
+                            if let Some(r) = r.value()
+                                && let Some(l) = l.value()
+                            {
+                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                // don't need to actually visit/evaluate the branch at runtime.
+                                if l < r {
+                                    let label_node = find_label(node, label).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        _ => todo!(),
+                    }
+                }
+                Instruction::Bne(Bne { rhs, lhs, out }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    let lhs = state.registers[hart as usize].get(lhs);
+                    let rhs = state.registers[hart as usize].get(rhs);
+                    match (lhs, rhs) {
+                        (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
+                            if let Some(r) = r.value()
+                                && let Some(l) = l.value()
+                            {
+                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                // don't need to actually visit/evaluate the branch at runtime.
+                                if l != r {
+                                    let label_node = find_label(node, out).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        _ => todo!(),
+                    }
+                }
+                Instruction::Bnez(Bnez { src, dest }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    let src = state.registers[hart as usize].get(src);
+
+                    match src {
+                        Some(RegisterValue::Immediate(imm)) => {
+                            if let Some(imm) = imm.value() {
+                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                // don't need to actually visit/evaluate the branch at runtime.
+                                if imm != Immediate::ZERO {
+                                    let label_node = find_label(node, dest).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
+                            if hart != 0 {
+                                let label_node = find_label(node, dest).unwrap();
+                                followup(label_node, hart)
+                            } else {
+                                followup(node_ref.next.unwrap(), hart)
+                            }
+                        }
+                        x => todo!("{x:?}"),
+                    }
+                }
+                Instruction::Beqz(Beqz { register, label }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    let src = state.registers[hart as usize].get(register);
+
+                    // dbg!(&src);
+                    match src {
+                        Some(RegisterValue::Immediate(imm)) => {
+                            if let Some(imm) = imm.value() {
+                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                // don't need to actually visit/evaluate the branch at runtime.
+                                if imm == Immediate::ZERO {
+                                    let label_node = find_label(node, label).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
+                            if hart == 0 {
+                                let label_node = find_label(node, label).unwrap();
+                                followup(label_node, hart)
+                            } else {
+                                followup(node_ref.next.unwrap(), hart)
+                            }
+                        }
+                        x => todo!("{x:?}"),
+                    }
+                }
+                Instruction::Bge(Bge { lhs, rhs, out }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    let lhs = state.registers[hart as usize].get(lhs);
+                    let rhs = state.registers[hart as usize].get(rhs);
+                    match (lhs, rhs) {
+                        (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
+                            if let Some(r) = r.value()
+                                && let Some(l) = l.value()
+                            {
+                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                // don't need to actually visit/evaluate the branch at runtime.
+                                if l > r {
+                                    let label_node = find_label(node, out).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        _ => todo!(),
+                    }
+                }
+                // Non-conditional
+                Instruction::Label(_)
+                | Instruction::La(_)
+                | Instruction::Lat(_)
+                | Instruction::Li(_)
+                | Instruction::Addi(_)
+                | Instruction::Csrr(_)
+                | Instruction::Cast(_)
+                | Instruction::Sw(_)
+                | Instruction::Ld(_)
+                | Instruction::Lw(_)
+                | Instruction::Lb(_)
+                | Instruction::Fail(_) => followup(node_ref.next.unwrap(), hart),
+                // See note on `wfi`.
+                Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
+                // Blocking.
+                Instruction::Unreachable(_) => None,
+                x @ _ => todo!("{x:?}"),
             }
-            // See note on `wfi`.
-            Instruction::Wfi(_) => {
-                queue.push_back(simple_nonnull(prev, node_ref, hart));
+        })
+        .collect::<Result<Vec<_>, _>>();
+
+    debug!("racy: {}", next_nodes.is_ok());
+
+    match next_nodes {
+        // If there was a non-racy node, enqueue this single node.
+        Err((hart, non_racy_next)) => {
+            queue.push_back(simple_nonnull(prev, non_racy_next, hart));
+        }
+        // If all nodes where racy, enqueue these nodes.
+        Ok(racy_nodes) => {
+            for (hart, node) in racy_nodes {
+                queue.push_back(simple_nonnull(prev, node, hart));
             }
-            // Blocking.
-            Instruction::Unreachable(_) => continue,
-            // Since this can only be reached when all nodes are racy, most nodes should not be reachable here.
-            x => unreachable!("{x:?}"),
         }
     }
 }
 
 unsafe fn simple_nonnull(
     mut prev: NonNull<VerifierNode>,
-    node_ref: &AstNode,
+    node: NonNull<AstNode>,
     hart: u8,
 ) -> NonNull<VerifierNode> {
     let ptr = alloc(Layout::new::<VerifierNode>()).cast();
@@ -1007,7 +1048,7 @@ unsafe fn simple_nonnull(
         VerifierNode {
             prev: VerifierPrevNode::Branch(prev),
             hart,
-            node: node_ref.next.unwrap(),
+            node,
             next: Vec::new(),
         },
     );
@@ -1245,6 +1286,7 @@ unsafe fn find_state(
             },
             // TODO Some interrupt state is likely affected here so this needs to be added.
             Instruction::Wfi(_) => {}
+            Instruction::Unreachable(_) => {},
             x => todo!("{x:?}"),
         }
         current = current.as_ref().next[*next];

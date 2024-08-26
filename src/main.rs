@@ -1,6 +1,7 @@
 #![feature(let_chains)]
 #![feature(iter_intersperse)]
 #![feature(generic_arg_infer)]
+#![feature(extract_if)]
 
 use std::alloc::dealloc;
 use std::alloc::{alloc, Layout};
@@ -108,13 +109,19 @@ fn print_ast(root: Option<NonNull<AstNode>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use draw::draw_tree;
-    use tracing_test::traced_test;
-
+    use crate::*;
+    use tracing::{info, level_filters::LevelFilter};
+    use tracing_subscriber::layer::SubscriberExt;
     #[test]
-    #[traced_test]
     fn two() {
+        let asserter = tracing_assertions::Layer::default();
+        // let registry = tracing_subscriber::Registry::default();
+        let registry = tracing_subscriber::fmt::Subscriber::builder()
+            .with_max_level(LevelFilter::TRACE)
+            .finish();
+        let subscriber = registry.with(asserter.clone());
+        let guard = tracing::subscriber::set_default(subscriber);
+
         let source = std::fs::read_to_string("./assets/two.s").unwrap();
         let chars = source.chars().collect::<Vec<_>>();
 
@@ -124,97 +131,622 @@ mod tests {
         // Compress
         compress(&mut ast);
 
-        // Print
-        print_ast(ast);
-
-        let width_spacing = 2;
-        let closure = |x: NonNull<VerifierNode>| unsafe {
-            let y = x.as_ref();
-            format!("({}| {})", y.hart, y.node.as_ref().this.to_string())
-        };
-        let seperator = (0..1)
-            .map(|_| format!("{}\n", "-".repeat(20)))
-            .collect::<String>();
-
-        // Checks that there exists a log containing `prefix` and that the
-        // most recent instance of this ends with `suffix`.
-        macro_rules! log_assertion {
-            ($prefix:expr, $suffix: expr) => {{
-                logs_assert(|lines: &[&str]| {
-                    let found = lines.iter().rev()
-                        .find(|line|line.contains($prefix))
-                        .ok_or(format!("Could not find log contains {:?}", $prefix));
-                    match found {
-                        Ok(line) => match line.ends_with($suffix)   {
-                            true => Ok(()),
-                            false => Err(format!("Most recent instance of a log containing {:?} ({:?}) does not end with {:?}.", $prefix, line, $suffix))
-                        },
-                        Err(err) => Err(err),
-                    }
-                });
-            }};
-        }
+        // // Print
+        // print_ast(ast);
 
         // Verify the ast
         unsafe {
             let mut explorerer = Explorerer::new(ast, 1..3);
-            let path = explorerer.new_path();
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {}, 1: {}}");
-            log_assertion!("branch_ptr node:", "_start:"); // the 1st instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "1"); // when 1 harts are running
+            // Start new path.
+            let mut path = explorerer.new_path();
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {}, 1: {}}");
-            log_assertion!("branch_ptr node:", "_start:"); // the 1st instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "2"); // when 2 harts are running
+            // With each step we check the logs to ensure the state is as expected.
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {}, 1: {}}");
-            log_assertion!("branch_ptr node:", "la t0, value"); // the 2nd instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "1"); // when 1 harts are running.
+            // At the start of the program there are no found variables so no initial types for variables.
+            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
+            // The initial state of the queue contains the 1st instruction for
+            // the 1st hart for each number of running harts (in this case we
+            // are checking program for systems with 1 hart and with 2 harts).
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"_start:\" }, { hart: 1/2, instruction: \"_start:\" }]");
+            // The current instruction is the first instruction popped off the queue.
+            let c = asserter.matches("current: { hart: 1/1, instruction: \"_start:\" }");
+            // We start with no types explored so none excluded.
+            let d = asserter.matches("excluded: {}");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b & c & d);
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
-            log_assertion!("branch_ptr node:", "la t0, value"); // the 2nd instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "2"); // when 2 harts are running.
+            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 1/2, instruction: \"_start:\" }, { hart: 1/1, instruction: \"la t0, value\" }]");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
-            log_assertion!("branch_ptr node:", "li t1, 0"); // the 3rd instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "1"); // when 1 harts are running.
+            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"la t0, value\" }, { hart: 2/2, instruction: \"la t0, value\" }]");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
 
-            // The next step continues, exploring:
-            let path = ExplorererPath::next_step(path).continued().unwrap();
-            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
-            log_assertion!("branch_ptr node:", "li t1, 0"); // the 3rd instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
-            log_assertion!("harts:", "2"); // when 2 harts are running.
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
 
-            // The next step encounter an invalid instruction for the initial type assumptions.
-            // i.e. you cannot store a word (4 bytes) in a u8 (1 byte).
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"li t1, 0\" }, { hart: 2/2, instruction: \"li t1, 0\" }]");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"li t1, 0\" }, { hart: 1/1, instruction: \"sw t1, (t0)\" }]");
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}\
+            }",
+            );
             assert!(matches!(
                 ExplorererPath::next_step(path),
                 ExplorePathResult::Invalid(false)
             ));
-            log_assertion!("initial_types:", "{0: {\"value\": U8}, 1: {}}");
-            log_assertion!("branch_ptr node:", "sw t1, (t0)"); // the 3rd instruction
-            log_assertion!("hart:", "0"); // for the 1st hart
+            assert!(a & b & c);
 
-            let path = explorerer.new_path();
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I8}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U16}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I16}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U32}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I32}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U64}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I64}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..3 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            path = explorerer.new_path();
+
+            for _ in 0..6 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": I8}, 1: {\"value\": U8}}");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U8}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            // Iterate over all possibilities for `value: I8` on hart 0.
+            let mut types_iter = TYPE_LIST.iter().skip(1);
+            for _ in 0..7 {
+                path = explorerer.new_path();
+                for _ in 0..6 {
+                    path = ExplorererPath::next_step(path).continued().unwrap();
+                }
+
+                let s = format!(
+                    "initial_types: {{0: {{\"value\": I8}}, 1: {{\"value\": {:?}}}}}",
+                    types_iter.next().unwrap()
+                );
+                let a = asserter.matches(s);
+                let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+                assert!(matches!(
+                    ExplorererPath::next_step(path),
+                    ExplorePathResult::Invalid(false)
+                ));
+                assert!(a);
+                assert!(b);
+            }
+
+            path = explorerer.new_path();
+
+            for _ in 0..3 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": I8}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": I8}, 1: {}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            for _ in 0..8 {
+                path = explorerer.new_path();
+                for _ in 0..6 {
+                    path = ExplorererPath::next_step(path).continued().unwrap();
+                }
+                assert!(matches!(
+                    ExplorererPath::next_step(path),
+                    ExplorePathResult::Invalid(false)
+                ));
+            }
+            path = explorerer.new_path();
+            for _ in 0..3 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U16}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": I8}, 1: {}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": U16}, 1: {}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            for _ in 0..8 {
+                path = explorerer.new_path();
+                for _ in 0..6 {
+                    path = ExplorererPath::next_step(path).continued().unwrap();
+                }
+                assert!(matches!(
+                    ExplorererPath::next_step(path),
+                    ExplorePathResult::Invalid(false)
+                ));
+            }
+            path = explorerer.new_path();
+            for _ in 0..3 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            let a = asserter.matches("initial_types: {0: {\"value\": I16}, 1: {}}");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let c = asserter.matches(
+                "excluded: {\
+                {0: {\"value\": U8}, 1: {}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": I8}, 1: {}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
+                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
+                {0: {\"value\": I8}, 1: {\"value\": I64}}, \
+                {0: {\"value\": U16}, 1: {}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U8}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I8}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U16}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I16}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U32}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I32}}, \
+                {0: {\"value\": U16}, 1: {\"value\": U64}}, \
+                {0: {\"value\": U16}, 1: {\"value\": I64}}, \
+                {0: {\"value\": I16}, 1: {}}, \
+                {0: {\"value\": I16}, 1: {\"value\": U8}}, \
+                {0: {\"value\": I16}, 1: {\"value\": I8}}, \
+                {0: {\"value\": I16}, 1: {\"value\": U16}}, \
+                {0: {\"value\": I16}, 1: {\"value\": I16}}, \
+                {0: {\"value\": I16}, 1: {\"value\": U32}}, \
+                {0: {\"value\": I16}, 1: {\"value\": I32}}, \
+                {0: {\"value\": I16}, 1: {\"value\": U64}}, \
+                {0: {\"value\": I16}, 1: {\"value\": I64}}\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            assert!(a & b & c);
+
+            // Now starting with U32, we have reached a type for `value` in hart 0 that will pass.
+            // It will need to iterate up to U32 for `value` in hart 1.
+            for _ in 0..4 {
+                path = explorerer.new_path();
+                for _ in 0..11 {
+                    path = ExplorererPath::next_step(path).continued().unwrap();
+                }
+                assert!(matches!(
+                    ExplorererPath::next_step(path),
+                    ExplorePathResult::Invalid(false)
+                ));
+            }
+
+            // Now we are on the u32 path for `value` in both harts.
+            path = explorerer.new_path();
+            for _ in 0..8 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            // So now is the first time we get past `sw t1, (t0)` on both harts.
+            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"li t1, 0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"li t1, 0\" }, \
+                { hart: 1/1, instruction: \"addi t1, t1, 1\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
+
+            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"addi t1, t1, 1\" }, \
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a & b);
+
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            // See the queue has grown.
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"addi t1, t1, 1\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            // And it grows again.
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
+                ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            // And it grows again.
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            let a = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"addi t1, t1, 1\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            assert!(a);
+
+            // TODO I think this is where the endless loop comes from, we get stuck on the racy instructions.
+            for _ in 0..516 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid(false)
+            ));
+            
 
             todo!();
         }
+        drop(guard);
     }
 }

@@ -15,7 +15,6 @@ pub fn new_ast(src: &[char]) -> Option<NonNull<AstNode>> {
     let mut b = 0;
     while b < src.len() {
         if src[b] == '\n' {
-            println!("src[a..b]: {:?}", &src[a..b]);
             alloc_node(&src[a..b], &mut front_opt);
             a = b + 1;
         }
