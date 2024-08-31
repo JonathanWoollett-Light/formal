@@ -161,8 +161,14 @@ impl MemoryMap {
                     if *offset == 0 {
                         *byte = value;
                     } else {
+                        println!("existing: {:?}",existing);
+                        println!("map: {:?}",self.map);
                         todo!()
                     }
+                }
+                MemoryValue::Ascii(ascii) => {
+                    let char = ascii.get_mut(usize::try_from(*offset).unwrap()).unwrap();
+                    *char = value;
                 }
                 _ => todo!(),
             }
@@ -622,14 +628,17 @@ impl<'a> ExplorererPath<'a> {
                 match state.registers[hart as usize].get(to) {
                     Some(RegisterValue::Address(MemoryLocation {
                         tag: from_label,
-                        offset: 0,
+                        offset: from_offset,
                     })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
                         // The type of the variable in question (at this point on this hart).
                         let var_type = current_local_types.get(from_label).unwrap();
                         // If attempting to access outside the memory space for the label.
-                        if size(var_type) < 4 + offset.value.value as usize {
+                        if size(var_type)
+                            < usize::try_from(4 + from_offset + offset.value.value as isize)
+                                .unwrap()
+                        {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
                             return invalid_path(
@@ -660,14 +669,17 @@ impl<'a> ExplorererPath<'a> {
                 match state.registers[hart as usize].get(to) {
                     Some(RegisterValue::Address(MemoryLocation {
                         tag: from_label,
-                        offset: 0,
+                        offset: from_offset,
                     })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
                         // The type of the variable in question (at this point on this hart).
                         let var_type = current_local_types.get(from_label).unwrap();
                         // If attempting to access outside the memory space for the label.
-                        if size(var_type) < 1 + offset.value.value as usize {
+                        if size(var_type)
+                            < usize::try_from(1 + from_offset + offset.value.value as isize)
+                                .unwrap()
+                        {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
                             return invalid_path(
@@ -1469,13 +1481,6 @@ unsafe fn find_state(
                 state.registers[hartu].insert(*register, RegisterValue::from(label.clone()));
             }
             Instruction::Sw(Sw { to, from, offset }) => {
-                let Offset {
-                    value: Immediate { value: 0 },
-                } = offset
-                else {
-                    todo!()
-                };
-
                 let Some(to_value) = state.registers[hartu].get(to) else {
                     todo!()
                 };
@@ -1485,7 +1490,7 @@ unsafe fn find_state(
                 match to_value {
                     RegisterValue::Address(MemoryLocation {
                         tag: to_label,
-                        offset: 0,
+                        offset: to_offset,
                     }) => {
                         let to_type = state.types.get(&hart).unwrap().get(to_label).unwrap();
                         // We should have already checked the type is large enough for the store.
@@ -1494,7 +1499,10 @@ unsafe fn find_state(
                             RegisterValue::Immediate(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
                                     state.memory.set_word(
-                                        &MemoryLocation::from(to_label.clone()),
+                                        &MemoryLocation {
+                                            tag: to_label.clone(),
+                                            offset: to_offset + offset.value.value as isize,
+                                        },
                                         <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap(),
                                     );
                                 } else {
@@ -1508,13 +1516,6 @@ unsafe fn find_state(
                 }
             }
             Instruction::Sb(Sb { to, from, offset }) => {
-                let Offset {
-                    value: Immediate { value: 0 },
-                } = offset
-                else {
-                    todo!()
-                };
-
                 let Some(to_value) = state.registers[hartu].get(to) else {
                     todo!()
                 };
@@ -1524,16 +1525,21 @@ unsafe fn find_state(
                 match to_value {
                     RegisterValue::Address(MemoryLocation {
                         tag: to_label,
-                        offset: 0,
+                        offset: to_offset,
                     }) => {
                         let to_type = state.types.get(&hart).unwrap().get(to_label).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        debug_assert!(size(to_type) >= 1);
+                        debug_assert!(
+                            size(to_type) >= (1 + to_offset + offset.value.value as isize) as usize
+                        );
                         match from_value {
                             RegisterValue::Immediate(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
                                     state.memory.set_byte(
-                                        &MemoryLocation::from(to_label.clone()),
+                                        &MemoryLocation {
+                                            tag: to_label.clone(),
+                                            offset: to_offset + offset.value.value as isize,
+                                        },
                                         imm.to_ne_bytes()[7],
                                     );
                                 } else {
@@ -1547,53 +1553,53 @@ unsafe fn find_state(
                 }
             }
             Instruction::Ld(Ld { to, from, offset }) => {
-                let Offset {
-                    value: Immediate { value: 0 },
-                } = offset
-                else {
-                    todo!()
-                };
-                let Some(from_value) = state.registers[hartu].get(from) else {
-                    todo!()
-                };
-                match from_value {
-                    RegisterValue::Address(
-                        memloc @ MemoryLocation {
-                            tag: from_label,
-                            offset: from_offset,
-                        },
-                    ) => {
-                        let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
-                        // We should have already checked the type is large enough for the load.
-                        debug_assert!(size(from_type) >= 8);
-                        let doubleword = state.memory.get_doubleword(memloc).unwrap();
-                        state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
-                    }
-                    x @ _ => todo!("{x:?}"),
-                }
-            }
-            Instruction::Lw(Lw { to, from, offset }) => {
-                let Offset {
-                    value: Immediate { value: 0 },
-                } = offset
-                else {
-                    todo!()
-                };
                 let Some(from_value) = state.registers[hartu].get(from) else {
                     todo!()
                 };
                 match from_value {
                     RegisterValue::Address(MemoryLocation {
                         tag: from_label,
-                        offset: 0,
+                        offset: from_offset,
                     }) => {
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        debug_assert!(size(from_type) >= 4);
-                        let Some(word) = state
+                        debug_assert!(
+                            size(from_type)
+                                >= usize::try_from(8 + from_offset + offset.value.value as isize)
+                                    .unwrap()
+                        );
+                        let doubleword = state
                             .memory
-                            .get_word(&MemoryLocation::from(from_label.clone()))
-                        else {
+                            .get_doubleword(&MemoryLocation {
+                                tag: from_label.clone(),
+                                offset: from_offset + offset.value.value as isize,
+                            })
+                            .unwrap();
+                        state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
+                    }
+                    x @ _ => todo!("{x:?}"),
+                }
+            }
+            Instruction::Lw(Lw { to, from, offset }) => {
+                let Some(from_value) = state.registers[hartu].get(from) else {
+                    todo!()
+                };
+                match from_value {
+                    RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: from_offset,
+                    }) => {
+                        let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
+                        // We should have already checked the type is large enough for the load.
+                        debug_assert!(
+                            size(from_type)
+                                >= usize::try_from(4 + from_offset + offset.value.value as isize)
+                                    .unwrap()
+                        );
+                        let Some(word) = state.memory.get_word(&MemoryLocation {
+                            tag: from_label.clone(),
+                            offset: from_offset + offset.value.value as isize,
+                        }) else {
                             todo!()
                         };
                         let imm = Immediate::from(*word);
@@ -1604,27 +1610,25 @@ unsafe fn find_state(
                 }
             }
             Instruction::Lb(Lb { to, from, offset }) => {
-                let Offset {
-                    value: Immediate { value: 0 },
-                } = offset
-                else {
-                    todo!()
-                };
                 let Some(from_value) = state.registers[hartu].get(from) else {
                     todo!()
                 };
                 match from_value {
                     RegisterValue::Address(MemoryLocation {
                         tag: from_label,
-                        offset: 0,
+                        offset: from_offset,
                     }) => {
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        debug_assert!(size(from_type) >= 1);
-                        let Some(byte) = state
-                            .memory
-                            .get_byte(&MemoryLocation::from(from_label.clone()))
-                        else {
+                        debug_assert!(
+                            size(from_type)
+                                >= usize::try_from(1 + from_offset + offset.value.value as isize)
+                                    .unwrap()
+                        );
+                        let Some(byte) = state.memory.get_byte(&MemoryLocation {
+                            tag: from_label.clone(),
+                            offset: from_offset + offset.value.value as isize,
+                        }) else {
                             todo!("{from_label:?}")
                         };
                         let imm = Immediate::from(*byte);
