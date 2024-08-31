@@ -33,26 +33,30 @@ _start:
     lat t0, welcome
 
     # Check variable is list
-    li t2, 1 # Load list type number
+    li t2, 8 # Load list type number
     ld t1, (t0) # Load type type number
     bne t1, t2, _invalid
 
     # Check list length
-    addi t0, t0, 1 # Increment address to point at length
+    addi t0, t0, 16 # Increment address to point at length
     ld t1, (t0) # Load length
     li t2, 15 # Load desired length
     bne t1, t2, _invalid
 
     # Check all values in list are u8
-    addi t0, t0, 1 # Incremenet address to point at list address
+    addi t0, t0, -8 # Decrement address to point at list address
     ld t0, (t0) # Load list address
+
+    li t5, 0 # Use t5 as the counter
 _check_item:
+    beq t5, t2, _no_items
     ld t3, (t0) # Load type of list item
     li t4, 0 # Load byte type number
     bne t3, t4, _invalid
-    addi t0, t0, 1  # Increment list item
-    addi t2, t2, -1 # Decrement remaining values to check
-    bnez t2, _check_item # Keep iterating until no items left
+    addi t0, t0, 24  # Increment list item address
+    addi t5, t5, 1 # Increment the count
+    branch _check_item # Keep iterating until no items left
+_no_items:
 
     # Set string
     la t0, welcome

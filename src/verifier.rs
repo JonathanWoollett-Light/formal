@@ -12,6 +12,7 @@ use std::{
     collections::{HashMap, VecDeque},
     ptr::NonNull,
 };
+use tracing::error;
 use tracing::info;
 use tracing::trace;
 
@@ -27,7 +28,7 @@ fn size(t: &Type) -> usize {
         I32 => 4,
         U64 => 8,
         I64 => 8,
-        List(_) => 3 * size(&Type::U64),
+        List(items) => items.iter().map(size).sum(),
         _ => todo!(),
     }
 }
@@ -85,9 +86,10 @@ struct MemoryMap {
 impl MemoryMap {
     fn get_byte(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<&u8> {
         let value = self.map.get(tag)?;
+        let uoffset = usize::try_from(*offset).unwrap();
         match value {
-            MemoryValue::Ascii(ascii) => ascii.get(*offset),
-            MemoryValue::Word(word) => word.get(*offset),
+            MemoryValue::Ascii(ascii) => ascii.get(uoffset),
+            MemoryValue::Word(word) => word.get(uoffset),
             _ => todo!(),
         }
     }
@@ -98,26 +100,87 @@ impl MemoryMap {
             _ => todo!(),
         }
     }
-    fn get_doubleword(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<[u8; 8]> {
-        let value = self.map.get(tag)?;
+    fn get_doubleword(
+        &self,
+        MemoryLocation { tag, offset }: &MemoryLocation,
+    ) -> Result<DoubleWordValue, GetDoubleWordError> {
+        let value = self
+            .map
+            .get(tag)
+            .ok_or(GetDoubleWordError::UnknownLabel(tag.clone()))?;
         match value {
-            MemoryValue::DoubleWord(doubleword) => (*offset == 0).then_some(*doubleword),
+            MemoryValue::DoubleWord(doubleword) => (*offset == 0)
+                .then_some(DoubleWordValue::Literal(*doubleword))
+                .ok_or(GetDoubleWordError::OffsetWithDoubleWord(*offset)),
             MemoryValue::Type(typetype) => match offset {
-                0 => Some((typetype.type_value as u64).to_ne_bytes()),
+                0 => Ok(DoubleWordValue::Literal(
+                    (typetype.type_value as u64).to_ne_bytes(),
+                )),
+                1..=7 => todo!(),
                 // The address is a label which cannot be known at comptime.
-                1 => todo!(),
-                2 => Some((typetype.length as u64).to_ne_bytes()),
+                8 => Ok(DoubleWordValue::Address(MemoryLocation::from(
+                    typetype.addr.as_ref().unwrap(),
+                ))),
+                9..=15 => todo!(),
+                16 => Ok(DoubleWordValue::Literal(
+                    (typetype.length as u64).to_ne_bytes(),
+                )),
                 // An offset outside the type is invalid.
-                _ => todo!(),
+                x @ _ => Err(GetDoubleWordError::OutsideType(*offset)),
             },
+            MemoryValue::Types(types) => {
+                let index = usize::try_from(*offset).unwrap() / (3 * 8);
+                let typetype = types
+                    .get(index)
+                    .ok_or(GetDoubleWordError::TypesOutOfRange(*offset))?;
+                let inner_offset = offset % (3 * 8);
+                match inner_offset {
+                    0 => Ok(DoubleWordValue::Literal(
+                        (typetype.type_value as u64).to_ne_bytes(),
+                    )),
+                    1..=7 => todo!(),
+                    // The address is a label which cannot be known at comptime.
+                    8 => Ok(DoubleWordValue::Address(MemoryLocation::from(
+                        typetype.addr.as_ref().unwrap(),
+                    ))),
+                    9..=15 => todo!(),
+                    16 => Ok(DoubleWordValue::Literal(
+                        (typetype.length as u64).to_ne_bytes(),
+                    )),
+                    // An offset outside the type is invalid.
+                    x @ _ => Err(GetDoubleWordError::OutsideType(*offset)),
+                }
+            }
             x => todo!("{x:?}"),
+        }
+    }
+    fn set_byte(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: u8) {
+        if let Some(existing) = self.map.get_mut(tag) {
+            match existing {
+                MemoryValue::Byte(byte) => {
+                    if *offset == 0 {
+                        *byte = value;
+                    } else {
+                        todo!()
+                    }
+                }
+                _ => todo!(),
+            }
+        } else if *offset == 0 {
+            self.map.insert(tag.clone(), MemoryValue::Byte(value));
+        } else {
+            todo!()
         }
     }
     fn set_word(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: [u8; 4]) {
         if let Some(existing) = self.map.get_mut(tag) {
             match existing {
                 MemoryValue::Word(word) => {
-                    *word = value;
+                    if *offset == 0 {
+                        *word = value;
+                    } else {
+                        todo!()
+                    }
                 }
                 _ => todo!(),
             }
@@ -128,11 +191,12 @@ impl MemoryMap {
         }
     }
     // TODO This should be improved, I'm pretty sure the current approach is bad.
+    // In setting a type type we need to set many sublabels for the sub-types.
     fn set_type(
         &mut self,
         value: &Type,
         tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
-    ) -> Label {
+    ) -> (Label, Types) {
         let mut vec = Vec::new();
         vec.push((None, value.clone()));
         let mut right = 0;
@@ -148,6 +212,7 @@ impl MemoryMap {
         }
 
         let mut left = right;
+        let mut subtypes = Types::new();
         while left > 0 {
             left -= 1;
             if let (None, Type::List(_)) = &vec[left] {
@@ -161,7 +226,16 @@ impl MemoryMap {
                     .collect::<Vec<_>>();
                 let tag = tag_iter.next().unwrap();
                 vec[left].0 = Some(tag.clone());
-                self.map.insert(tag, MemoryValue::Types(memory_types));
+
+                // Insert collect subtypes types
+                let subtypes_list = memory_types
+                    .iter()
+                    .map(|_| Type::List(vec![Type::U64, Type::U64, Type::U64]))
+                    .collect();
+                subtypes.insert(tag.clone(), Type::List(subtypes_list));
+                // Insert subtypes into memory.
+                self.map
+                    .insert(tag.clone(), MemoryValue::Types(memory_types));
                 right = left;
             }
         }
@@ -191,7 +265,7 @@ impl MemoryMap {
             _ => unreachable!(),
         }
 
-        final_tag
+        (final_tag, subtypes)
     }
 }
 
@@ -221,7 +295,7 @@ impl State {
 #[non_exhaustive]
 struct MemoryLocation {
     tag: Label,
-    offset: usize,
+    offset: isize,
 }
 impl From<Label> for MemoryLocation {
     fn from(tag: Label) -> Self {
@@ -233,6 +307,7 @@ impl From<Label> for MemoryLocation {
 // then edit 2 bytes of it. So we will need additional complexity to support this case
 #[derive(Debug)]
 enum MemoryValue {
+    Byte(u8),
     Type(MemoryValueType),
     Types(Vec<MemoryValueType>),
     DoubleWord([u8; 8]),
@@ -264,8 +339,33 @@ impl MemoryValueType {
 #[derive(Debug, Clone)]
 enum RegisterValue {
     Immediate(ImmediateRange),
-    Address(Label),
+    Address(MemoryLocation),
     Csr(CsrValue),
+}
+#[derive(Debug, Clone)]
+enum DoubleWordValue {
+    Literal([u8; 8]),
+    Address(MemoryLocation),
+}
+impl From<DoubleWordValue> for RegisterValue {
+    fn from(dwv: DoubleWordValue) -> Self {
+        match dwv {
+            DoubleWordValue::Literal(bytes) => {
+                let imm = Immediate::from(bytes);
+                Self::Immediate(ImmediateRange(imm..=imm))
+            }
+            DoubleWordValue::Address(memloc) => Self::Address(memloc),
+            _ => todo!(),
+        }
+    }
+}
+impl From<&Label> for MemoryLocation {
+    fn from(label: &Label) -> Self {
+        MemoryLocation {
+            tag: label.clone(),
+            offset: 0,
+        }
+    }
 }
 impl From<Immediate> for RegisterValue {
     fn from(imm: Immediate) -> Self {
@@ -274,7 +374,10 @@ impl From<Immediate> for RegisterValue {
 }
 impl From<Label> for RegisterValue {
     fn from(label: Label) -> Self {
-        Self::Address(label)
+        Self::Address(MemoryLocation {
+            tag: label,
+            offset: 0,
+        })
     }
 }
 
@@ -369,7 +472,11 @@ pub enum ExplorePathResult<'a> {
         initial_types: InitialTypes,
         touched: BTreeSet<NonNull<AstNode>>,
     },
-    Invalid(bool),
+    Invalid {
+        complete: bool,
+        path: String,
+        explanation: InvalidExplanation,
+    },
     Continue(ExplorererPath<'a>),
 }
 impl<'a> ExplorePathResult<'a> {
@@ -380,6 +487,7 @@ impl<'a> ExplorePathResult<'a> {
         }
     }
 }
+use itertools::intersperse;
 use tracing::debug;
 impl<'a> ExplorererPath<'a> {
     #[tracing::instrument(skip_all)]
@@ -396,9 +504,8 @@ impl<'a> ExplorererPath<'a> {
 
         debug!(
             "queue: [{}]",
-            queue
-                .iter()
-                .map(|item| {
+            intersperse(
+                queue.iter().map(|item| {
                     let mut current = item.as_ref().prev;
                     while let VerifierPrevNode::Branch(prev) = current {
                         current = prev.as_ref().prev;
@@ -414,9 +521,10 @@ impl<'a> ExplorererPath<'a> {
                         root.as_ref().harts,
                         item_ref.node.as_ref().this
                     )
-                })
-                .intersperse(String::from(", "))
-                .collect::<String>()
+                }),
+                String::from(", ")
+            )
+            .collect::<String>()
         );
 
         let Some(branch_ptr) = queue.pop_front() else {
@@ -436,21 +544,20 @@ impl<'a> ExplorererPath<'a> {
         let ast = branch.node;
         let hart = branch.hart;
 
-        {
-            let mut current = branch_ptr.as_ref().prev;
-            while let VerifierPrevNode::Branch(prev) = current {
-                current = prev.as_ref().prev;
-            }
-            let VerifierPrevNode::Root(root) = current else {
-                unreachable!()
-            };
-            debug!(
-                "current: {{ hart: {}/{}, instruction: \"{}\" }}",
-                hart + 1,
-                root.as_ref().harts,
-                branch_ptr.as_ref().node.as_ref().this
-            );
+        let mut current = branch_ptr.as_ref().prev;
+        while let VerifierPrevNode::Branch(prev) = current {
+            current = prev.as_ref().prev;
         }
+        let VerifierPrevNode::Root(root) = current else {
+            unreachable!()
+        };
+        let harts = root.as_ref().harts;
+        debug!(
+            "current: {{ hart: {}/{}, instruction: \"{}\" }}",
+            hart + 1,
+            harts,
+            branch_ptr.as_ref().node.as_ref().this
+        );
 
         // Record all the AST node that are reachable.
         touched.insert(ast);
@@ -468,7 +575,9 @@ impl<'a> ExplorererPath<'a> {
             | Instruction::Bnez(_)
             | Instruction::Beqz(_)
             | Instruction::Bge(_)
-            | Instruction::Wfi(_) => {}
+            | Instruction::Wfi(_)
+            | Instruction::Branch(_)
+            | Instruction::Beq(_) => {}
             // If the first encounter of a variable is a cast, we simply add this as the
             // assumed initial type.
             Instruction::Cast(Cast { label, cast }) => {
@@ -481,12 +590,22 @@ impl<'a> ExplorererPath<'a> {
             }
             Instruction::Lat(Lat { register: _, label }) => {
                 if !load_label(label, &mut initial_types, hart, &mut explorerer.excluded) {
-                    return invalid_path(explorerer, initial_types);
+                    return invalid_path(
+                        explorerer,
+                        initial_types,
+                        harts,
+                        InvalidExplanation::Lat(label.clone()),
+                    );
                 }
             }
             Instruction::La(La { register: _, label }) => {
                 if !load_label(label, &mut initial_types, hart, &mut explorerer.excluded) {
-                    return invalid_path(explorerer, initial_types);
+                    return invalid_path(
+                        explorerer,
+                        initial_types,
+                        harts,
+                        InvalidExplanation::La(label.clone()),
+                    );
                 }
             }
             // For any store we need to validate the destination is valid.
@@ -501,7 +620,10 @@ impl<'a> ExplorererPath<'a> {
 
                 // Check the destination is valid.
                 match state.registers[hart as usize].get(to) {
-                    Some(RegisterValue::Address(from_label)) => {
+                    Some(RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
                         // The type of the variable in question (at this point on this hart).
@@ -510,7 +632,50 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 4 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return invalid_path(explorerer, initial_types);
+                            return invalid_path(
+                                explorerer,
+                                initial_types,
+                                harts,
+                                InvalidExplanation::Sw,
+                            );
+                        } else {
+                            // We found the label and we can validate that the loading
+                            // of a word with the given offset is within the address space.
+                            // So we continue exploration.
+                        }
+                    }
+                    x => todo!("{x:?}"),
+                }
+            }
+            Instruction::Sb(Sb {
+                to,
+                from: _,
+                offset,
+            }) => {
+                // Collect the state.
+                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+                let state = find_state(&record, root, harts, first_step, &initial_types);
+
+                // Check the destination is valid.
+                match state.registers[hart as usize].get(to) {
+                    Some(RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    })) => {
+                        // The current types for the current hart (each hart may treat varioables as different types at different points).
+                        let current_local_types = state.types.get(&hart).unwrap();
+                        // The type of the variable in question (at this point on this hart).
+                        let var_type = current_local_types.get(from_label).unwrap();
+                        // If attempting to access outside the memory space for the label.
+                        if size(var_type) < 1 + offset.value.value as usize {
+                            // The path is invalid, so we add the current types to the
+                            // excluded list and restart exploration.
+                            return invalid_path(
+                                explorerer,
+                                initial_types,
+                                harts,
+                                InvalidExplanation::Sw,
+                            );
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -532,16 +697,40 @@ impl<'a> ExplorererPath<'a> {
 
                 // Check the destination is valid.
                 match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(from_label)) => {
+                    Some(RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: from_offset,
+                    })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
+
+                        if current_local_types.get(from_label).is_none() {
+                            panic!("from_label: {from_label:?}\ncurrent_local_types: {current_local_types:?}")
+                        }
+
                         // The type of the variable in question (at this point on this hart).
                         let var_type = current_local_types.get(from_label).unwrap();
                         // If attempting to access outside the memory space for the label.
-                        if size(var_type) < 8 + offset.value.value as usize {
+                        let final_offset =
+                            usize::try_from(8 + offset.value.value as isize + from_offset).unwrap();
+                        if size(var_type) < final_offset {
+                            error!("registers: {:?}", state.registers[branch.hart as usize]);
+                            error!("memory: {:?}", state.memory);
+                            error!("types: {:?}", current_local_types);
+                            error!("var_type: {:?}", var_type);
+
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return invalid_path(explorerer, initial_types);
+                            return invalid_path(
+                                explorerer,
+                                initial_types,
+                                harts,
+                                InvalidExplanation::Ld(
+                                    final_offset,
+                                    size(var_type),
+                                    var_type.clone(),
+                                ),
+                            );
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -562,7 +751,10 @@ impl<'a> ExplorererPath<'a> {
 
                 // Check the destination is valid.
                 match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(from_label)) => {
+                    Some(RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
                         // The type of the variable in question (at this point on this hart).
@@ -571,7 +763,12 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 4 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return invalid_path(explorerer, initial_types);
+                            return invalid_path(
+                                explorerer,
+                                initial_types,
+                                harts,
+                                InvalidExplanation::Lw,
+                            );
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -592,7 +789,10 @@ impl<'a> ExplorererPath<'a> {
 
                 // Check the destination is valid.
                 match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(from_label)) => {
+                    Some(RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    })) => {
                         // The current types for the current hart (each hart may treat varioables as different types at different points).
                         let current_local_types = state.types.get(&hart).unwrap();
                         // The type of the variable in question (at this point on this hart).
@@ -601,7 +801,12 @@ impl<'a> ExplorererPath<'a> {
                         if size(var_type) < 1 + offset.value.value as usize {
                             // The path is invalid, so we add the current types to the
                             // excluded list and restart exploration.
-                            return invalid_path(explorerer, initial_types);
+                            return invalid_path(
+                                explorerer,
+                                initial_types,
+                                harts,
+                                InvalidExplanation::Lb,
+                            );
                         } else {
                             // We found the label and we can validate that the loading
                             // of a word with the given offset is within the address space.
@@ -612,7 +817,9 @@ impl<'a> ExplorererPath<'a> {
                 }
             }
             // If any fail is encountered then the path is invalid.
-            Instruction::Fail(_) => return invalid_path(explorerer, initial_types),
+            Instruction::Fail(_) => {
+                return invalid_path(explorerer, initial_types, harts, InvalidExplanation::Fail)
+            }
             x => todo!("{x:?}"),
         }
         queue_up(branch_ptr, &mut queue, &initial_types);
@@ -626,15 +833,50 @@ impl<'a> ExplorererPath<'a> {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum InvalidExplanation {
+    #[error("Could not allocate non-excluded type for {0} for `lat`.")]
+    Lat(Label),
+    #[error("Could not allocate non-excluded type for {0} for `la`.")]
+    La(Label),
+    #[error("todo")]
+    Sw,
+    #[error(
+        "Could not load as offset ({0}) is greater than the size ({1}) of the type ({2}) for `ld`."
+    )]
+    Ld(usize, usize, Type),
+    #[error("todo")]
+    Lw,
+    #[error("todo")]
+    Lb,
+    #[error("todo")]
+    Fail,
+}
+
 #[tracing::instrument(skip_all)]
 unsafe fn invalid_path(
     explorerer: &mut Explorerer,
     initial_types: BTreeMap<u8, Types>,
+    harts: u8,
+    explanation: InvalidExplanation,
 ) -> ExplorePathResult<'_> {
     // We need to track covered ground so we don't retread it.
     explorerer.excluded.insert(initial_types.clone());
 
     trace!("excluded: {:?}", explorerer.excluded);
+
+    let harts_root = explorerer
+        .roots
+        .iter()
+        .find(|root| root.as_ref().harts == harts)
+        .unwrap();
+    let [hart_root] = harts_root.as_ref().next.as_slice() else {
+        unreachable!()
+    };
+    let path = crate::draw::draw_tree(*hart_root, 2, |n| {
+        let r = n.as_ref();
+        format!("{}, {}", r.hart + 1, r.node.as_ref().this)
+    });
 
     // Dealloc the current tree so we can restart.
     for mut root in explorerer.roots.iter().copied() {
@@ -645,11 +887,29 @@ unsafe fn invalid_path(
         }
     }
 
-    // TODO Make this explanation better and doublecheck if this is actually correct behaviour.
+    // TODO Make this path better and doublecheck if this is actually correct behaviour.
     // This case only occurs when all types are excluded thus it continually breaks out
     // of the exploration loop with empty `initial_types`. This case means there is no
     // valid type combination and thus no valid path.
-    ExplorePathResult::Invalid(initial_types.iter().all(|(_, t)| t.is_empty()))
+    ExplorePathResult::Invalid {
+        complete: initial_types.iter().all(|(_, t)| t.is_empty()),
+        path,
+        explanation,
+    }
+}
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+enum GetDoubleWordError {
+    #[error("Attempted to access type type with a known offset ({0}) outside the type size.")]
+    OutsideType(isize),
+    #[error("Attempted to access a doubleword type with a non-zero offset ({0}).")]
+    OffsetWithDoubleWord(isize),
+    #[error("The label ({0}) is not present in the memory space.")]
+    UnknownLabel(Label),
+    #[error("The offset ({0}) is outside the types list.")]
+    TypesOutOfRange(isize),
 }
 
 impl Explorerer {
@@ -833,17 +1093,21 @@ unsafe fn queue_up(
             | Instruction::Li(_)
             | Instruction::Addi(_)
             | Instruction::Csrr(_)
-            | Instruction::Cast(_) 
+            | Instruction::Cast(_)
             | Instruction::Blt(_)
             | Instruction::Bne(_)
             | Instruction::Bnez(_)
-            | Instruction::Beqz(_) 
+            | Instruction::Beqz(_)
             | Instruction::Bge(_)
-            | Instruction::Fail(_) => Some(Err((hart, node))),
+            | Instruction::Fail(_)
+            | Instruction::Branch(_)
+            | Instruction::Beq(_) => Some(Err((hart, node))),
             // Racy.
-            Instruction::Sw(_) | Instruction::Ld(_) | Instruction::Lw(_) | Instruction::Lb(_) => {
-                Some(Ok((hart, node)))
-            }
+            Instruction::Sb(_)
+            | Instruction::Sw(_)
+            | Instruction::Ld(_)
+            | Instruction::Lw(_)
+            | Instruction::Lb(_) => Some(Ok((hart, node))),
             // See note on `wfi`.
             Instruction::Wfi(_) => Some(Ok((hart, node))),
             x @ _ => todo!("{x:?}"),
@@ -868,16 +1132,18 @@ unsafe fn queue_up(
                     let rhs = state.registers[hart as usize].get(rhs);
                     match (lhs, rhs) {
                         (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                            if let Some(r) = r.value()
-                                && let Some(l) = l.value()
-                            {
-                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                                // don't need to actually visit/evaluate the branch at runtime.
-                                if l < r {
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
+                            if let Some(r) = r.value() {
+                                if let Some(l) = l.value() {
+                                    // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                    // don't need to actually visit/evaluate the branch at runtime.
+                                    if l < r {
+                                        let label_node = find_label(node, label).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        followup(node_ref.next.unwrap(), hart)
+                                    }
                                 } else {
-                                    followup(node_ref.next.unwrap(), hart)
+                                    todo!()
                                 }
                             } else {
                                 todo!()
@@ -886,29 +1152,72 @@ unsafe fn queue_up(
                         _ => todo!(),
                     }
                 }
-                Instruction::Bne(Bne { rhs, lhs, out }) => {
+                Instruction::Beq(Beq { rhs, lhs, out }) => {
                     let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    // error!("state.memory: {:?}",state.memory);
+                    // error!("state.registers: {:?}",state.registers);
 
                     let lhs = state.registers[hart as usize].get(lhs);
                     let rhs = state.registers[hart as usize].get(rhs);
                     match (lhs, rhs) {
                         (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                            if let Some(r) = r.value()
-                                && let Some(l) = l.value()
-                            {
-                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                                // don't need to actually visit/evaluate the branch at runtime.
-                                if l != r {
-                                    let label_node = find_label(node, out).unwrap();
-                                    followup(label_node, hart)
+                            if let Some(r) = r.value() {
+                                if let Some(l) = l.value() {
+                                    // error!("left and right l: {l}, r: {r}");
+
+                                    // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                    // don't need to actually visit/evaluate the branch at runtime.
+                                    if l == r {
+                                        // error!("bne not equal case");
+                                        let label_node = find_label(node, out).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        // error!("bne equal case");
+                                        followup(node_ref.next.unwrap(), hart)
+                                    }
                                 } else {
-                                    followup(node_ref.next.unwrap(), hart)
+                                    todo!()
                                 }
                             } else {
                                 todo!()
                             }
                         }
-                        _ => todo!(),
+                        x @ _ => todo!("{x:?}"),
+                    }
+                }
+                Instruction::Bne(Bne { rhs, lhs, out }) => {
+                    let state = find_state(&record, root, harts, first_step, initial_types);
+
+                    // error!("state.memory: {:?}",state.memory);
+                    // error!("state.registers: {:?}",state.registers);
+
+                    let lhs = state.registers[hart as usize].get(lhs);
+                    let rhs = state.registers[hart as usize].get(rhs);
+                    match (lhs, rhs) {
+                        (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
+                            if let Some(r) = r.value() {
+                                if let Some(l) = l.value() {
+                                    // error!("left and right l: {l}, r: {r}");
+
+                                    // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                    // don't need to actually visit/evaluate the branch at runtime.
+                                    if l != r {
+                                        // error!("bne not equal case");
+                                        let label_node = find_label(node, out).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        // error!("bne equal case");
+                                        followup(node_ref.next.unwrap(), hart)
+                                    }
+                                } else {
+                                    todo!()
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                        x @ _ => todo!("{x:?}"),
                     }
                 }
                 Instruction::Bnez(Bnez { src, dest }) => {
@@ -981,16 +1290,18 @@ unsafe fn queue_up(
                     let rhs = state.registers[hart as usize].get(rhs);
                     match (lhs, rhs) {
                         (Some(RegisterValue::Immediate(l)), Some(RegisterValue::Immediate(r))) => {
-                            if let Some(r) = r.value()
-                                && let Some(l) = l.value()
-                            {
-                                // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                                // don't need to actually visit/evaluate the branch at runtime.
-                                if l > r {
-                                    let label_node = find_label(node, out).unwrap();
-                                    followup(label_node, hart)
+                            if let Some(r) = r.value() {
+                                if let Some(l) = l.value() {
+                                    // Since in this case the path is determinate, we either queue up the label or the next ast node and
+                                    // don't need to actually visit/evaluate the branch at runtime.
+                                    if l > r {
+                                        let label_node = find_label(node, out).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        followup(node_ref.next.unwrap(), hart)
+                                    }
                                 } else {
-                                    followup(node_ref.next.unwrap(), hart)
+                                    todo!()
                                 }
                             } else {
                                 todo!()
@@ -1008,10 +1319,15 @@ unsafe fn queue_up(
                 | Instruction::Csrr(_)
                 | Instruction::Cast(_)
                 | Instruction::Sw(_)
+                | Instruction::Sb(_)
                 | Instruction::Ld(_)
                 | Instruction::Lw(_)
                 | Instruction::Lb(_)
                 | Instruction::Fail(_) => followup(node_ref.next.unwrap(), hart),
+                Instruction::Branch(Branch { out }) => {
+                    let label_node = find_label(node, out).unwrap();
+                    followup(label_node, hart)
+                }
                 // See note on `wfi`.
                 Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
                 // Blocking.
@@ -1059,19 +1375,19 @@ unsafe fn simple_nonnull(
 
 unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<AstNode>> {
     // Check start
-    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this
-        && tag == label
-    {
-        return Some(node);
+    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this {
+        if tag == label {
+            return Some(node);
+        }
     }
 
     // Trace backwards.
     let mut back = node;
     while let Some(prev) = back.as_ref().prev {
-        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this
-            && tag == label
-        {
-            return Some(prev);
+        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this {
+            if tag == label {
+                return Some(prev);
+            }
         }
         back = prev;
     }
@@ -1079,10 +1395,10 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace forward.
     let mut front = node;
     while let Some(next) = front.as_ref().next {
-        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this
-            && tag == label
-        {
-            return Some(next);
+        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this {
+            if tag == label {
+                return Some(next);
+            }
         }
         front = next;
     }
@@ -1121,7 +1437,10 @@ unsafe fn find_state(
             | Instruction::Blt(_)
             | Instruction::Bnez(_)
             | Instruction::Beqz(_)
-            | Instruction::Bge(_) => {}
+            | Instruction::Bge(_)
+            | Instruction::Bne(_)
+            | Instruction::Branch(_)
+            | Instruction::Beq(_) => {}
             Instruction::Cast(Cast { label, cast }) => {
                 // If the first encountered instance of a variable is a cast, the initial
                 // type will still be added, using the type specified in the cast.
@@ -1135,15 +1454,15 @@ unsafe fn find_state(
             }
             Instruction::Lat(Lat { register, label }) => {
                 let typeof_type = state.types.get(&hart).unwrap().get(label).unwrap();
-                let loc = state.memory.set_type(typeof_type, &mut tag_iter);
-                state.registers[hartu].insert(*register, RegisterValue::Address(loc.clone()));
+                let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter);
+                state.registers[hartu].insert(*register, RegisterValue::from(loc.clone()));
 
                 // Each type type should have its own unique label.
-                let existing = state
-                    .types
-                    .get_mut(&hart)
-                    .unwrap()
-                    .insert(loc, Type::List(vec![Type::U64, Type::U64, Type::U64]));
+                let hart_type_state = state.types.get_mut(&hart).unwrap();
+                let existing =
+                    hart_type_state.insert(loc, Type::List(vec![Type::U64, Type::U64, Type::U64]));
+                // Extend with subtypes.
+                hart_type_state.extend(subtypes.into_iter());
                 debug_assert!(existing.is_none());
             }
             Instruction::La(La { register, label }) => {
@@ -1164,7 +1483,10 @@ unsafe fn find_state(
                     todo!()
                 };
                 match to_value {
-                    RegisterValue::Address(to_label) => {
+                    RegisterValue::Address(MemoryLocation {
+                        tag: to_label,
+                        offset: 0,
+                    }) => {
                         let to_type = state.types.get(&hart).unwrap().get(to_label).unwrap();
                         // We should have already checked the type is large enough for the store.
                         debug_assert!(size(to_type) >= 4);
@@ -1174,6 +1496,45 @@ unsafe fn find_state(
                                     state.memory.set_word(
                                         &MemoryLocation::from(to_label.clone()),
                                         <[u8; 4]>::try_from(&imm.to_ne_bytes()[4..8]).unwrap(),
+                                    );
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    _ => todo!(),
+                }
+            }
+            Instruction::Sb(Sb { to, from, offset }) => {
+                let Offset {
+                    value: Immediate { value: 0 },
+                } = offset
+                else {
+                    todo!()
+                };
+
+                let Some(to_value) = state.registers[hartu].get(to) else {
+                    todo!()
+                };
+                let Some(from_value) = state.registers[hartu].get(from) else {
+                    todo!()
+                };
+                match to_value {
+                    RegisterValue::Address(MemoryLocation {
+                        tag: to_label,
+                        offset: 0,
+                    }) => {
+                        let to_type = state.types.get(&hart).unwrap().get(to_label).unwrap();
+                        // We should have already checked the type is large enough for the store.
+                        debug_assert!(size(to_type) >= 1);
+                        match from_value {
+                            RegisterValue::Immediate(from_imm) => {
+                                if let Some(imm) = from_imm.value() {
+                                    state.memory.set_byte(
+                                        &MemoryLocation::from(to_label.clone()),
+                                        imm.to_ne_bytes()[7],
                                     );
                                 } else {
                                     todo!()
@@ -1196,21 +1557,19 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(from_label) => {
+                    RegisterValue::Address(
+                        memloc @ MemoryLocation {
+                            tag: from_label,
+                            offset: from_offset,
+                        },
+                    ) => {
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 8);
-                        let Some(doubleword) = state
-                            .memory
-                            .get_doubleword(&MemoryLocation::from(from_label.clone()))
-                        else {
-                            todo!()
-                        };
-                        let imm = Immediate::from(doubleword);
-                        state.registers[hartu]
-                            .insert(*to, RegisterValue::Immediate(ImmediateRange(imm..=imm)));
+                        let doubleword = state.memory.get_doubleword(memloc).unwrap();
+                        state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
                     }
-                    _ => todo!(),
+                    x @ _ => todo!("{x:?}"),
                 }
             }
             Instruction::Lw(Lw { to, from, offset }) => {
@@ -1224,7 +1583,10 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(from_label) => {
+                    RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    }) => {
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 4);
@@ -1252,7 +1614,10 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(from_label) => {
+                    RegisterValue::Address(MemoryLocation {
+                        tag: from_label,
+                        offset: 0,
+                    }) => {
                         let from_type = state.types.get(&hart).unwrap().get(from_label).unwrap();
                         // We should have already checked the type is large enough for the load.
                         debug_assert!(size(from_type) >= 1);
@@ -1275,7 +1640,25 @@ unsafe fn find_state(
                     Some(RegisterValue::Immediate(imm)) => {
                         state.registers[hartu].insert(*out, RegisterValue::Immediate(imm + *rhs));
                     }
-                    _ => todo!(),
+                    Some(RegisterValue::Address(MemoryLocation { tag, offset })) => {
+                        // error!("state.registers[hartu]: {:?}",state.registers[hartu]);
+
+                        debug_assert!(
+                            offset.checked_add(rhs.value as isize).is_some(),
+                            "overflow: {offset} + {}",
+                            rhs.value as usize
+                        );
+
+                        state.registers[hartu].insert(
+                            *out,
+                            RegisterValue::Address(MemoryLocation {
+                                tag,
+                                offset: offset + rhs.value as isize,
+                            }),
+                        );
+                        // error!("state.registers[hartu]: {:?}",state.registers[hartu]);
+                    }
+                    x @ _ => todo!("{x:?}"),
                 }
             }
             Instruction::Csrr(Csrr { dest, src }) => match src {
@@ -1286,7 +1669,7 @@ unsafe fn find_state(
             },
             // TODO Some interrupt state is likely affected here so this needs to be added.
             Instruction::Wfi(_) => {}
-            Instruction::Unreachable(_) => {},
+            Instruction::Unreachable(_) => {}
             x => todo!("{x:?}"),
         }
         current = current.as_ref().next[*next];

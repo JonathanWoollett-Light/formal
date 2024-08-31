@@ -41,10 +41,10 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
         // Add width
         let width = display.chars().count();
 
-        if let Some(pd) = prev_depth
-            && depth <= pd
-        {
-            column += width_spacing + width + 1;
+        if let Some(pd) = prev_depth {
+            if depth <= pd {
+                column += width_spacing + width + 1;
+            }
         }
         prev_depth = Some(depth);
 

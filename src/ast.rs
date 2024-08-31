@@ -96,6 +96,8 @@ pub enum Instruction {
     Bne(Bne),
     Cast(Cast),
     Lat(Lat),
+    Branch(Branch),
+    Beq(Beq),
 }
 
 fn new_instruction(src: &[char]) -> Instruction {
@@ -120,6 +122,8 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'd', ' ', rem @ ..] => Instruction::Ld(new_ld(rem)),
         ['b', 'n', 'e', ' ', rem @ ..] => Instruction::Bne(new_bne(rem)),
         ['l', 'a', 't', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
+        ['b', 'r', 'a', 'n', 'c', 'h', ' ', rem @ ..] => Instruction::Branch(new_branch(rem)),
+        ['b', 'e', 'q', ' ', rem @ ..] => Instruction::Beq(new_beq(rem)),
         [.., ':'] => Instruction::Label(new_label_instruction(src)),
         x => todo!("{x:?}"),
     }
@@ -153,6 +157,8 @@ impl fmt::Display for Instruction {
             Bne(bne) => write!(f, "{bne}"),
             Unreachable(unreachable) => write!(f, "{unreachable}"),
             Cast(cast) => write!(f, "{cast}"),
+            Branch(branch) => write!(f, "{branch}"),
+            Beq(beq) => write!(f, "{beq}"),
         }
     }
 }
@@ -222,6 +228,26 @@ impl Type {
         }
     }
 }
+impl TryFrom<FlatType> for Type {
+    type Error = ();
+    fn try_from(flat: FlatType) -> Result<Self, Self::Error> {
+        match flat {
+            FlatType::I8 => Ok(Self::I8),
+            FlatType::U8 => Ok(Self::U8),
+            FlatType::I16 => Ok(Self::I16),
+            FlatType::U16 => Ok(Self::U16),
+            FlatType::I32 => Ok(Self::I32),
+            FlatType::U32 => Ok(Self::U32),
+            FlatType::I64 => Ok(Self::I64),
+            FlatType::U64 => Ok(Self::U64),
+            FlatType::List => Err(()),
+            _ => todo!(),
+        }
+    }
+}
+
+use itertools::intersperse;
+use itertools::Itertools;
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -237,10 +263,7 @@ impl fmt::Display for Type {
             Type::List(types) => write!(
                 f,
                 "{}",
-                types
-                    .iter()
-                    .map(|t| t.to_string())
-                    .intersperse(String::from(" "))
+                intersperse(types.iter().map(|t| t.to_string()), String::from(" "))
                     .collect::<String>()
             ),
         }
@@ -288,6 +311,56 @@ fn new_cast(src: &[char]) -> Cast {
         }
     }
     unreachable!()
+}
+
+#[derive(Debug, Clone)]
+pub struct Branch {
+    pub out: Label,
+}
+
+impl fmt::Display for Branch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "branch {}", self.out)
+    }
+}
+fn new_branch(src: &[char]) -> Branch {
+    let out = src
+        .iter()
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
+    Branch {
+        out: new_label(&out),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Beq {
+    pub lhs: Register,
+    pub rhs: Register,
+    pub out: Label,
+}
+
+impl fmt::Display for Beq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "beq {}, {}, {}", self.lhs, self.rhs, self.out)
+    }
+}
+
+fn new_beq(src: &[char]) -> Beq {
+    let lhs = &src[0..2];
+    let rhs = &src[4..6];
+    let out = src
+        .iter()
+        .skip(8)
+        .take_while(|&&c| c != ' ')
+        .copied()
+        .collect::<Vec<_>>();
+    Beq {
+        lhs: new_register(lhs).unwrap(),
+        rhs: new_register(rhs).unwrap(),
+        out: new_label(&out),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -773,6 +846,7 @@ fn new_register(src: &[char]) -> Option<Register> {
         ['t', '2'] => Some(Register::X7),
         ['t', '3'] => Some(Register::X28),
         ['t', '4'] => Some(Register::X29),
+        ['t', '5'] => Some(Register::X30),
         ['a', '0'] => Some(Register::X10),
         ['a', '1'] => Some(Register::X11),
         _ => None,

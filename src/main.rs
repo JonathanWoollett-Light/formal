@@ -1,8 +1,3 @@
-#![feature(let_chains)]
-#![feature(iter_intersperse)]
-#![feature(generic_arg_infer)]
-#![feature(extract_if)]
-
 use std::alloc::dealloc;
 use std::alloc::{alloc, Layout};
 use std::ptr::NonNull;
@@ -45,9 +40,11 @@ fn main() {
             path = match ExplorererPath::next_step(path) {
                 ExplorePathResult::Continue(p) => p,
                 // The path was invalid and there is no other valid path.
-                ExplorePathResult::Invalid(true) => break None,
+                ExplorePathResult::Invalid { complete: true, .. } => break None,
                 // The path was invalid but there may be another valid path.
-                ExplorePathResult::Invalid(false) => explorerer.new_path(),
+                ExplorePathResult::Invalid {
+                    complete: false, ..
+                } => explorerer.new_path(),
                 ExplorePathResult::Valid {
                     initial_types,
                     touched,
@@ -109,15 +106,31 @@ fn print_ast(root: Option<NonNull<AstNode>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use crate::*;
+    use draw::draw_tree;
     use tracing::{info, level_filters::LevelFilter};
     use tracing_subscriber::layer::SubscriberExt;
     #[test]
     fn two() {
+        let now = std::time::Instant::now();
         let asserter = tracing_assertions::Layer::default();
+        asserter.disable(); // TODO Remove this, only here for debugging.
+
         // let registry = tracing_subscriber::Registry::default();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open("foo.txt")
+            .unwrap();
+
         let registry = tracing_subscriber::fmt::Subscriber::builder()
-            .with_max_level(LevelFilter::TRACE)
+            .with_max_level(LevelFilter::ERROR)
+            .with_test_writer()
+            .with_writer(file)
+            .with_ansi(false)
             .finish();
         let subscriber = registry.with(asserter.clone());
         let guard = tracing::subscriber::set_default(subscriber);
@@ -190,7 +203,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -210,7 +226,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -231,7 +250,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -253,7 +275,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -276,7 +301,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -300,7 +328,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -325,7 +356,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -351,7 +385,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -378,7 +415,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -406,7 +446,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -426,7 +469,10 @@ mod tests {
                 let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
                 assert!(matches!(
                     ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid(false)
+                    ExplorePathResult::Invalid {
+                        complete: false,
+                        ..
+                    }
                 ));
                 assert!(a);
                 assert!(b);
@@ -464,7 +510,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -475,7 +524,10 @@ mod tests {
                 }
                 assert!(matches!(
                     ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid(false)
+                    ExplorePathResult::Invalid {
+                        complete: false,
+                        ..
+                    }
                 ));
             }
             path = explorerer.new_path();
@@ -518,7 +570,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -529,7 +584,10 @@ mod tests {
                 }
                 assert!(matches!(
                     ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid(false)
+                    ExplorePathResult::Invalid {
+                        complete: false,
+                        ..
+                    }
                 ));
             }
             path = explorerer.new_path();
@@ -580,7 +638,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
             ));
             assert!(a & b & c);
 
@@ -593,7 +654,10 @@ mod tests {
                 }
                 assert!(matches!(
                     ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid(false)
+                    ExplorePathResult::Invalid {
+                        complete: false,
+                        ..
+                    }
                 ));
             }
 
@@ -736,17 +800,56 @@ mod tests {
             assert!(a);
 
             // TODO I think this is where the endless loop comes from, we get stuck on the racy instructions.
-            for _ in 0..516 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(false)
-            ));
-            
+            let mut count = 0;
+            let invalid = loop {
+                if count % 10_000 == 0 {
+                    print!(".");
+                    std::io::stdout().flush().unwrap();
+                }
+                // // Prints the tree for 1 harts
+                // if count % 3_000_000 == 0 {
+                //     let root = path
+                //         .explorerer
+                //         .roots
+                //         .iter()
+                //         .find(|r| r.as_ref().harts == 1)
+                //         .unwrap();
+                //     let [hart_root] = root.as_ref().next.as_slice() else {
+                //         panic!()
+                //     };
+                //     let check = draw_tree(*hart_root, 2, |n| {
+                //         let r = n.as_ref();
+                //         format!("{}", r.node.as_ref().this)
+                //     });
+                //     println!();
+                //     println!("{check}");
+                //     println!();
+                // }
+                path = match ExplorererPath::next_step(path) {
+                    ExplorePathResult::Continue(p) => p,
+                    invalid @ ExplorePathResult::Invalid { .. } => break invalid,
+                    _ => todo!(),
+                };
+                count += 1;
+            };
+            let ExplorePathResult::Invalid {
+                complete,
+                path,
+                explanation,
+            } = invalid
+            else {
+                panic!()
+            };
+
+            println!("test time: {:?}", now.elapsed());
+
+            println!("\n\n{complete}\n\n");
+            println!("\n\n{path}\n\n");
+            println!("\n\n{explanation}\n\n");
 
             todo!();
         }
+
         drop(guard);
     }
 }
