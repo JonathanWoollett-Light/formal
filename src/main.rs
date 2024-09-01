@@ -46,9 +46,9 @@ fn main() {
                     complete: false, ..
                 } => explorerer.new_path(),
                 ExplorePathResult::Valid {
-                    initial_types,
+                    configuration,
                     touched,
-                } => break Some((initial_types, touched)),
+                } => break Some((configuration, touched)),
             }
         };
     }

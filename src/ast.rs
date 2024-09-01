@@ -43,7 +43,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
-        ['#', '$', ' ', rem @ ..] => Instruction::Cast(new_cast(rem)),
+        ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
         ['#', ..] => return,
         _ => new_instruction(src),
     };
@@ -94,7 +94,7 @@ pub enum Instruction {
     Bge(Bge),
     Ld(Ld),
     Bne(Bne),
-    Cast(Cast),
+    Define(Define),
     Lat(Lat),
     Branch(Branch),
     Beq(Beq),
@@ -156,7 +156,7 @@ impl fmt::Display for Instruction {
             Ld(ld) => write!(f, "{ld}"),
             Bne(bne) => write!(f, "{bne}"),
             Unreachable(unreachable) => write!(f, "{unreachable}"),
-            Cast(cast) => write!(f, "{cast}"),
+            Define(cast) => write!(f, "{cast}"),
             Branch(branch) => write!(f, "{branch}"),
             Beq(beq) => write!(f, "{beq}"),
         }
@@ -164,7 +164,6 @@ impl fmt::Display for Instruction {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(u64)]
 pub enum FlatType {
     U8 = 0,
     I8 = 1,
@@ -175,6 +174,7 @@ pub enum FlatType {
     U64 = 6,
     I64 = 7,
     List = 8,
+    Union = 9,
 }
 
 impl From<&Type> for FlatType {
@@ -189,23 +189,23 @@ impl From<&Type> for FlatType {
             Type::U64 => FlatType::U64,
             Type::I64 => FlatType::I64,
             Type::List(_) => FlatType::List,
+            Type::Union(_) => FlatType::Union,
+            _ => todo!(),
         }
     }
 }
 impl From<Type> for FlatType {
     fn from(t: Type) -> Self {
-        match t {
-            Type::U8 => FlatType::U8,
-            Type::I8 => FlatType::I8,
-            Type::U16 => FlatType::U16,
-            Type::I16 => FlatType::I16,
-            Type::U32 => FlatType::U32,
-            Type::I32 => FlatType::I32,
-            Type::U64 => FlatType::U64,
-            Type::I64 => FlatType::I64,
-            Type::List(_) => FlatType::List,
-        }
+        Self::from(&t)
     }
+}
+use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashSet};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Locality {
+    Thread,
+    Global,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -219,8 +219,13 @@ pub enum Type {
     U64,
     I64,
     List(Vec<Type>),
+    /// Union are kinda virtual
+    Union(BTreeSet<Type>),
 }
 impl Type {
+    pub fn type_type() -> Self {
+        Self::List(vec![Self::U64, Self::U64, Self::U64, Self::U8])
+    }
     pub fn list_mut(&mut self) -> &mut Vec<Type> {
         match self {
             Self::List(list) => list,
@@ -228,6 +233,7 @@ impl Type {
         }
     }
 }
+
 impl TryFrom<FlatType> for Type {
     type Error = ();
     fn try_from(flat: FlatType) -> Result<Self, Self::Error> {
@@ -241,6 +247,7 @@ impl TryFrom<FlatType> for Type {
             FlatType::I64 => Ok(Self::I64),
             FlatType::U64 => Ok(Self::U64),
             FlatType::List => Err(()),
+            FlatType::Union => Err(()),
             _ => todo!(),
         }
     }
@@ -262,10 +269,17 @@ impl fmt::Display for Type {
             Type::I64 => write!(f, "i64"),
             Type::List(types) => write!(
                 f,
-                "{}",
+                "[{}]",
                 intersperse(types.iter().map(|t| t.to_string()), String::from(" "))
                     .collect::<String>()
             ),
+            Type::Union(union) => write!(
+                f,
+                "{{{}}}",
+                intersperse(union.iter().map(|t| t.to_string()), String::from(" "))
+                    .collect::<String>()
+            ),
+            _ => todo!(),
         }
     }
 }
@@ -289,28 +303,47 @@ fn new_type(src: &[char]) -> Type {
     }
 }
 
+/// Defines a variable.
+/// 
+/// This is neccessary since not all type combinations are explored and to be
+/// practical (not have absurd compile times) some may need to be manually
+/// specified.
 #[derive(Debug, Clone)]
-pub struct Cast {
+pub struct Define {
     pub label: Label,
-    pub cast: Type,
+    pub locality: Option<Locality>,
+    pub cast: Option<Type>,
 }
 
-impl fmt::Display for Cast {
+impl fmt::Display for Define {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "#$ {}, {}", self.label, self.cast)
     }
 }
 
-fn new_cast(src: &[char]) -> Cast {
-    for i in 0..src.len() {
-        if src[i] == ' ' {
-            return Cast {
-                label: new_label(&src[..i]),
-                cast: new_type(&src[i + 1..]),
-            };
-        }
+fn new_cast(src: &[char]) -> Define {
+    let mut iter = src.split(|c|*c=='_');
+    let label = new_label(iter.next().unwrap());
+    let locality = match iter.next().unwrap() {
+        ['_'] => None,
+        rem => Some(new_locality(rem))
+    };
+    let cast = match iter.next().unwrap() {
+        ['_'] => None,
+        rem => Some(new_type(rem))
+    };
+    Define {
+        label: label,
+        locality,
+        cast,
     }
-    unreachable!()
+}
+fn new_locality(src:&[char]) -> Locality {
+    match src {
+        ['t','h','r','e','a','d'] => Locality::Thread,
+        ['g','l','o','b','a','l'] => Locality::Global,
+        _ => todo!()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1019,6 +1052,14 @@ fn new_label_instruction(src: &[char]) -> LabelInstruction {
 #[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Label {
     pub tag: String,
+}
+impl Label {
+    /// Creates a thread local instance of the label.
+    pub fn thread_local(&self, hart: u8) -> Self {
+        Self {
+            tag: format!("{}_{hart}", self.tag),
+        }
+    }
 }
 impl fmt::Debug for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

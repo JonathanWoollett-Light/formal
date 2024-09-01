@@ -23,8 +23,8 @@ _start:
     csrr t0, mhartid
     bnez t0, _wait
 
-    #$ welcome u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8
-    #          H  e  l  l  o  ,     W  o  r  l  d  !  \n 0
+    #$ welcome local u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8
+    #                H  e  l  l  o  ,     W  o  r  l  d  !  \n 0
     # Type exploration doesn't explore list types since they are infinite, so
     # to define a list a user must define it manually.
 

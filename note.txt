@@ -1,3 +1,7 @@
+Even if a value is global, you still need seperate type maps per hart, since each hart can still treat it as a different type.
+
+//////////////////////////
+
 The problem occurs since the program iterates through all type/hart combinations for 2 harts e.g. (u8,u8), (u8,u16) until (u8,i64) finding none valid.
 It then restarts again at (u8,) then finds no valid type for hart 2, thus returns, leading to an endless loop, we need to rework it so when it finds
 no type valid for a higher number hart, it advances the type for the next lower numbered hart e.g. moves to (i8,..).
