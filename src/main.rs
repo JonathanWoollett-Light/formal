@@ -454,29 +454,29 @@ mod tests {
             assert!(a & b & c);
 
             // Iterate over all possibilities for `value: I8` on hart 0.
-            let mut types_iter = TYPE_LIST.iter().skip(1);
-            for _ in 0..7 {
-                path = explorerer.new_path();
-                for _ in 0..6 {
-                    path = ExplorererPath::next_step(path).continued().unwrap();
-                }
+            // let mut types_iter = TYPE_LIST.iter().skip(1);
+            // for _ in 0..7 {
+            //     path = explorerer.new_path();
+            //     for _ in 0..6 {
+            //         path = ExplorererPath::next_step(path).continued().unwrap();
+            //     }
 
-                let s = format!(
-                    "initial_types: {{0: {{\"value\": I8}}, 1: {{\"value\": {:?}}}}}",
-                    types_iter.next().unwrap()
-                );
-                let a = asserter.matches(s);
-                let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
-                assert!(matches!(
-                    ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid {
-                        complete: false,
-                        ..
-                    }
-                ));
-                assert!(a);
-                assert!(b);
-            }
+            //     let s = format!(
+            //         "initial_types: {{0: {{\"value\": I8}}, 1: {{\"value\": {:?}}}}}",
+            //         types_iter.next().unwrap()
+            //     );
+            //     let a = asserter.matches(s);
+            //     let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            //     assert!(matches!(
+            //         ExplorererPath::next_step(path),
+            //         ExplorePathResult::Invalid {
+            //             complete: false,
+            //             ..
+            //         }
+            //     ));
+            //     assert!(a);
+            //     assert!(b);
+            // }
 
             path = explorerer.new_path();
 

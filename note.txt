@@ -1,3 +1,9 @@
+Thread local storage can theroritcally be accessed by a different tyhread if it somehow obtains the
+address of the data in another thread so we should have an option whether to test race conditions
+for thread local storage or not (the defualt should be not to massivelyu cut down compile times).
+
+
+
 Even if a value is global, you still need seperate type maps per hart, since each hart can still treat it as a different type.
 
 //////////////////////////

@@ -190,7 +190,6 @@ impl From<&Type> for FlatType {
             Type::I64 => FlatType::I64,
             Type::List(_) => FlatType::List,
             Type::Union(_) => FlatType::Union,
-            _ => todo!(),
         }
     }
 }
@@ -206,6 +205,19 @@ use std::collections::{BTreeSet, HashSet};
 pub enum Locality {
     Thread,
     Global,
+}
+
+impl fmt::Display for Locality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Thread => "thread",
+                Self::Global => "global",
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -248,7 +260,6 @@ impl TryFrom<FlatType> for Type {
             FlatType::U64 => Ok(Self::U64),
             FlatType::List => Err(()),
             FlatType::Union => Err(()),
-            _ => todo!(),
         }
     }
 }
@@ -279,7 +290,6 @@ impl fmt::Display for Type {
                 intersperse(union.iter().map(|t| t.to_string()), String::from(" "))
                     .collect::<String>()
             ),
-            _ => todo!(),
         }
     }
 }
@@ -304,7 +314,7 @@ fn new_type(src: &[char]) -> Type {
 }
 
 /// Defines a variable.
-/// 
+///
 /// This is neccessary since not all type combinations are explored and to be
 /// practical (not have absurd compile times) some may need to be manually
 /// specified.
@@ -317,20 +327,32 @@ pub struct Define {
 
 impl fmt::Display for Define {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "#$ {}, {}", self.label, self.cast)
+        write!(
+            f,
+            "#$ {} {} {}",
+            self.label,
+            match &self.locality {
+                None => String::from("_"),
+                Some(locality) => locality.to_string(),
+            },
+            match &self.cast {
+                None => String::from("_"),
+                Some(cast) => cast.to_string(),
+            }
+        )
     }
 }
 
 fn new_cast(src: &[char]) -> Define {
-    let mut iter = src.split(|c|*c=='_');
+    let mut iter = src.split(|c| *c == '_');
     let label = new_label(iter.next().unwrap());
     let locality = match iter.next().unwrap() {
         ['_'] => None,
-        rem => Some(new_locality(rem))
+        rem => Some(new_locality(rem)),
     };
     let cast = match iter.next().unwrap() {
         ['_'] => None,
-        rem => Some(new_type(rem))
+        rem => Some(new_type(rem)),
     };
     Define {
         label: label,
@@ -338,11 +360,11 @@ fn new_cast(src: &[char]) -> Define {
         cast,
     }
 }
-fn new_locality(src:&[char]) -> Locality {
+fn new_locality(src: &[char]) -> Locality {
     match src {
-        ['t','h','r','e','a','d'] => Locality::Thread,
-        ['g','l','o','b','a','l'] => Locality::Global,
-        _ => todo!()
+        ['t', 'h', 'r', 'e', 'a', 'd'] => Locality::Thread,
+        ['g', 'l', 'o', 'b', 'a', 'l'] => Locality::Global,
+        _ => todo!(),
     }
 }
 
