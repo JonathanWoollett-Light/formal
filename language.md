@@ -1,10 +1,18 @@
-#### representing memory
-The simplest memory is a strip
-─│┌┐└┘
+#### placement
 
-Every allocated item in memory has a virtual base
+- global initialized data goes in `.data`
+- global initialized read-only data goes in `.rodata`
+- global uninitialized data goes in `.bss`
+- thread initialized data goes in `.data`
+- thread uninitialized data goes in `.bss` (it could go in the stack but there's no point)
+- thread initialized read-only data goes in `.rodata`
 
-With maximum control of linker
+#### racy-ness
+
+thread local data is still stored in global memory so accesses are still racy. However the assumption only 1 thread accesses this data can massively speed up compile times as it means the majority of different orderings for loads/stores no longer need to be checked.
+
+So there should be a cli argument about whether to evaluate racyness for thread local data.
+
 #### exploring lists and unions
 
 Since there are an indefinite number of lists exploration needs to be constrained. This can be done with 2 variables `list_depth` and `list_width`.
