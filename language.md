@@ -1,10 +1,18 @@
+### cli args
+
+- `list_depth`: How many layers of nested lists to explore during type exploration. The default is 0.
+- `list_width`: How many items to explore in lists during type exploration. The default is 0.
+- `union_depth`: How many layers of nested unions to explore during type exploration. The default is 0.
+- `tls`: Whether to store thread local data in `.tdata` and `.tbss` or attempt to store in `.data` and `.bss`. The default is `true` (and this is the only current supported setting).
+
 #### placement
 
 - global initialized data goes in `.data`
 - global initialized read-only data goes in `.rodata`
 - global uninitialized data goes in `.bss`
-- thread initialized data goes in `.data`
-- thread uninitialized data goes in `.bss` (it could go in the stack but there's no point)
+There should be an option (`tls`) whether to store `thread` locality in `.tdata` or `.data` (and `.tbss` or `.bss`) storing in TLS is safer as we can ensure thread isolation (atleast as much as possible) while using global `.data` is more memory efficient as it doesn't duplicate the data in threads where it is unused.
+- thread initialized data goes in `.data` or `.tdata`
+- thread uninitialized data goes in `.bss` or `.tbss` (it could go in the stack but there's no point)
 - thread initialized read-only data goes in `.rodata`
 
 #### racy-ness

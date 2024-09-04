@@ -1,6 +1,8 @@
 .global _start
 _start:
     # Do racy arithmetic with an undefined variable.
+    # Use global locality so the load/stores are racy.
+    #$ value global _
     la t0, value
 
     # Set to 0
@@ -23,10 +25,11 @@ _start:
     csrr t0, mhartid
     bnez t0, _wait
 
-    #$ welcome local u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8
+    #$ welcome _ u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8
     #                H  e  l  l  o  ,     W  o  r  l  d  !  \n 0
     # Type exploration doesn't explore list types since they are infinite, so
     # to define a list a user must define it manually.
+    # In this case we leave the locality as unspecified which will default to `thread`.
 
     # Declare string
     # Get address of type structure
