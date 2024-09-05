@@ -1,4 +1,3 @@
-use std::alloc::dealloc;
 use std::alloc::{alloc, Layout};
 use std::ptr::NonNull;
 
@@ -109,14 +108,14 @@ mod tests {
     use std::io::Write;
 
     use crate::*;
-    use draw::draw_tree;
-    use tracing::{info, level_filters::LevelFilter};
+    
+    use tracing::level_filters::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
     #[test]
     fn two() {
         let now = std::time::Instant::now();
         let asserter = tracing_assertions::Layer::default();
-        asserter.disable(); // TODO Remove this, only here for debugging.
+        // asserter.disable(); // TODO Remove this, only here for debugging.
 
         // let registry = tracing_subscriber::Registry::default();
         let file = std::fs::OpenOptions::new()

@@ -13,7 +13,6 @@ use std::{
     ptr::NonNull,
 };
 use tracing::error;
-use tracing::info;
 use tracing::trace;
 
 /// Compile time size
@@ -132,6 +131,7 @@ impl MemoryMap {
         &mut self,
         value: &Type,
         tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
+        hart: u8,
     ) -> (Label, ProgramConfiguration) {
         let mut vec = Vec::new();
         vec.push((None, value.clone()));
@@ -169,7 +169,11 @@ impl MemoryMap {
                     .iter()
                     .map(|_| MemoryValueType::type_of())
                     .collect();
-                subtypes.insert(tag.clone(), (Locality::Thread, Type::List(subtypes_list)));
+                subtypes.insert(
+                    tag.clone(),
+                    hart,
+                    (Locality::Thread, Type::List(subtypes_list)),
+                );
                 // Insert subtypes into memory.
                 self.map
                     .insert(tag.clone(), MemoryValue::Types(memory_types));
@@ -623,10 +627,10 @@ impl MemoryValueU64 {
             }
             if self.start == self.stop {
                 let byte = self.start.to_ne_bytes()[i];
-                return Some(MemoryValueU8 {
+                Some(MemoryValueU8 {
                     start: byte,
                     stop: byte,
-                });
+                })
             } else {
                 todo!()
             }
@@ -881,19 +885,61 @@ impl std::ops::Add<Immediate> for ImmediateRange {
 
 /// Each execution path is based on the initial types assumed for each variables encountered and the locality assumed for each variable encountered.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ProgramConfiguration(BTreeMap<Label, (Locality, Type)>);
+pub struct ProgramConfiguration(BTreeMap<Label, (LabelLocality, Type)>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum LabelLocality {
+    // If the locality is thread, we want to record which threads need a copy.
+    Thread(BTreeSet<u8>),
+    Global,
+}
+impl From<Locality> for LabelLocality {
+    fn from(locality: Locality) -> Self {
+        match locality {
+            Locality::Global => Self::Global,
+            Locality::Thread => Self::Thread(BTreeSet::new()),
+        }
+    }
+}
 
 impl ProgramConfiguration {
     fn append(&mut self, other: ProgramConfiguration) {
-        for (label, ttype) in other.0.into_iter() {
-            self.insert(label, ttype);
+        for (label, (locality, ttype)) in other.0.into_iter() {
+            match locality {
+                LabelLocality::Global => {
+                    assert!(!self.0.contains_key(&label));
+                    self.0.insert(label, (LabelLocality::Global, ttype));
+                }
+                LabelLocality::Thread(harts) => {
+                    for hart in harts {
+                        self.insert(label.clone(), hart, (Locality::Thread, ttype.clone()));
+                    }
+                }
+            }
         }
     }
-    fn insert(&mut self, key: Label, value: (Locality, Type)) {
-        let res = self.0.insert(key, value);
-        assert!(res.is_none());
+    fn insert(&mut self, key: Label, hart: u8, (locality, ttype): (Locality, Type)) {
+        match locality {
+            Locality::Global => {
+                let res = self.0.insert(key, (LabelLocality::Global, ttype));
+                assert!(res.is_none());
+            }
+            Locality::Thread => {
+                if let Some((existing_locality, existing_ttype)) = self.0.get_mut(&key) {
+                    assert_eq!(*existing_ttype, ttype);
+                    let LabelLocality::Thread(threads) = existing_locality else {
+                        panic!()
+                    };
+                    threads.insert(hart);
+                } else {
+                    let mut set = BTreeSet::new();
+                    set.insert(hart);
+                    self.0.insert(key, (LabelLocality::Thread(set), ttype));
+                }
+            }
+        }
     }
-    fn get(&self, key: &Label) -> Option<&(Locality, Type)> {
+    fn get(&self, key: &Label) -> Option<&(LabelLocality, Type)> {
         self.0.get(key)
     }
     fn new() -> Self {
@@ -1010,7 +1056,6 @@ impl Explorerer {
     }
 }
 
-
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
 pub struct ExplorererPath<'a> {
     pub explorerer: &'a mut Explorerer,
@@ -1036,6 +1081,7 @@ fn load_label(
     excluded: &mut BTreeSet<ProgramConfiguration>,
     ttype: Option<Type>,        // The type to use for the variable if `Some(_)`.
     locality: Option<Locality>, // The locality to use for the variable if `Some(_)`.
+    hart: u8,
 ) -> bool {
     // If the variable is already define, the type and locality must match any given.
     // E.g.
@@ -1056,7 +1102,7 @@ fn load_label(
             }
         }
         if let Some(given_locality) = locality {
-            if given_locality != *existing_locality {
+            if given_locality != Locality::from(existing_locality) {
                 return false;
             }
         }
@@ -1078,7 +1124,7 @@ fn load_label(
     for locality in liter {
         for ttype in titer.iter().cloned() {
             let mut config = configuration.clone();
-            config.insert(label.clone(), (locality, ttype));
+            config.insert(label.clone(), hart, (locality, ttype));
 
             if !excluded.contains(&config) {
                 *configuration = config;
@@ -1086,7 +1132,7 @@ fn load_label(
             }
         }
     }
-    return false;
+    false
 }
 
 pub enum ExplorePathResult<'a> {
@@ -1211,7 +1257,8 @@ impl<'a> ExplorererPath<'a> {
                     &mut configuration,
                     &mut explorerer.excluded,
                     cast.clone(),
-                    locality.clone(),
+                    *locality,
+                    hart,
                 ) {
                     return invalid_path(
                         explorerer,
@@ -1228,6 +1275,7 @@ impl<'a> ExplorererPath<'a> {
                     &mut explorerer.excluded,
                     None,
                     None,
+                    hart,
                 ) {
                     return invalid_path(
                         explorerer,
@@ -1244,6 +1292,7 @@ impl<'a> ExplorererPath<'a> {
                     &mut explorerer.excluded,
                     None,
                     None,
+                    hart,
                 ) {
                     return invalid_path(
                         explorerer,
@@ -1269,7 +1318,7 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(&from_label).unwrap();
+                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(4)
                             + *from_offset
@@ -1311,7 +1360,7 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(&from_label).unwrap();
+                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(1)
                             + *from_offset
@@ -1482,6 +1531,15 @@ impl<'a> ExplorererPath<'a> {
     }
 }
 
+impl From<&LabelLocality> for Locality {
+    fn from(ll: &LabelLocality) -> Locality {
+        match ll {
+            LabelLocality::Thread(_) => Locality::Thread,
+            LabelLocality::Global => Locality::Global,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum InvalidExplanation {
     #[error("Could not allocate non-excluded type for {0} for `lat`.")]
@@ -1549,7 +1607,6 @@ unsafe fn invalid_path(
 
 use thiserror::Error;
 
-
 // Get the number of harts of this sub-tree and record the path.
 #[tracing::instrument(skip_all)]
 unsafe fn get_backpath_harts(
@@ -1596,7 +1653,7 @@ unsafe fn queue_up(
     // TOOD We duplicate so much work doing `find_state` in a bunch of places and
     // multiple times when the state hasn't change, we should avoid doing this call
     // here (and remove the it in other places).
-    let state = find_state(&record, root, harts, first_step, &configuration);
+    let state = find_state(&record, root, harts, first_step, configuration);
 
     // Search the verifier tree for the fronts of all harts.
     let mut fronts = BTreeMap::new();
@@ -1649,8 +1706,8 @@ unsafe fn queue_up(
                 if let RegisterValue::Address(MemoryLocation { tag, offset: _ }) = value {
                     let (locality, _ttype) = state.configuration.get(tag).unwrap();
                     match locality {
-                        Locality::Global => Some(Ok((hart, node))),  // Racy
-                        Locality::Thread => Some(Err((hart, node))), // Non-racy
+                        LabelLocality::Global => Some(Ok((hart, node))), // Racy
+                        LabelLocality::Thread(_) => Some(Err((hart, node))), // Non-racy
                     }
                 } else {
                     todo!()
@@ -1658,7 +1715,7 @@ unsafe fn queue_up(
             }
             // See note on `wfi`.
             Instruction::Wfi(_) => Some(Ok((hart, node))),
-            x @ _ => todo!("{x:?}"),
+            x => todo!("{x:?}"),
         }
     };
 
@@ -1715,7 +1772,7 @@ unsafe fn queue_up(
                                 todo!()
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 Instruction::Bne(Bne { rhs, lhs, out }) => {
@@ -1739,7 +1796,7 @@ unsafe fn queue_up(
                                 todo!()
                             }
                         }
-                        x @ _ => todo!("{x:?}"),
+                        x => todo!("{x:?}"),
                     }
                 }
                 Instruction::Bnez(Bnez { src, dest }) => {
@@ -1876,7 +1933,7 @@ unsafe fn queue_up(
                 Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
                 // Blocking.
                 Instruction::Unreachable(_) => None,
-                x @ _ => todo!("{x:?}"),
+                x => todo!("{x:?}"),
             }
         })
         .collect::<Result<Vec<_>, _>>();
@@ -1993,7 +2050,7 @@ unsafe fn find_state(
             }) => {
                 let (found_locality, found_type) = state.configuration.get(label).unwrap();
                 if let Some(defined_locality) = locality {
-                    assert_eq!(found_locality, defined_locality);
+                    assert_eq!(Locality::from(found_locality), *defined_locality);
                 }
                 if let Some(defined_cast) = cast {
                     assert_eq!(found_type, defined_cast);
@@ -2009,14 +2066,13 @@ unsafe fn find_state(
             // TOOD This is the only place where in finding state we need to modify `state.configuration`
             // is this the best way to do this? Could these types not be defined in `next_step` (like `la`)?
             Instruction::Lat(Lat { register, label }) => {
-                let (locality, typeof_type) = state.configuration.get(label).unwrap();
-                let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter);
+                let (_locality, typeof_type) = state.configuration.get(label).unwrap();
+                let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
                 state.registers[hartu].insert(*register, RegisterValue::from(loc.clone()));
 
                 // Each type type is thread local and unique between `lat` instructions.
                 let hart_type_state = &mut state.configuration;
-                let existing =
-                    hart_type_state.insert(loc, (Locality::Thread, MemoryValueType::type_of()));
+                hart_type_state.insert(loc, hart, (Locality::Thread, MemoryValueType::type_of()));
                 // Extend with subtypes.
                 hart_type_state.append(subtypes);
             }
@@ -2042,8 +2098,8 @@ unsafe fn find_state(
                             RegisterValue::U32(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
                                     let tag = match locality {
-                                        Locality::Global => to_label.clone(),
-                                        Locality::Thread => to_label.thread_local(hart),
+                                        LabelLocality::Global => to_label.clone(),
+                                        LabelLocality::Thread(_) => to_label.thread_local(hart),
                                     };
                                     let memloc = MemoryLocation {
                                         tag,
@@ -2087,8 +2143,8 @@ unsafe fn find_state(
                             RegisterValue::U8(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
                                     let tag = match locality {
-                                        Locality::Global => to_label.clone(),
-                                        Locality::Thread => to_label.thread_local(hart),
+                                        LabelLocality::Global => to_label.clone(),
+                                        LabelLocality::Thread(_) => to_label.thread_local(hart),
                                     };
                                     let memloc = MemoryLocation {
                                         tag,
@@ -2126,18 +2182,18 @@ unsafe fn find_state(
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
                         let tag = match locality {
-                            Locality::Global => from_label.clone(),
-                            Locality::Thread => from_label.thread_local(hart),
+                            LabelLocality::Global => from_label.clone(),
+                            LabelLocality::Thread(_) => from_label.thread_local(hart),
                         };
                         let memloc = MemoryLocation {
                             tag,
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
                         };
                         let doubleword =
-                            state.memory.get_u64(&memloc).expect(&format!("{memloc:?}"));
+                            state.memory.get_u64(&memloc).unwrap_or_else(|| panic!("{memloc:?}"));
                         state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
                     }
-                    x @ _ => todo!("{x:?}"),
+                    x => todo!("{x:?}"),
                 }
             }
             Instruction::Lw(Lw { to, from, offset }) => {
@@ -2160,8 +2216,8 @@ unsafe fn find_state(
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
                         let tag = match locality {
-                            Locality::Global => from_label.clone(),
-                            Locality::Thread => from_label.thread_local(hart),
+                            LabelLocality::Global => from_label.clone(),
+                            LabelLocality::Thread(_) => from_label.thread_local(hart),
                         };
                         let memloc = MemoryLocation {
                             tag,
@@ -2195,8 +2251,8 @@ unsafe fn find_state(
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
                         let tag = match locality {
-                            Locality::Global => from_label.clone(),
-                            Locality::Thread => from_label.thread_local(hart),
+                            LabelLocality::Global => from_label.clone(),
+                            LabelLocality::Thread(_) => from_label.thread_local(hart),
                         };
                         let memloc = MemoryLocation {
                             tag,

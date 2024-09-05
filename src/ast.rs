@@ -198,8 +198,7 @@ impl From<Type> for FlatType {
         Self::from(&t)
     }
 }
-use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Locality {
@@ -355,7 +354,7 @@ fn new_cast(src: &[char]) -> Define {
         rem => Some(new_type(rem)),
     };
     Define {
-        label: label,
+        label,
         locality,
         cast,
     }
