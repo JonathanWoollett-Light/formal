@@ -108,16 +108,21 @@ mod tests {
     use std::io::Write;
 
     use crate::*;
-    
+
+    use opentelemetry::global;
+    use std::process;
     use tracing::level_filters::LevelFilter;
+    use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    const LOKI_URL: &str = "http://localhost/3100";
+
     #[test]
     fn two() {
         let now = std::time::Instant::now();
-        let asserter = tracing_assertions::Layer::default();
-        // asserter.disable(); // TODO Remove this, only here for debugging.
 
-        // let registry = tracing_subscriber::Registry::default();
+        // Create file.
         let file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
@@ -125,13 +130,43 @@ mod tests {
             .open("foo.txt")
             .unwrap();
 
+        // Create base subscriber.
         let registry = tracing_subscriber::fmt::Subscriber::builder()
-            .with_max_level(LevelFilter::ERROR)
+            .with_max_level(LevelFilter::TRACE)
             .with_test_writer()
             .with_writer(file)
             .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_level(false)
             .finish();
+
+        // Create assertion layer.
+        let asserter = tracing_assertions::Layer::default();
+        // asserter.disable(); // TODO Remove this, only here for debugging.
         let subscriber = registry.with(asserter.clone());
+
+        // // Create jeager OTEL
+        // global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
+        // let tracer = opentelemetry_jaeger::new_pipeline()
+        //     .with_service_name("mini-redis")
+        //     .install_simple().unwrap();
+        // let opentelemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+        // let subscriber = subscriber.with(opentelemetry);
+
+        // // Create grafana loki layer.
+        // let (loki, task) = tracing_loki::builder()
+        //     .label("host", "mine")
+        //     .unwrap()
+        //     .extra_field("pid", format!("{}", process::id()))
+        //     .unwrap()
+        //     .build_url(Url::parse(LOKI_URL).unwrap())
+        //     .unwrap();
+        // // Start background task to deliver logs.
+        // tokio::spawn(task);
+        // let subscriber = subscriber.with(loki);
+
+        // Add layers
         let guard = tracing::subscriber::set_default(subscriber);
 
         let source = std::fs::read_to_string("./assets/two.s").unwrap();
@@ -156,7 +191,7 @@ mod tests {
             // With each step we check the logs to ensure the state is as expected.
 
             // At the start of the program there are no found variables so no initial types for variables.
-            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             // The initial state of the queue contains the 1st instruction for
             // the 1st hart for each number of running harts (in this case we
             // are checking program for systems with 1 hart and with 2 harts).
@@ -166,38 +201,95 @@ mod tests {
             // We start with no types explored so none excluded.
             let d = asserter.matches("excluded: {}");
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b & c & d);
+            (a & b & c & d).assert();
 
-            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
-            let b = asserter.matches("queue: [{ hart: 1/2, instruction: \"_start:\" }, { hart: 1/1, instruction: \"la t0, value\" }]");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"_start:\" }, \
+                { hart: 1/1, instruction: \"#$ value global _\" }\
+            ]",
+            );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {}, 1: {}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"la t0, value\" }, { hart: 2/2, instruction: \"la t0, value\" }]");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"#$ value global _\" }, \
+                { hart: 2/2, instruction: \"#$ value global _\" }\
+            ]",
+            );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {}}");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"#$ value global _\" }, \
+                { hart: 1/1, instruction: \"la t0, value\" }\
+            ]",
+            );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"li t1, 0\" }, { hart: 2/2, instruction: \"li t1, 0\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"la t0, value\" }, \
+                { hart: 2/2, instruction: \"la t0, value\" }\
+            ]",
+            );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"li t1, 0\" }, { hart: 1/1, instruction: \"sw t1, (t0)\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"la t0, value\" }, \
+                { hart: 1/1, instruction: \"li t1, 0\" }\
+            ]",
+            );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U8}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"li t1, 0\" }, \
+                { hart: 2/2, instruction: \"li t1, 0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            (a & b).assert();
+
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"li t1, 0\" }, \
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            (a & b).assert();
+
+            // Since we are storing a word in `value` it cannot be u8 as this would store outside of memory.
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"#$ value global _\" }\
+            ]",
+            );
             let c = asserter.matches(
                 "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}\
+                ProgramConfiguration({\"value\": (Global, U8)})\
             }",
             );
             assert!(matches!(
@@ -207,20 +299,27 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
-            for _ in 0..6 {
+            // Iterate until excluding value as i8.
+            for _ in 0..8 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I8}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"#$ value global _\" }\
+            ]",
+            );
             let c = asserter.matches(
                 "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)})\
             }",
             );
             assert!(matches!(
@@ -230,21 +329,28 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
-            for _ in 0..6 {
+            // Iterate until excluding value as u16.
+            for _ in 0..8 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U16}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"#$ value global _\" }\
+            ]",
+            );
             let c = asserter.matches(
                 "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)})\
             }",
             );
             assert!(matches!(
@@ -254,22 +360,28 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
-            for _ in 0..6 {
+            for _ in 0..8 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I16}}");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let a =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
+            let b = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"#$ value global _\" }\
+            ]",
+            );
             let c = asserter.matches(
                 "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)}), \
+                ProgramConfiguration({\"value\": (Global, I16)})\
             }",
             );
             assert!(matches!(
@@ -279,15 +391,15 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
-            for _ in 0..6 {
+            for _ in 0..454 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U32}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -305,7 +417,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
@@ -313,7 +425,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I32}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -332,7 +444,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
@@ -340,7 +452,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": U64}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -360,7 +472,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
@@ -368,7 +480,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {\"value\": I64}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -389,7 +501,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
@@ -397,7 +509,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U8}, 1: {}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -419,7 +531,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             path = explorerer.new_path();
 
@@ -427,7 +539,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": I8}, 1: {\"value\": U8}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -450,7 +562,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             // Iterate over all possibilities for `value: I8` on hart 0.
             // let mut types_iter = TYPE_LIST.iter().skip(1);
@@ -461,7 +573,7 @@ mod tests {
             //     }
 
             //     let s = format!(
-            //         "initial_types: {{0: {{\"value\": I8}}, 1: {{\"value\": {:?}}}}}",
+            //         "configuration: ProgramConfiguration({})",
             //         types_iter.next().unwrap()
             //     );
             //     let a = asserter.matches(s);
@@ -473,7 +585,7 @@ mod tests {
             //             ..
             //         }
             //     ));
-            //     assert!(a);
+            //     a.assert();
             //     assert!(b);
             // }
 
@@ -483,7 +595,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": I8}, 1: {}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -514,7 +626,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             for _ in 0..8 {
                 path = explorerer.new_path();
@@ -534,7 +646,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U16}, 1: {}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -574,7 +686,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             for _ in 0..8 {
                 path = explorerer.new_path();
@@ -593,7 +705,7 @@ mod tests {
             for _ in 0..3 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
-            let a = asserter.matches("initial_types: {0: {\"value\": I16}, 1: {}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
             let c = asserter.matches(
                 "excluded: {\
@@ -642,7 +754,7 @@ mod tests {
                     ..
                 }
             ));
-            assert!(a & b & c);
+            (a & b & c).assert();
 
             // Now starting with U32, we have reached a type for `value` in hart 0 that will pass.
             // It will need to iterate up to U32 for `value` in hart 1.
@@ -666,7 +778,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
             // So now is the first time we get past `sw t1, (t0)` on both harts.
-            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
@@ -674,9 +786,9 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
                 { hart: 1/2, instruction: \"li t1, 0\" }, \
@@ -684,9 +796,9 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
-            let a = asserter.matches("initial_types: {0: {\"value\": U32}, 1: {\"value\": U32}}");
+            let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"addi t1, t1, 1\" }, \
@@ -695,7 +807,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a & b);
+            (a & b).assert();
 
             let a = asserter.matches(
                 "queue: [\
@@ -705,7 +817,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             let a = asserter.matches(
                 "queue: [\
@@ -716,7 +828,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             let a = asserter.matches(
                 "queue: [\
@@ -728,7 +840,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             // See the queue has grown.
             let a = asserter.matches(
@@ -741,7 +853,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             let a = asserter.matches(
                 "queue: [\
@@ -753,7 +865,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             // And it grows again.
             let a = asserter.matches(
@@ -767,7 +879,7 @@ mod tests {
                 ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             // And it grows again.
             let a = asserter.matches(
@@ -782,7 +894,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             let a = asserter.matches(
                 "queue: [\
@@ -796,7 +908,7 @@ mod tests {
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            assert!(a);
+            a.assert();
 
             // TODO I think this is where the endless loop comes from, we get stuck on the racy instructions.
             let mut count = 0;

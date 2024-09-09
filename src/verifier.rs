@@ -87,7 +87,7 @@ fn locality_list() -> Vec<Locality> {
 
 #[derive(Debug)]
 struct MemoryMap {
-    map: HashMap<Label, MemoryValue>,
+    map: HashMap<MemoryLabel, MemoryValue>,
 }
 
 impl MemoryMap {
@@ -132,7 +132,7 @@ impl MemoryMap {
         value: &Type,
         tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
         hart: u8,
-    ) -> (Label, ProgramConfiguration) {
+    ) -> (MemoryLabel, ProgramConfiguration) {
         let mut vec = Vec::new();
         vec.push((None, value.clone()));
         let mut right = 0;
@@ -162,7 +162,11 @@ impl MemoryMap {
                     })
                     .collect::<Vec<_>>();
                 let tag = tag_iter.next().unwrap();
-                vec[left].0 = Some(tag.clone());
+                let mem_tag = MemoryLabel::Thread {
+                    label: tag.clone(),
+                    hart,
+                };
+                vec[left].0 = Some(mem_tag.clone());
 
                 // Insert collect subtypes types
                 let subtypes_list = memory_types
@@ -170,18 +174,20 @@ impl MemoryMap {
                     .map(|_| MemoryValueType::type_of())
                     .collect();
                 subtypes.insert(
-                    tag.clone(),
+                    tag.into(),
                     hart,
                     (Locality::Thread, Type::List(subtypes_list)),
                 );
                 // Insert subtypes into memory.
-                self.map
-                    .insert(tag.clone(), MemoryValue::Types(memory_types));
+                self.map.insert(mem_tag, MemoryValue::Types(memory_types));
                 right = left;
             }
         }
 
-        let final_tag = tag_iter.next().unwrap();
+        let final_tag = MemoryLabel::Thread {
+            label: tag_iter.next().unwrap(),
+            hart,
+        };
         match vec.remove(0) {
             (addr @ Some(_), Type::List(list)) => {
                 self.map.insert(
@@ -227,8 +233,27 @@ impl State {
         };
 
         // Initialize bss
-        for (k, (_l, t)) in configuration.0.iter() {
-            memory.map.insert(k.clone(), MemoryValue::from(t.clone()));
+        for (k, (l, t)) in configuration.0.iter() {
+            match l {
+                // Create an entry in bss for a copy of the value in each thread in which its touched.
+                LabelLocality::Thread(threads) => {
+                    for thread in threads {
+                        memory.map.insert(
+                            MemoryLabel::Thread {
+                                label: k.clone(),
+                                hart: *thread,
+                            },
+                            MemoryValue::from(t.clone()),
+                        );
+                    }
+                }
+                LabelLocality::Global => {
+                    memory.map.insert(
+                        MemoryLabel::Global { label: k.clone() },
+                        MemoryValue::from(t.clone()),
+                    );
+                }
+            }
         }
 
         Self {
@@ -240,17 +265,38 @@ impl State {
 }
 
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 struct MemoryLocation {
-    tag: Label,
+    tag: MemoryLabel,
     offset: MemoryValueI64,
 }
 
-impl From<Label> for MemoryLocation {
-    fn from(tag: Label) -> Self {
-        Self {
-            tag,
-            offset: MemoryValueI64::ZERO,
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+enum MemoryLabel {
+    Global { label: Label },
+    Thread { label: Label, hart: u8 },
+}
+
+impl<'a> From<&'a MemoryLabel> for &'a Label {
+    fn from(m: &'a MemoryLabel) -> &'a Label {
+        match m {
+            MemoryLabel::Global { label } => label,
+            MemoryLabel::Thread { label, .. } => label,
+        }
+    }
+}
+impl From<MemoryLabel> for Label {
+    fn from(m: MemoryLabel) -> Label {
+        match m {
+            MemoryLabel::Global { label } => label,
+            MemoryLabel::Thread { label, .. } => label,
+        }
+    }
+}
+impl<'a> From<&'a MemoryLabel> for &'a Locality {
+    fn from(m: &'a MemoryLabel) -> &'a Locality {
+        match m {
+            MemoryLabel::Global { .. } => &Locality::Global,
+            MemoryLabel::Thread { .. } => &Locality::Thread,
         }
     }
 }
@@ -259,14 +305,16 @@ impl From<Label> for MemoryLocation {
 // then edit 2 bytes of it. So we will need additional complexity to support this case
 #[derive(Debug)]
 enum MemoryValue {
-    U8(MemoryValueU8),
     Type(MemoryValueType),
     Types(Vec<MemoryValueType>),
     U64(MemoryValueU64),
     U32(MemoryValueU32),
+    U16(MemoryValueU16),
+    U8(MemoryValueU8),
     List(Vec<MemoryValue>),
     I8(MemoryValueI8),
     I64(MemoryValueI64),
+    I16(MemoryValueI16),
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +355,102 @@ impl MemoryValueI8 {
     }
 }
 impl Compare for MemoryValueI8 {
+    fn compare(&self, other: &Self) -> Option<Ordering> {
+        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
+            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
+            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
+            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MemoryValueU16 {
+    start: u16,
+    stop: u16,
+}
+impl From<u16> for MemoryValueU16 {
+    fn from(x: u16) -> Self {
+        Self { start: x, stop: x }
+    }
+}
+impl Add for MemoryValueU16 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            start: self.start + rhs.start,
+            stop: self.stop + rhs.stop,
+        }
+    }
+}
+
+impl MemoryValueU16 {
+    const ZERO: Self = Self { start: 0, stop: 0 };
+    fn get_i8(&self, i: usize) -> Option<MemoryValueU16> {
+        if i > 0 {
+            return None;
+        }
+        Some(self.clone())
+    }
+    fn set_i8(&mut self, i: usize, n: u16) {
+        assert!(i > 0);
+        self.start = n;
+        self.stop = n;
+    }
+    fn value(&self) -> Option<u16> {
+        (self.start == self.stop).then_some(self.start)
+    }
+}
+impl Compare for MemoryValueU16 {
+    fn compare(&self, other: &Self) -> Option<Ordering> {
+        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
+            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
+            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
+            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MemoryValueI16 {
+    start: i16,
+    stop: i16,
+}
+impl From<i16> for MemoryValueI16 {
+    fn from(x: i16) -> Self {
+        Self { start: x, stop: x }
+    }
+}
+impl Add for MemoryValueI16 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            start: self.start + rhs.start,
+            stop: self.stop + rhs.stop,
+        }
+    }
+}
+
+impl MemoryValueI16 {
+    const ZERO: Self = Self { start: 0, stop: 0 };
+    fn get_i8(&self, i: usize) -> Option<MemoryValueI16> {
+        if i > 0 {
+            return None;
+        }
+        Some(self.clone())
+    }
+    fn set_i8(&mut self, i: usize, n: i16) {
+        assert!(i > 0);
+        self.start = n;
+        self.stop = n;
+    }
+    fn value(&self) -> Option<i16> {
+        (self.start == self.stop).then_some(self.start)
+    }
+}
+impl Compare for MemoryValueI16 {
     fn compare(&self, other: &Self) -> Option<Ordering> {
         match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
             (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
@@ -401,6 +545,23 @@ impl From<&Immediate> for RegisterValue {
 struct MemoryValueU32 {
     start: u32,
     stop: u32,
+}
+impl From<MemoryValueU8> for MemoryValueU32 {
+    fn from(MemoryValueU8 { start, stop }: MemoryValueU8) -> Self {
+        MemoryValueU32 {
+            start: u32::from(start),
+            stop: u32::from(stop),
+        }
+    }
+}
+impl Add for MemoryValueU32 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            start: self.start + rhs.start,
+            stop: self.stop + rhs.stop,
+        }
+    }
 }
 impl From<u32> for MemoryValueU32 {
     fn from(x: u32) -> Self {
@@ -662,6 +823,22 @@ impl From<Type> for MemoryValue {
             Type::List(list) => {
                 MemoryValue::List(list.into_iter().map(MemoryValue::from).collect())
             }
+            Type::I8 => MemoryValue::I8(MemoryValueI8 {
+                start: i8::MIN,
+                stop: i8::MAX,
+            }),
+            Type::U16 => MemoryValue::U16(MemoryValueU16 {
+                start: u16::MIN,
+                stop: u16::MAX,
+            }),
+            Type::I16 => MemoryValue::I16(MemoryValueI16 {
+                start: i16::MIN,
+                stop: i16::MAX,
+            }),
+            Type::U32 => MemoryValue::U32(MemoryValueU32 {
+                start: u32::MIN,
+                stop: u32::MAX,
+            }),
             _ => todo!(),
         }
     }
@@ -688,6 +865,7 @@ impl MemoryValue {
                     todo!()
                 }
             }
+            Self::Type(ttype) => ttype.get_u64(i),
             _ => todo!(),
         }
     }
@@ -745,7 +923,7 @@ impl MemoryValue {
 #[derive(Debug)]
 struct MemoryValueType {
     type_value: FlatType,
-    addr: Option<Label>,
+    addr: Option<MemoryLabel>,
     length: usize,
     locality: Locality,
 }
@@ -754,14 +932,20 @@ impl MemoryValueType {
         if let Some(exact) = offset.value() {
             match exact {
                 ..0 => None,
-                0 => todo!(),
-                1 => self
-                    .addr
-                    .as_ref()
-                    .map(|l| DoubleWordValue::Address(MemoryLocation::from(l))),
-                2..=8 => todo!(),
-                9 => Some(DoubleWordValue::Literal(MemoryValueU64::from(self.length))),
-                10.. => None,
+                0 => Some(DoubleWordValue::Literal(MemoryValueU64::from(
+                    self.type_value as u64,
+                ))),
+                1..8 => todo!(),
+                8 => self.addr.as_ref().map(|l| {
+                    DoubleWordValue::Address(MemoryLocation {
+                        tag: l.clone(),
+                        offset: MemoryValueI64::ZERO,
+                    })
+                }),
+                9..16 => todo!(),
+                16 => Some(DoubleWordValue::Literal(MemoryValueU64::from(self.length))),
+                17 => todo!(),
+                18.. => None,
             }
         } else {
             todo!()
@@ -789,7 +973,9 @@ impl Compare for RegisterValue {
             (U8(a), U8(b)) => a.compare(b),
             (U32(a), U32(b)) => a.compare(b),
             (U64(a), U64(b)) => a.compare(b),
-            _ => todo!(),
+            (U32(a), U8(b)) => a.compare(&MemoryValueU32::from(b.clone())),
+            (U64(a), U8(b)) => a.compare(&MemoryValueU64::from(b.clone())),
+            x => todo!("{x:?}"),
         }
     }
 }
@@ -818,7 +1004,8 @@ impl Add for RegisterValue {
                 a.offset = a.offset + c;
                 Self::Address(a)
             }
-            _ => todo!(),
+            (U32(a), U8(b)) => U32(a + MemoryValueU32::from(b)),
+            x => todo!("{x:?}"),
         }
     }
 }
@@ -827,22 +1014,6 @@ impl Add for RegisterValue {
 enum DoubleWordValue {
     Literal(MemoryValueU64),
     Address(MemoryLocation),
-}
-impl From<&Label> for MemoryLocation {
-    fn from(label: &Label) -> Self {
-        MemoryLocation {
-            tag: label.clone(),
-            offset: Offset::ZERO,
-        }
-    }
-}
-impl From<Label> for RegisterValue {
-    fn from(label: Label) -> Self {
-        Self::Address(MemoryLocation {
-            tag: label,
-            offset: Offset::ZERO,
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -893,6 +1064,15 @@ enum LabelLocality {
     Thread(BTreeSet<u8>),
     Global,
 }
+impl<'a> From<&'a LabelLocality> for &'a Locality {
+    fn from(ll: &'a LabelLocality) -> &'a Locality {
+        match ll {
+            LabelLocality::Thread(_) => &Locality::Thread,
+            LabelLocality::Global => &Locality::Global,
+        }
+    }
+}
+
 impl From<Locality> for LabelLocality {
     fn from(locality: Locality) -> Self {
         match locality {
@@ -939,8 +1119,8 @@ impl ProgramConfiguration {
             }
         }
     }
-    fn get(&self, key: &Label) -> Option<&(LabelLocality, Type)> {
-        self.0.get(key)
+    fn get(&self, key: &Label) -> Option<(&Locality, &Type)> {
+        self.0.get(key).map(|(l, t)| (l.into(), t))
     }
     fn new() -> Self {
         Self(BTreeMap::new())
@@ -955,7 +1135,6 @@ pub struct Explorerer {
 }
 
 impl Explorerer {
-    #[tracing::instrument(skip_all)]
     pub unsafe fn new_path(&mut self) -> ExplorererPath<'_> {
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
@@ -1005,7 +1184,7 @@ impl Explorerer {
             queue,
         }
     }
-    #[tracing::instrument(skip_all)]
+
     pub unsafe fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
         // You cannot verify a program that starts running on 0 harts.
         assert!(harts_range.start > 0);
@@ -1102,7 +1281,7 @@ fn load_label(
             }
         }
         if let Some(given_locality) = locality {
-            if given_locality != Locality::from(existing_locality) {
+            if given_locality != *existing_locality {
                 return false;
             }
         }
@@ -1159,7 +1338,6 @@ impl<'a> ExplorePathResult<'a> {
 use itertools::intersperse;
 use tracing::debug;
 impl<'a> ExplorererPath<'a> {
-    #[tracing::instrument(skip_all)]
     pub unsafe fn next_step(
         Self {
             explorerer,
@@ -1318,7 +1496,8 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
+                        let (_locality, ttype) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(4)
                             + *from_offset
@@ -1360,7 +1539,8 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
+                        let (_locality, ttype) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(1)
                             + *from_offset
@@ -1403,7 +1583,8 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
+                        let (_locality, ttype) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(8)
                             + MemoryValueI64::from(offset.value.value)
@@ -1445,7 +1626,8 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
+                        let (_locality, ttype) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(4)
                             + MemoryValueI64::from(offset.value.value)
@@ -1487,7 +1669,8 @@ impl<'a> ExplorererPath<'a> {
                         tag: from_label,
                         offset: from_offset,
                     })) => {
-                        let (_locality, ttype) = state.configuration.get(from_label).unwrap();
+                        let (_locality, ttype) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(1)
                             + MemoryValueI64::from(offset.value.value)
@@ -1560,7 +1743,6 @@ pub enum InvalidExplanation {
     Fail,
 }
 
-#[tracing::instrument(skip_all)]
 unsafe fn invalid_path(
     explorerer: &mut Explorerer,
     configuration: ProgramConfiguration,
@@ -1608,7 +1790,7 @@ unsafe fn invalid_path(
 use thiserror::Error;
 
 // Get the number of harts of this sub-tree and record the path.
-#[tracing::instrument(skip_all)]
+
 unsafe fn get_backpath_harts(
     prev: NonNull<VerifierNode>,
 ) -> (Vec<usize>, NonNull<VerifierHarts>, u8, usize) {
@@ -1643,7 +1825,7 @@ unsafe fn get_backpath_harts(
 /// if its racy, we look at the 2nd hart and queue it up if its not racy,
 /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
 /// up all racy instructions (since we need to evaluate all the possible ordering of them).
-#[tracing::instrument(skip_all)]
+
 unsafe fn queue_up(
     prev: NonNull<VerifierNode>,
     queue: &mut VecDeque<NonNull<VerifierNode>>,
@@ -1704,10 +1886,10 @@ unsafe fn queue_up(
             | Instruction::Lb(Lb { from: register, .. }) => {
                 let value = state.registers[hart as usize].get(register).unwrap();
                 if let RegisterValue::Address(MemoryLocation { tag, offset: _ }) = value {
-                    let (locality, _ttype) = state.configuration.get(tag).unwrap();
+                    let (locality, _ttype) = state.configuration.get(tag.into()).unwrap();
                     match locality {
-                        LabelLocality::Global => Some(Ok((hart, node))), // Racy
-                        LabelLocality::Thread(_) => Some(Err((hart, node))), // Non-racy
+                        Locality::Global => Some(Ok((hart, node))),  // Racy
+                        Locality::Thread => Some(Err((hart, node))), // Non-racy
                     }
                 } else {
                     todo!()
@@ -2050,7 +2232,7 @@ unsafe fn find_state(
             }) => {
                 let (found_locality, found_type) = state.configuration.get(label).unwrap();
                 if let Some(defined_locality) = locality {
-                    assert_eq!(Locality::from(found_locality), *defined_locality);
+                    assert_eq!(found_locality, defined_locality);
                 }
                 if let Some(defined_cast) = cast {
                     assert_eq!(found_type, defined_cast);
@@ -2068,16 +2250,41 @@ unsafe fn find_state(
             Instruction::Lat(Lat { register, label }) => {
                 let (_locality, typeof_type) = state.configuration.get(label).unwrap();
                 let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
-                state.registers[hartu].insert(*register, RegisterValue::from(loc.clone()));
+                state.registers[hartu].insert(
+                    *register,
+                    RegisterValue::Address(MemoryLocation {
+                        tag: loc.clone(),
+                        offset: MemoryValueI64::ZERO,
+                    }),
+                );
 
                 // Each type type is thread local and unique between `lat` instructions.
                 let hart_type_state = &mut state.configuration;
-                hart_type_state.insert(loc, hart, (Locality::Thread, MemoryValueType::type_of()));
+                hart_type_state.insert(
+                    loc.into(),
+                    hart,
+                    (Locality::Thread, MemoryValueType::type_of()),
+                );
                 // Extend with subtypes.
                 hart_type_state.append(subtypes);
             }
             Instruction::La(La { register, label }) => {
-                state.registers[hartu].insert(*register, RegisterValue::from(label.clone()));
+                let (locality, to_type) = state.configuration.get(label).unwrap();
+                state.registers[hartu].insert(
+                    *register,
+                    RegisterValue::Address(MemoryLocation {
+                        tag: match locality {
+                            Locality::Global => MemoryLabel::Global {
+                                label: label.clone(),
+                            },
+                            Locality::Thread => MemoryLabel::Thread {
+                                label: label.clone(),
+                                hart,
+                            },
+                        },
+                        offset: MemoryValueI64::ZERO,
+                    }),
+                );
             }
             Instruction::Sw(Sw { to, from, offset }) => {
                 let Some(to_value) = state.registers[hartu].get(to) else {
@@ -2091,18 +2298,22 @@ unsafe fn find_state(
                         tag: to_label,
                         offset: to_offset,
                     }) => {
-                        let (locality, to_type) = state.configuration.get(to_label).unwrap();
+                        let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        debug_assert!(size(to_type) >= 4);
+                        let sizeof = MemoryValueI64::try_from(size(to_type)).unwrap();
+                        let final_offset = MemoryValueI64::from(4)
+                            + *to_offset
+                            + MemoryValueI64::from(offset.value.value);
+                        debug_assert!(matches!(
+                            sizeof.compare(&final_offset),
+                            Some(Ordering::Greater | Ordering::Equal)
+                        ));
+                        debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
                             RegisterValue::U32(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
-                                    let tag = match locality {
-                                        LabelLocality::Global => to_label.clone(),
-                                        LabelLocality::Thread(_) => to_label.thread_local(hart),
-                                    };
                                     let memloc = MemoryLocation {
-                                        tag,
+                                        tag: to_label.clone(),
                                         offset: *to_offset
                                             + MemoryValueI64::from(offset.value.value),
                                     };
@@ -2111,7 +2322,19 @@ unsafe fn find_state(
                                     todo!()
                                 }
                             }
-                            _ => todo!(),
+                            RegisterValue::U8(from_imm) => {
+                                if let Some(imm) = from_imm.value() {
+                                    let memloc = MemoryLocation {
+                                        tag: to_label.clone(),
+                                        offset: *to_offset
+                                            + MemoryValueI64::from(offset.value.value),
+                                    };
+                                    state.memory.set_u32(&memloc, u32::from(imm));
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            x @ _ => todo!("{x:?}"),
                         }
                     }
                     _ => todo!(),
@@ -2129,7 +2352,7 @@ unsafe fn find_state(
                         tag: to_label,
                         offset: to_offset,
                     }) => {
-                        let (locality, to_type) = state.configuration.get(to_label).unwrap();
+                        let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
                         let sizeof = MemoryValueI64::try_from(size(to_type)).unwrap();
                         let final_offset = MemoryValueI64::from(1)
@@ -2139,15 +2362,12 @@ unsafe fn find_state(
                             sizeof.compare(&final_offset),
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
+                        debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
                             RegisterValue::U8(from_imm) => {
                                 if let Some(imm) = from_imm.value() {
-                                    let tag = match locality {
-                                        LabelLocality::Global => to_label.clone(),
-                                        LabelLocality::Thread(_) => to_label.thread_local(hart),
-                                    };
                                     let memloc = MemoryLocation {
-                                        tag,
+                                        tag: to_label.clone(),
                                         offset: *to_offset
                                             + MemoryValueI64::from(offset.value.value),
                                     };
@@ -2171,26 +2391,29 @@ unsafe fn find_state(
                         tag: from_label,
                         offset: from_offset,
                     }) => {
-                        let (locality, from_type) = state.configuration.get(from_label).unwrap();
+                        let (locality, from_type) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
                         let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
                         let final_offset = MemoryValueI64::from(8)
                             + *from_offset
                             + MemoryValueI64::from(offset.value.value);
+
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
-                        let tag = match locality {
-                            LabelLocality::Global => from_label.clone(),
-                            LabelLocality::Thread(_) => from_label.thread_local(hart),
-                        };
+                        debug_assert_eq!(locality, <&Locality>::from(from_label));
+
                         let memloc = MemoryLocation {
-                            tag,
+                            tag: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
                         };
-                        let doubleword =
-                            state.memory.get_u64(&memloc).unwrap_or_else(|| panic!("{memloc:?}"));
+                        let doubleword = state.memory.get_u64(&memloc).unwrap_or_else(|| {
+                            println!("memloc: {memloc:?}");
+                            println!("state.memory: {:?}", state.memory);
+                            panic!();
+                        });
                         state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
                     }
                     x => todo!("{x:?}"),
@@ -2205,7 +2428,8 @@ unsafe fn find_state(
                         tag: from_label,
                         offset: from_offset,
                     }) => {
-                        let (locality, from_type) = state.configuration.get(from_label).unwrap();
+                        let (locality, from_type) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
                         let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
                         let final_offset = MemoryValueI64::from(4)
@@ -2215,12 +2439,9 @@ unsafe fn find_state(
                             sizeof.compare(&final_offset),
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
-                        let tag = match locality {
-                            LabelLocality::Global => from_label.clone(),
-                            LabelLocality::Thread(_) => from_label.thread_local(hart),
-                        };
+                        debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = MemoryLocation {
-                            tag,
+                            tag: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
                         };
                         let Some(word) = state.memory.get_u32(&memloc) else {
@@ -2240,7 +2461,8 @@ unsafe fn find_state(
                         tag: from_label,
                         offset: from_offset,
                     }) => {
-                        let (locality, from_type) = state.configuration.get(from_label).unwrap();
+                        let (locality, from_type) =
+                            state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
                         let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
                         let final_offset = MemoryValueI64::from(1)
@@ -2250,12 +2472,9 @@ unsafe fn find_state(
                             sizeof.compare(&final_offset),
                             Some(Ordering::Greater | Ordering::Equal)
                         ));
-                        let tag = match locality {
-                            LabelLocality::Global => from_label.clone(),
-                            LabelLocality::Thread(_) => from_label.thread_local(hart),
-                        };
+                        debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = MemoryLocation {
-                            tag,
+                            tag: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
                         };
                         let Some(byte) = state.memory.get_u8(&memloc) else {

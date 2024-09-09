@@ -294,22 +294,91 @@ impl fmt::Display for Type {
 }
 
 fn new_type(src: &[char]) -> Type {
-    let types = src.split(|c| *c == ' ').collect::<Vec<_>>();
-    if let [single] = types.as_slice() {
-        match single {
-            ['u', '8'] => Type::U8,
-            ['i', '8'] => Type::I8,
-            ['u', '1', '6'] => Type::U16,
-            ['i', '1', '6'] => Type::I16,
-            ['u', '3', '2'] => Type::U32,
-            ['i', '3', '2'] => Type::I32,
-            ['u', '6', '4'] => Type::U64,
-            ['i', '6', '4'] => Type::I64,
-            x => todo!("{x:?}"),
+    let mut i = 0;
+    let mut current_list: Option<Vec<Type>> = None;
+    let mut list_stack: Vec<Vec<Type>> = Vec::new();
+    loop {
+        let Some(c) = src.get(i) else {
+            break;
+        };
+        match c {
+            '#' => break,
+            ']' => {
+                let current = Type::List(current_list.take().unwrap());
+                if let Some(mut stacked) = list_stack.pop() {
+                    stacked.push(current);
+                    current_list = Some(stacked);
+                    i += 1;
+                } else {
+                    return current;
+                }
+            }
+            ' ' => {
+                i += 1;
+            }
+            '[' => {
+                if let Some(existing) = current_list {
+                    list_stack.push(existing);
+                }
+                current_list = Some(Vec::new());
+                i += 1;
+            }
+            'u' => {
+                let ttype = if let Some('8') = src.get(i + 1) {
+                    i += 2;
+                    Type::U8
+                } else if let Some(['1', '6']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::U16
+                } else if let Some(['3', '2']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::U32
+                } else if let Some(['6', '4']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::U64
+                } else {
+                    todo!()
+                };
+                if let Some(list) = &mut current_list {
+                    list.push(ttype);
+                } else {
+                    return ttype;
+                }
+            }
+            'i' => {
+                let ttype = if let Some('8') = src.get(i + 1) {
+                    i += 2;
+                    Type::I8
+                } else if let Some(['1', '6']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::I16
+                } else if let Some(['3', '2']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::I32
+                } else if let Some(['6', '4']) = src.get(i + 1..i + 3) {
+                    i += 3;
+                    Type::I64
+                } else {
+                    todo!()
+                };
+                if let Some(list) = &mut current_list {
+                    list.push(ttype);
+                } else {
+                    return ttype;
+                }
+            }
+
+            _ => todo!(),
         }
-    } else {
-        Type::List(types.iter().map(|c| new_type(c)).collect())
     }
+    todo!()
+
+    // let types = src.split(|c| *c == ',').collect::<Vec<_>>();
+    // if let [single] = types.as_slice() {
+
+    // } else {
+    //     Type::List(types.iter().map(|c| new_type(c)).collect())
+    // }
 }
 
 /// Defines a variable.
@@ -343,16 +412,46 @@ impl fmt::Display for Define {
 }
 
 fn new_cast(src: &[char]) -> Define {
-    let mut iter = src.split(|c| *c == '_');
-    let label = new_label(iter.next().unwrap());
-    let locality = match iter.next().unwrap() {
-        ['_'] => None,
-        rem => Some(new_locality(rem)),
+    let mut iter = src.split(|c| *c == ' ');
+
+    let mut i = 0;
+    let mut j = 1;
+
+    let label = loop {
+        if src[j] == ' ' {
+            break new_label(&src[i..j]);
+        }
+        j += 1;
     };
-    let cast = match iter.next().unwrap() {
-        ['_'] => None,
-        rem => Some(new_type(rem)),
+    j += 1;
+    i = j;
+    let locality = loop {
+        if src[j] == ' ' {
+            if matches!(src[i..j], ['_']) {
+                break None;
+            } else {
+                break Some(new_locality(&src[i..j]));
+            }
+        }
+        j += 1;
     };
+    j += 1;
+    i = j;
+
+    let cast = loop {
+        match src.get(j) {
+            None | Some('#') => {
+                if matches!(src[i..j], ['_']) {
+                    break None;
+                } else {
+                    break Some(new_type(&src[i..j]));
+                }
+            }
+            Some(_) => {}
+        }
+        j += 1;
+    };
+
     Define {
         label,
         locality,
@@ -363,7 +462,7 @@ fn new_locality(src: &[char]) -> Locality {
     match src {
         ['t', 'h', 'r', 'e', 'a', 'd'] => Locality::Thread,
         ['g', 'l', 'o', 'b', 'a', 'l'] => Locality::Global,
-        _ => todo!(),
+        x @ _ => todo!("{x:?}"),
     }
 }
 

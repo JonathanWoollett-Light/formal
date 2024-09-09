@@ -25,7 +25,7 @@ _start:
     csrr t0, mhartid
     bnez t0, _wait
 
-    #$ welcome _ u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8
+    #$ welcome _ [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
     #                H  e  l  l  o  ,     W  o  r  l  d  !  \n 0
     # Type exploration doesn't explore list types since they are infinite, so
     # to define a list a user must define it manually.
@@ -56,7 +56,7 @@ _check_item:
     ld t3, (t0) # Load type of list item
     li t4, 0 # Load byte type number
     bne t3, t4, _invalid
-    addi t0, t0, 24  # Increment list item address
+    addi t0, t0, 25  # Increment list item address (8+8+8+1)
     addi t5, t5, 1 # Increment the count
     branch _check_item # Keep iterating until no items left
 _no_items:

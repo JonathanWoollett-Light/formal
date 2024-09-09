@@ -1,3 +1,38 @@
+### logs with jaeger
+
+Follow jaeger tutorial at https://tokio.rs/tokio/topics/tracing-next-steps.
+
+### grafana loki for log monitoring
+
+**this currently errors becuase god knows all this software has dogshit documentation that was only tested in 1 specific enviroment with a specific setup with a bunch of undocumented pre-existing settings**
+
+From (https://grafana.com/grafana/download):
+
+```bash
+sudo apt-get install -y adduser libfontconfig1 musl
+wget https://dl.grafana.com/enterprise/release/grafana-enterprise_11.2.0_amd64.deb
+sudo dpkg -i grafana-enterprise_11.2.0_amd64.deb
+```
+
+Then `sudo systemctl enable grafana-server.service` to enable startup on start.
+
+Then `sudo systemctl start grafana-server` to start, and `sudo systemctl status grafana-server` to view.
+
+Config can be see with `sudo nano /etc/grafana/grafana.ini` the default port will be 3000 which will show as;
+
+```
+# The http port to use
+;http_port = 3000
+```
+
+logs can be found at `/var/log/grafana`.
+
+The default login will be username `admin` and password `admin`.
+
+Go `+` in top right, click `import dashboard` enter the loki dashboard id (`13186`) from (`https://grafana.com/grafana/dashboards/13186-loki-dashboard/`).
+Add loki datasource.
+
+
 ### cli args
 
 - `list_depth`: How many layers of nested lists to explore during type exploration. The default is 0.
