@@ -112,7 +112,7 @@ impl MemoryMap {
         match existing {
             MemoryValue::U32(word) => {
                 if let Some(ord) = offset.compare(&MemoryValueI64::ZERO) {
-                    if ord == Ordering::Equal {
+                    if ord == RangeOrdering::Equal {
                         word.start = value;
                         word.stop = value;
                     } else {
@@ -154,11 +154,13 @@ impl MemoryMap {
             if let (None, Type::List(_)) = &vec[left] {
                 let memory_types = vec
                     .drain(left + 1..right)
-                    .map(|(addr, t)| MemoryValueType {
-                        type_value: FlatType::from(&t),
-                        addr,
-                        length: if let Type::List(l) = &t { l.len() } else { 0 },
-                        locality: Locality::Thread,
+                    .map(|(addr, t)| {
+                        MemoryValue::Type(MemoryValueType {
+                            type_value: FlatType::from(&t),
+                            addr,
+                            length: if let Type::List(l) = &t { l.len() } else { 0 },
+                            locality: Locality::Thread,
+                        })
                     })
                     .collect::<Vec<_>>();
                 let tag = tag_iter.next().unwrap();
@@ -179,7 +181,7 @@ impl MemoryMap {
                     (Locality::Thread, Type::List(subtypes_list)),
                 );
                 // Insert subtypes into memory.
-                self.map.insert(mem_tag, MemoryValue::Types(memory_types));
+                self.map.insert(mem_tag, MemoryValue::List(memory_types));
                 right = left;
             }
         }
@@ -305,6 +307,7 @@ impl<'a> From<&'a MemoryLabel> for &'a Locality {
 // then edit 2 bytes of it. So we will need additional complexity to support this case
 #[derive(Debug)]
 enum MemoryValue {
+    /// `Type` and `Types` shouldn't exist, these should be implemented using `List`.
     Type(MemoryValueType),
     Types(Vec<MemoryValueType>),
     U64(MemoryValueU64),
@@ -350,18 +353,17 @@ impl MemoryValueI8 {
         self.start = n;
         self.stop = n;
     }
-    fn value(&self) -> Option<i8> {
+    fn exact(&self) -> Option<i8> {
         (self.start == self.stop).then_some(self.start)
     }
 }
-impl Compare for MemoryValueI8 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueI8 {
+    type Base = i8;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
     }
 }
 
@@ -398,18 +400,17 @@ impl MemoryValueU16 {
         self.start = n;
         self.stop = n;
     }
-    fn value(&self) -> Option<u16> {
+    fn exact(&self) -> Option<u16> {
         (self.start == self.stop).then_some(self.start)
     }
 }
-impl Compare for MemoryValueU16 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueU16 {
+    type Base = u16;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
     }
 }
 
@@ -446,23 +447,18 @@ impl MemoryValueI16 {
         self.start = n;
         self.stop = n;
     }
-    fn value(&self) -> Option<i16> {
+    fn exact(&self) -> Option<i16> {
         (self.start == self.stop).then_some(self.start)
     }
 }
-impl Compare for MemoryValueI16 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueI16 {
+    type Base = i16;
+    fn start(&self) -> Self::Base {
+        self.start
     }
-}
-
-trait Compare {
-    fn compare(&self, other: &Self) -> Option<Ordering>;
+    fn stop(&self) -> Self::Base {
+        self.stop
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -484,14 +480,13 @@ impl Add for MemoryValueU8 {
         }
     }
 }
-impl Compare for MemoryValueU8 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueU8 {
+    type Base = u8;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
     }
 }
 impl MemoryValueU8 {
@@ -510,7 +505,7 @@ impl MemoryValueU8 {
     }
     fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
         if let Some(ord) = i.compare(&MemoryValueI64::ZERO) {
-            if ord == Ordering::Equal {
+            if ord == RangeOrdering::Equal {
                 self.start = n;
                 self.stop = n;
             } else {
@@ -520,7 +515,7 @@ impl MemoryValueU8 {
             todo!()
         }
     }
-    fn value(&self) -> Option<u8> {
+    fn exact(&self) -> Option<u8> {
         (self.start == self.stop).then_some(self.start)
     }
 }
@@ -529,14 +524,16 @@ impl From<&Immediate> for RegisterValue {
     fn from(immediate: &Immediate) -> Self {
         // Store as the smallest value that can contain `immediate`.
         let v = immediate.value as i128;
+        const I8_MIN: i128 = i8::MIN as i128;
         const U8_MIN: i128 = u8::MIN as i128;
         const U8_MAX: i128 = u8::MAX as i128;
         const U32_MIN: i128 = u32::MIN as i128;
         const U32_MAX: i128 = u32::MAX as i128;
         match v {
+            I8_MIN..U8_MIN => RegisterValue::I8(MemoryValueI8::from(v as i8)),
             U8_MIN..=U8_MAX => RegisterValue::U8(MemoryValueU8::from(v as u8)),
             U32_MIN..=U32_MAX => RegisterValue::U32(MemoryValueU32::from(v as u32)),
-            _ => todo!(),
+            x @ _ => todo!("{x:?}"),
         }
     }
 }
@@ -568,14 +565,13 @@ impl From<u32> for MemoryValueU32 {
         Self { start: x, stop: x }
     }
 }
-impl Compare for MemoryValueU32 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueU32 {
+    type Base = u32;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
     }
 }
 
@@ -618,7 +614,7 @@ impl MemoryValueU32 {
             todo!()
         }
     }
-    fn value(&self) -> Option<u32> {
+    fn exact(&self) -> Option<u32> {
         (self.start == self.stop).then_some(self.start)
     }
 }
@@ -628,14 +624,13 @@ struct MemoryValueU64 {
     start: u64,
     stop: u64,
 }
-impl Compare for MemoryValueU64 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            _ => todo!(),
-        }
+impl RangeType for MemoryValueU64 {
+    type Base = u64;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
     }
 }
 impl From<usize> for MemoryValueU64 {
@@ -693,16 +688,58 @@ impl Div for MemoryValueI64 {
         }
     }
 }
-impl Compare for MemoryValueI64 {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
-        match (self.start.cmp(&other.start), self.stop.cmp(&other.stop)) {
-            (Ordering::Less, Ordering::Less) => Some(Ordering::Less),
-            (Ordering::Greater, Ordering::Greater) => Some(Ordering::Greater),
-            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
-            _ => todo!(),
+trait RangeType {
+    type Base: Eq + PartialEq + Ord + PartialOrd;
+    fn start(&self) -> Self::Base;
+    fn stop(&self) -> Self::Base;
+    fn compare(&self, other: &Self) -> Option<RangeOrdering> {
+        match (
+            self.start().cmp(&other.start()),
+            self.stop().cmp(&other.stop()),
+        ) {
+            (Ordering::Less, Ordering::Less) => Some(RangeOrdering::Less),
+            (Ordering::Greater, Ordering::Greater) => Some(RangeOrdering::Greater),
+            (Ordering::Equal, Ordering::Equal) => Some({
+                if self.start() == self.stop() {
+                    RangeOrdering::Equal
+                } else {
+                    RangeOrdering::Matches
+                }
+            }),
+            (Ordering::Less, Ordering::Greater) => Some(RangeOrdering::Cover),
+            (Ordering::Greater, Ordering::Less) => Some(RangeOrdering::Within),
+            _ => None,
         }
     }
 }
+impl RangeType for MemoryValueI64 {
+    type Base = i64;
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
+    }
+}
+/// The `Equal` variant is handled like this since if you have a value `x` in the
+/// range 1..3 and a value `y` in the range 1..3 it would not be correct to say these
+/// values are equal.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
+enum RangeOrdering {
+    /// 1..3 is less than 4..7
+    Less,
+    /// 4..7 is greater than 1..3
+    Greater,
+    /// 2..=2 equals 2..=2
+    Equal,
+    /// 1..7 covers 2..6
+    Cover,
+    /// 2..6 is within 1..7
+    Within,
+    /// 1..3 matches 1..3
+    Matches,
+}
+
 impl fmt::Display for MemoryValueI64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}..={}", self.start, self.stop)
@@ -761,7 +798,7 @@ impl From<MemoryValueU8> for MemoryValueI64 {
 }
 impl MemoryValueI64 {
     const ZERO: Self = Self { start: 0, stop: 0 };
-    fn value(&self) -> Option<i64> {
+    fn exact(&self) -> Option<i64> {
         (self.start == self.stop).then_some(self.start)
     }
 }
@@ -799,7 +836,7 @@ impl MemoryValueU64 {
             todo!()
         }
     }
-    fn value(&self) -> Option<u64> {
+    fn exact(&self) -> Option<u64> {
         (self.start == self.stop).then_some(self.start)
     }
 }
@@ -808,7 +845,8 @@ impl From<&MemoryValue> for Type {
     fn from(mv: &MemoryValue) -> Self {
         match mv {
             MemoryValue::U8(_) => Type::U8,
-            _ => todo!(),
+            MemoryValue::Type(_) => MemoryValueType::type_of(),
+            x @ _ => todo!("{x:?}"),
         }
     }
 }
@@ -844,69 +882,86 @@ impl From<Type> for MemoryValue {
     }
 }
 
+fn get_from_list<T>(
+    list: &[MemoryValue],
+    i: &MemoryValueI64,
+    closure: fn(&MemoryValue, &MemoryValueI64) -> Option<T>,
+) -> Option<T> {
+    let mut iter = list.iter();
+    if let Some(item) = iter.next() {
+        let mut current = MemoryValueI64 {
+            start: 0,
+            stop: size(&Type::from(item)) as i64,
+        };
+
+        for item in iter {
+            // While the offset is less than an entry in the list iterate.
+            let next = current + MemoryValueI64::from(size(&Type::from(item)) as i64);
+            match i.compare(&current) {
+                Some(RangeOrdering::Equal) => return closure(item, &MemoryValueI64::ZERO),
+                Some(RangeOrdering::Within | RangeOrdering::Matches) => {
+                    return closure(item, &(*i - current))
+                }
+                Some(RangeOrdering::Less) => {}
+                x => todo!("{x:?}"),
+            }
+            current = next;
+        }
+    }
+    None
+}
+fn set_into_list<T>(
+    list: &mut [MemoryValue],
+    i: &MemoryValueI64,
+    closure: fn(&mut MemoryValue, &MemoryValueI64, T),
+    n: T,
+) -> Result<(), ()> {
+    let mut iter = list.iter_mut();
+    if let Some(item) = iter.next() {
+        let mut current = MemoryValueI64 {
+            start: 0,
+            stop: size(&Type::from(&*item)) as i64,
+        };
+
+        for item in iter {
+            // While the offset is less than an entry in the list iterate.
+            let next = current + MemoryValueI64::from(size(&Type::from(&*item)) as i64);
+            match i.compare(&current) {
+                Some(RangeOrdering::Equal) => return Ok(closure(item, &MemoryValueI64::ZERO, n)),
+                Some(RangeOrdering::Within | RangeOrdering::Matches) => {
+                    return Ok(closure(item, &(*i - current), n))
+                }
+                Some(RangeOrdering::Less) => {}
+                x => todo!("{x:?}"),
+            }
+            current = next;
+        }
+    }
+    Err(())
+}
+
 impl MemoryValue {
     fn get_u64(&self, i: &MemoryValueI64) -> Option<DoubleWordValue> {
         match self {
             Self::U32(_) => None,
             Self::U8(_) => None,
-            Self::List(list) => {
-                if let Some(exact) = i.value() {
-                    let i = usize::try_from(exact).unwrap();
-                    let mut pos = 0;
-                    for j in 0..list.len() {
-                        pos += size(&Type::from(&list[j]));
-                        if pos > i {
-                            let type_offset = MemoryValueI64::try_from(pos - i).unwrap();
-                            return list[j].get_u64(&type_offset);
-                        }
-                    }
-                    None
-                } else {
-                    todo!()
-                }
-            }
+            Self::List(list) => get_from_list(list, i, |item, offset| item.get_u64(offset)),
             Self::Type(ttype) => ttype.get_u64(i),
-            _ => todo!(),
+            x @ _ => todo!("{x:?}"),
         }
     }
     fn get_u8(&self, i: &MemoryValueI64) -> Option<MemoryValueU8> {
         match self {
             Self::U32(word) => word.get_u8(i),
             Self::U8(byte) => byte.get_u8(i),
-            Self::List(list) => {
-                if let Some(exact) = i.value() {
-                    let i = usize::try_from(exact).unwrap();
-                    let mut pos = 0;
-                    for j in 0..list.len() {
-                        pos += size(&Type::from(&list[j]));
-                        if pos > i {
-                            let type_offset = MemoryValueI64::try_from(pos - i).unwrap();
-                            return list[j].get_u8(&type_offset);
-                        }
-                    }
-                    None
-                } else {
-                    todo!()
-                }
-            }
+            Self::List(list) => get_from_list(list, i, |item, offset| item.get_u8(offset)),
             _ => todo!(),
         }
     }
     fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
         match self {
             Self::List(list) => {
-                let mut pos = MemoryValueI64::from(0);
-                for j in 0..list.len() {
-                    pos = pos + MemoryValueI64::try_from(size(&Type::from(&list[j]))).unwrap();
-                    if let Some(ord) = pos.compare(i) {
-                        if ord == Ordering::Greater {
-                            let type_offset = pos - *i;
-                            list[j].set_u8(&type_offset, n);
-                        }
-                    } else {
-                        todo!()
-                    }
-                }
+                set_into_list(list, i, |item, offset, value| item.set_u8(offset, value), n).unwrap()
             }
             Self::U8(byte) => byte.set_u8(i, n),
             _ => todo!(),
@@ -929,7 +984,7 @@ struct MemoryValueType {
 }
 impl MemoryValueType {
     fn get_u64(&self, offset: &MemoryValueI64) -> Option<DoubleWordValue> {
-        if let Some(exact) = offset.value() {
+        if let Some(exact) = offset.exact() {
             match exact {
                 ..0 => None,
                 0 => Some(DoubleWordValue::Literal(MemoryValueU64::from(
@@ -952,7 +1007,7 @@ impl MemoryValueType {
         }
     }
     fn type_of() -> Type {
-        Type::List(vec![Type::U8, Type::U64, Type::U64, Type::U8])
+        Type::List(vec![Type::U64, Type::U64, Type::U64, Type::U8])
     }
 }
 
@@ -966,8 +1021,8 @@ enum RegisterValue {
     I8(MemoryValueI8),
     I64(MemoryValueI64),
 }
-impl Compare for RegisterValue {
-    fn compare(&self, other: &Self) -> Option<Ordering> {
+impl RegisterValue {
+    fn compare(&self, other: &Self) -> Option<RangeOrdering> {
         use RegisterValue::*;
         match (self, other) {
             (U8(a), U8(b)) => a.compare(b),
@@ -979,6 +1034,7 @@ impl Compare for RegisterValue {
         }
     }
 }
+
 use std::ops::Add;
 impl From<DoubleWordValue> for RegisterValue {
     fn from(x: DoubleWordValue) -> Self {
@@ -1025,7 +1081,7 @@ enum CsrValue {
 #[derive(Debug, Clone)]
 struct ImmediateRange(RangeInclusive<Immediate>);
 impl ImmediateRange {
-    pub fn value(&self) -> Option<Immediate> {
+    pub fn exact(&self) -> Option<Immediate> {
         if self.0.start() == self.0.end() {
             Some(*self.0.start())
         } else {
@@ -1366,7 +1422,7 @@ impl<'a> ExplorererPath<'a> {
                         "{{ hart: {}/{}, instruction: \"{}\" }}",
                         item_ref.hart + 1,
                         root.as_ref().harts,
-                        item_ref.node.as_ref().this
+                        item_ref.node.as_ref().span
                     )
                 }),
                 String::from(", ")
@@ -1403,7 +1459,7 @@ impl<'a> ExplorererPath<'a> {
             "current: {{ hart: {}/{}, instruction: \"{}\" }}",
             hart + 1,
             harts,
-            branch_ptr.as_ref().node.as_ref().this
+            branch_ptr.as_ref().node.as_ref().span
         );
 
         // Record all the AST node that are reachable.
@@ -1567,7 +1623,26 @@ impl<'a> ExplorererPath<'a> {
                     x => todo!("{x:?}"),
                 }
             }
+            // TODO A lot of the checking loads code is duplicated, reduce this duplication.
             // For any load we need to validate the destination is valid.
+            Instruction::Ld(Ld {
+                to: _,
+                from,
+                offset,
+            }) => {
+                if let Some(res) = check_load(
+                    explorerer,
+                    branch_ptr,
+                    branch,
+                    configuration,
+                    from,
+                    offset,
+                    8,
+                    InvalidExplanation::Ld,
+                ) {
+                    return res;
+                }
+            }
             Instruction::Ld(Ld {
                 to: _,
                 from,
@@ -1585,25 +1660,33 @@ impl<'a> ExplorererPath<'a> {
                     })) => {
                         let (_locality, ttype) =
                             state.configuration.get(from_label.into()).unwrap();
+
                         // If attempting to access outside the memory space for the label.
                         let full_offset = MemoryValueI64::from(8)
                             + MemoryValueI64::from(offset.value.value)
                             + *from_offset;
                         let size = MemoryValueI64::try_from(size(ttype)).unwrap();
                         if let Some(ord) = size.compare(&full_offset) {
-                            if ord == Ordering::Less {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                return invalid_path(
-                                    explorerer,
-                                    configuration,
-                                    harts,
-                                    InvalidExplanation::Lb,
-                                );
+                            match ord {
+                                RangeOrdering::Less | RangeOrdering::Within => {
+                                    // The path is invalid, so we add the current types to the
+                                    // excluded list and restart exploration.
+                                    return invalid_path(
+                                        explorerer,
+                                        configuration,
+                                        harts,
+                                        InvalidExplanation::Ld,
+                                    );
+                                }
+                                RangeOrdering::Greater
+                                | RangeOrdering::Cover
+                                | RangeOrdering::Matches => {
+                                    // Else, we found the label and we can validate that the loading
+                                    // of a word with the given offset is within the address space.
+                                    // So we continue exploration.
+                                }
+                                x => todo!("{x:?}"),
                             }
-                            // Else, we found the label and we can validate that the loading
-                            // of a word with the given offset is within the address space.
-                            // So we continue exploration.
                         } else {
                             todo!()
                         }
@@ -1634,19 +1717,26 @@ impl<'a> ExplorererPath<'a> {
                             + *from_offset;
                         let size = MemoryValueI64::try_from(size(ttype)).unwrap();
                         if let Some(ord) = size.compare(&full_offset) {
-                            if ord == Ordering::Less {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                return invalid_path(
-                                    explorerer,
-                                    configuration,
-                                    harts,
-                                    InvalidExplanation::Lb,
-                                );
+                            match ord {
+                                RangeOrdering::Less | RangeOrdering::Within => {
+                                    // The path is invalid, so we add the current types to the
+                                    // excluded list and restart exploration.
+                                    return invalid_path(
+                                        explorerer,
+                                        configuration,
+                                        harts,
+                                        InvalidExplanation::Lw,
+                                    );
+                                }
+                                RangeOrdering::Greater
+                                | RangeOrdering::Cover
+                                | RangeOrdering::Matches => {
+                                    // Else, we found the label and we can validate that the loading
+                                    // of a word with the given offset is within the address space.
+                                    // So we continue exploration.
+                                }
+                                x => todo!("{x:?}"),
                             }
-                            // Else, we found the label and we can validate that the loading
-                            // of a word with the given offset is within the address space.
-                            // So we continue exploration.
                         } else {
                             todo!()
                         }
@@ -1677,19 +1767,26 @@ impl<'a> ExplorererPath<'a> {
                             + *from_offset;
                         let size = MemoryValueI64::try_from(size(ttype)).unwrap();
                         if let Some(ord) = size.compare(&full_offset) {
-                            if ord == Ordering::Less {
-                                // The path is invalid, so we add the current types to the
-                                // excluded list and restart exploration.
-                                return invalid_path(
-                                    explorerer,
-                                    configuration,
-                                    harts,
-                                    InvalidExplanation::Lb,
-                                );
+                            match ord {
+                                RangeOrdering::Less | RangeOrdering::Within => {
+                                    // The path is invalid, so we add the current types to the
+                                    // excluded list and restart exploration.
+                                    return invalid_path(
+                                        explorerer,
+                                        configuration,
+                                        harts,
+                                        InvalidExplanation::Lb,
+                                    );
+                                }
+                                RangeOrdering::Greater
+                                | RangeOrdering::Cover
+                                | RangeOrdering::Matches => {
+                                    // Else, we found the label and we can validate that the loading
+                                    // of a word with the given offset is within the address space.
+                                    // So we continue exploration.
+                                }
+                                x => todo!("{x:?}"),
                             }
-                            // Else, we found the label and we can validate that the loading
-                            // of a word with the given offset is within the address space.
-                            // So we continue exploration.
                         } else {
                             todo!()
                         }
@@ -1714,6 +1811,57 @@ impl<'a> ExplorererPath<'a> {
     }
 }
 
+/// Verifies a load is valid for a given configuration.
+unsafe fn check_load<'a>(
+    explorerer: &'a mut Explorerer,
+    branch_ptr: NonNull<VerifierNode>,
+    branch: &VerifierNode,
+    configuration: ProgramConfiguration,
+    from: &Register,
+    offset: &crate::ast::Offset,
+    type_size: i64,
+    invalid: InvalidExplanation,
+) -> Option<ExplorePathResult<'a>> {
+    // Collect the state.
+    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+    let state = find_state(&record, root, harts, first_step, &configuration);
+
+    // Check the destination is valid.
+    match state.registers[branch.hart as usize].get(from) {
+        Some(RegisterValue::Address(MemoryLocation {
+            tag: from_label,
+            offset: from_offset,
+        })) => {
+            let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+
+            // If attempting to access outside the memory space for the label.
+            let full_offset = MemoryValueI64::from(type_size)
+                + MemoryValueI64::from(offset.value.value)
+                + *from_offset;
+            let size = MemoryValueI64::try_from(size(ttype)).unwrap();
+            if let Some(ord) = size.compare(&full_offset) {
+                match ord {
+                    RangeOrdering::Less | RangeOrdering::Within => {
+                        // The path is invalid, so we add the current types to the
+                        // excluded list and restart exploration.
+                        return Some(invalid_path(explorerer, configuration, harts, invalid));
+                    }
+                    RangeOrdering::Greater | RangeOrdering::Cover | RangeOrdering::Matches => {
+                        // Else, we found the label and we can validate that the loading
+                        // of a word with the given offset is within the address space.
+                        // So we continue exploration.
+                        None
+                    }
+                    x => todo!("{x:?}"),
+                }
+            } else {
+                todo!()
+            }
+        }
+        x => todo!("{x:?}"),
+    }
+}
+
 impl From<&LabelLocality> for Locality {
     fn from(ll: &LabelLocality) -> Locality {
         match ll {
@@ -1731,10 +1879,8 @@ pub enum InvalidExplanation {
     La(Label),
     #[error("todo")]
     Sw,
-    #[error(
-        "Could not load as offset ({0}) is greater than the size ({1}) of the type ({2}) for `ld`."
-    )]
-    Ld(MemoryValueI64, usize, Type),
+    #[error("todo")]
+    Ld,
     #[error("todo")]
     Lw,
     #[error("todo")]
@@ -2306,12 +2452,12 @@ unsafe fn find_state(
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(Ordering::Greater | Ordering::Equal)
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
                             RegisterValue::U32(from_imm) => {
-                                if let Some(imm) = from_imm.value() {
+                                if let Some(imm) = from_imm.exact() {
                                     let memloc = MemoryLocation {
                                         tag: to_label.clone(),
                                         offset: *to_offset
@@ -2323,7 +2469,7 @@ unsafe fn find_state(
                                 }
                             }
                             RegisterValue::U8(from_imm) => {
-                                if let Some(imm) = from_imm.value() {
+                                if let Some(imm) = from_imm.exact() {
                                     let memloc = MemoryLocation {
                                         tag: to_label.clone(),
                                         offset: *to_offset
@@ -2360,12 +2506,12 @@ unsafe fn find_state(
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(Ordering::Greater | Ordering::Equal)
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
                             RegisterValue::U8(from_imm) => {
-                                if let Some(imm) = from_imm.value() {
+                                if let Some(imm) = from_imm.exact() {
                                     let memloc = MemoryLocation {
                                         tag: to_label.clone(),
                                         offset: *to_offset
@@ -2401,7 +2547,7 @@ unsafe fn find_state(
 
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(Ordering::Greater | Ordering::Equal)
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
 
@@ -2410,8 +2556,8 @@ unsafe fn find_state(
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
                         };
                         let doubleword = state.memory.get_u64(&memloc).unwrap_or_else(|| {
-                            println!("memloc: {memloc:?}");
-                            println!("state.memory: {:?}", state.memory);
+                            dbg!(&memloc);
+                            dbg!(&state.memory);
                             panic!();
                         });
                         state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
@@ -2437,7 +2583,7 @@ unsafe fn find_state(
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(Ordering::Greater | Ordering::Equal)
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = MemoryLocation {
@@ -2470,7 +2616,7 @@ unsafe fn find_state(
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(Ordering::Greater | Ordering::Equal)
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = MemoryLocation {

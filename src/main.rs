@@ -11,11 +11,12 @@ use verifier::*;
 mod draw;
 
 fn main() {
-    let source = std::fs::read_to_string("./assets/two.s").unwrap();
+    let path = std::path::PathBuf::from("./assets/two.s");
+    let source = std::fs::read_to_string(&path).unwrap();
     let chars = source.chars().collect::<Vec<_>>();
 
     // Parse
-    let mut ast = new_ast(&chars);
+    let mut ast = new_ast(&chars, path);
 
     // Compress
     compress(&mut ast);
@@ -169,11 +170,12 @@ mod tests {
         // Add layers
         let guard = tracing::subscriber::set_default(subscriber);
 
-        let source = std::fs::read_to_string("./assets/two.s").unwrap();
+        let path = std::path::PathBuf::from("./assets/two.s");
+        let source = std::fs::read_to_string(&path).unwrap();
         let chars = source.chars().collect::<Vec<_>>();
 
         // Parse
-        let mut ast = new_ast(&chars);
+        let mut ast = new_ast(&chars, path);
 
         // Compress
         compress(&mut ast);
@@ -195,9 +197,9 @@ mod tests {
             // The initial state of the queue contains the 1st instruction for
             // the 1st hart for each number of running harts (in this case we
             // are checking program for systems with 1 hart and with 2 harts).
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"_start:\" }, { hart: 1/2, instruction: \"_start:\" }]");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:2:0\" }, { hart: 1/2, instruction: \"./assets/two.s:2:0\" }]");
             // The current instruction is the first instruction popped off the queue.
-            let c = asserter.matches("current: { hart: 1/1, instruction: \"_start:\" }");
+            let c = asserter.matches("current: { hart: 1/1, instruction: \"./assets/two.s:2:0\" }");
             // We start with no types explored so none excluded.
             let d = asserter.matches("excluded: {}");
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -206,8 +208,8 @@ mod tests {
             let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"_start:\" }, \
-                { hart: 1/1, instruction: \"#$ value global _\" }\
+                { hart: 1/2, instruction: \"./assets/two.s:2:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -216,8 +218,8 @@ mod tests {
             let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"#$ value global _\" }, \
-                { hart: 2/2, instruction: \"#$ value global _\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:5:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -227,8 +229,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"#$ value global _\" }, \
-                { hart: 1/1, instruction: \"la t0, value\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:5:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:6:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -238,8 +240,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"la t0, value\" }, \
-                { hart: 2/2, instruction: \"la t0, value\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:6:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:6:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -249,8 +251,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"la t0, value\" }, \
-                { hart: 1/1, instruction: \"li t1, 0\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:6:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:9:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -260,8 +262,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"li t1, 0\" }, \
-                { hart: 2/2, instruction: \"li t1, 0\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:9:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -271,8 +273,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"li t1, 0\" }, \
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -283,8 +285,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"#$ value global _\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             let c = asserter.matches(
@@ -312,8 +314,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"#$ value global _\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             let c = asserter.matches(
@@ -342,8 +344,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"#$ value global _\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             let c = asserter.matches(
@@ -372,8 +374,8 @@ mod tests {
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"#$ value global _\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             let c = asserter.matches(
@@ -395,12 +397,13 @@ mod tests {
 
             path = explorerer.new_path();
 
-            for _ in 0..454 {
+            // 454
+            for _ in 0..4000 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let a = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {\"value\": U8}}, \
@@ -426,7 +429,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {\"value\": U8}}, \
@@ -453,7 +456,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {\"value\": U8}}, \
@@ -481,7 +484,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {\"value\": U8}}, \
@@ -510,7 +513,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {}}, \
@@ -540,7 +543,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {}}, \
@@ -577,7 +580,7 @@ mod tests {
             //         types_iter.next().unwrap()
             //     );
             //     let a = asserter.matches(s);
-            //     let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"sw t1, (t0)\" }, { hart: 1/2, instruction: \"la t0, value\" }]");
+            //     let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
             //     assert!(matches!(
             //         ExplorererPath::next_step(path),
             //         ExplorePathResult::Invalid {
@@ -596,7 +599,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {}}, \
@@ -647,7 +650,7 @@ mod tests {
             }
 
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {}}, \
@@ -706,7 +709,7 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
             let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"la t0, value\" }, { hart: 1/1, instruction: \"li t1, 0\" }]");
+            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
             let c = asserter.matches(
                 "excluded: {\
                 {0: {\"value\": U8}, 1: {}}, \
@@ -782,7 +785,7 @@ mod tests {
             let b = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"li t1, 0\" }\
+                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -791,7 +794,7 @@ mod tests {
             let a = asserter.matches("configuration: ProgramConfiguration({})");
             let b = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"li t1, 0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }, \
                 { hart: 1/1, instruction: \"addi t1, t1, 1\" }\
             ]",
             );
@@ -802,8 +805,8 @@ mod tests {
             let b = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"addi t1, t1, 1\" }, \
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -811,9 +814,9 @@ mod tests {
 
             let a = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -821,10 +824,10 @@ mod tests {
 
             let a = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }\
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
@@ -832,10 +835,10 @@ mod tests {
 
             let a = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"lw t1, (t0)\" }\
             ]",
             );
@@ -846,8 +849,8 @@ mod tests {
             let a = asserter.matches(
                 "queue: [\
                 { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
                 { hart: 1/1, instruction: \"lw t1, (t0)\" }\
             ]",
@@ -857,8 +860,8 @@ mod tests {
 
             let a = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"sw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
                 { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
                 { hart: 2/2, instruction: \"addi t1, t1, 1\" }\
@@ -870,7 +873,7 @@ mod tests {
             // And it grows again.
             let a = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"sw t1, (t0)\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
                 { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
                 { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \

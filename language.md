@@ -1,3 +1,9 @@
+### optimizing
+
+To optimize performance we can replace `ExplorererPath::queue` by immedately spawning a tokio spawn instead of when we would push an item to the queue.
+
+We want a way to preserve deterministic ordering so tests can check ordering. Maybe there is a setting in tokio to only run 1 task at a time (or reduce parallelism in some other way)?
+
 ### logs with jaeger
 
 Follow jaeger tutorial at https://tokio.rs/tokio/topics/tracing-next-steps.

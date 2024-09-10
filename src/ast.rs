@@ -1,26 +1,59 @@
 use std::alloc::{alloc, Layout};
 use std::fmt;
+use std::path::PathBuf;
 use std::ptr::{write, NonNull};
 
 #[derive(Debug)]
 pub struct AstNode {
     pub prev: Option<NonNull<AstNode>>,
+    pub span: Span,
     pub this: Instruction,
     pub next: Option<NonNull<AstNode>>,
 }
 
-pub fn new_ast(src: &[char]) -> Option<NonNull<AstNode>> {
+#[derive(Debug)]
+pub struct Span {
+    path: PathBuf,
+    row: usize,
+    column: usize,
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.path.display(), self.row, self.column)
+    }
+}
+
+pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
     let mut front_opt = None;
     let mut a = 0;
     let mut b = 0;
+    let mut row = 1;
     while b < src.len() {
         if src[b] == '\n' {
-            alloc_node(&src[a..b], &mut front_opt);
+            alloc_node(
+                &src[a..b],
+                &mut front_opt,
+                Span {
+                    path: path.clone(),
+                    row,
+                    column: 0,
+                },
+            );
+            row += 1;
             a = b + 1;
         }
         b += 1;
     }
-    alloc_node(&src[a..b], &mut front_opt);
+    alloc_node(
+        &src[a..b],
+        &mut front_opt,
+        Span {
+            path,
+            row,
+            column: 0,
+        },
+    );
 
     let mut first = None;
     while let Some(current) = front_opt {
@@ -30,7 +63,7 @@ pub fn new_ast(src: &[char]) -> Option<NonNull<AstNode>> {
     first
 }
 
-fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
+fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: Span) {
     let mut i = 0;
     src = loop {
         match src.get(i) {
@@ -40,6 +73,9 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
         }
         i += 1;
     };
+
+    // println!("{src:?} | {span}");
+
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
@@ -54,6 +90,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>) {
             ptr,
             AstNode {
                 prev: *front_opt,
+                span,
                 this: instr,
                 next: None,
             },
@@ -234,9 +271,6 @@ pub enum Type {
     Union(BTreeSet<Type>),
 }
 impl Type {
-    pub fn type_type() -> Self {
-        Self::List(vec![Self::U64, Self::U64, Self::U64, Self::U8])
-    }
     pub fn list_mut(&mut self) -> &mut Vec<Type> {
         match self {
             Self::List(list) => list,
