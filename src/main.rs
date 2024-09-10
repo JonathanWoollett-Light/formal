@@ -10,6 +10,9 @@ use verifier::*;
 
 mod draw;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 fn main() {
     let path = std::path::PathBuf::from("./assets/two.s");
     let source = std::fs::read_to_string(&path).unwrap();
@@ -29,10 +32,10 @@ fn main() {
         // verify(ast, 1..3);
 
         // TODO Simplify this iteration.
-        let mut explorerer = Explorerer::new(ast, 1..3);
-        let mut path = explorerer.new_path();
+        let explorerer = Rc::new(RefCell::new(Explorerer::new(ast, 1..3)));
+        let mut path = Explorerer::new_path(explorerer.clone());
         let mut check = 0;
-        let final_state = loop {
+        let _final_state = loop {
             check += 1;
             if check > 10000 {
                 panic!();
@@ -44,7 +47,7 @@ fn main() {
                 // The path was invalid but there may be another valid path.
                 ExplorePathResult::Invalid {
                     complete: false, ..
-                } => explorerer.new_path(),
+                } => Explorerer::new_path(explorerer.clone()),
                 ExplorePathResult::Valid {
                     configuration,
                     touched,
@@ -110,14 +113,15 @@ mod tests {
 
     use crate::*;
 
-    use opentelemetry::global;
-    use std::process;
-    use tracing::level_filters::LevelFilter;
-    use tracing_subscriber::fmt::format::FmtSpan;
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
+    // use opentelemetry::global;
+    // use std::process;
+    // use tracing_subscriber::fmt::format::FmtSpan;
+    // use tracing_subscriber::util::SubscriberInitExt;
 
-    const LOKI_URL: &str = "http://localhost/3100";
+    use tracing::level_filters::LevelFilter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    // const LOKI_URL: &str = "http://localhost/3100";
 
     #[test]
     fn two() {
@@ -182,13 +186,15 @@ mod tests {
 
         // // Print
         // print_ast(ast);
+        use std::cell::RefCell;
+        use std::rc::Rc;
 
         // Verify the ast
         unsafe {
-            let mut explorerer = Explorerer::new(ast, 1..3);
+            let explorerer = Rc::new(RefCell::new(Explorerer::new(ast, 1..3)));
 
             // Start new path.
-            let mut path = explorerer.new_path();
+            let mut path = Explorerer::new_path(explorerer.clone());
 
             // With each step we check the logs to ensure the state is as expected.
 
@@ -303,7 +309,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             // Iterate until excluding value as i8.
             for _ in 0..8 {
@@ -333,7 +339,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             // Iterate until excluding value as u16.
             for _ in 0..8 {
@@ -364,7 +370,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..8 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -395,10 +401,10 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             // 454
-            for _ in 0..4000 {
+            for _ in 0..300 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
@@ -422,7 +428,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..6 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -449,7 +455,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..6 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -477,7 +483,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..6 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -506,7 +512,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..3 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -536,7 +542,7 @@ mod tests {
             ));
             (a & b & c).assert();
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..6 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -570,7 +576,7 @@ mod tests {
             // Iterate over all possibilities for `value: I8` on hart 0.
             // let mut types_iter = TYPE_LIST.iter().skip(1);
             // for _ in 0..7 {
-            //     path = explorerer.new_path();
+            //     path = Explorerer::new_path(explorerer.clone());
             //     for _ in 0..6 {
             //         path = ExplorererPath::next_step(path).continued().unwrap();
             //     }
@@ -592,7 +598,7 @@ mod tests {
             //     assert!(b);
             // }
 
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
 
             for _ in 0..3 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
@@ -632,7 +638,7 @@ mod tests {
             (a & b & c).assert();
 
             for _ in 0..8 {
-                path = explorerer.new_path();
+                path = Explorerer::new_path(explorerer.clone());
                 for _ in 0..6 {
                     path = ExplorererPath::next_step(path).continued().unwrap();
                 }
@@ -644,7 +650,7 @@ mod tests {
                     }
                 ));
             }
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
             for _ in 0..3 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
@@ -692,7 +698,7 @@ mod tests {
             (a & b & c).assert();
 
             for _ in 0..8 {
-                path = explorerer.new_path();
+                path = Explorerer::new_path(explorerer.clone());
                 for _ in 0..6 {
                     path = ExplorererPath::next_step(path).continued().unwrap();
                 }
@@ -704,7 +710,7 @@ mod tests {
                     }
                 ));
             }
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
             for _ in 0..3 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
@@ -762,7 +768,7 @@ mod tests {
             // Now starting with U32, we have reached a type for `value` in hart 0 that will pass.
             // It will need to iterate up to U32 for `value` in hart 1.
             for _ in 0..4 {
-                path = explorerer.new_path();
+                path = Explorerer::new_path(explorerer.clone());
                 for _ in 0..11 {
                     path = ExplorererPath::next_step(path).continued().unwrap();
                 }
@@ -776,7 +782,7 @@ mod tests {
             }
 
             // Now we are on the u32 path for `value` in both harts.
-            path = explorerer.new_path();
+            path = Explorerer::new_path(explorerer.clone());
             for _ in 0..8 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
@@ -960,10 +966,10 @@ mod tests {
             println!("\n\n{complete}\n\n");
             println!("\n\n{path}\n\n");
             println!("\n\n{explanation}\n\n");
-
-            todo!();
         }
 
         drop(guard);
+
+        todo!();
     }
 }

@@ -1,11 +1,12 @@
 use crate::ast::*;
 use std::alloc::Layout;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::iter::once;
 use std::ops::Range;
-use std::ops::RangeInclusive;
+use std::ops::Sub;
 use std::ptr;
 use std::{
     alloc::alloc,
@@ -707,7 +708,11 @@ trait RangeType {
                 }
             }),
             (Ordering::Less, Ordering::Greater) => Some(RangeOrdering::Cover),
+            (Ordering::Equal, Ordering::Greater) => Some(RangeOrdering::Cover),
+            (Ordering::Less, Ordering::Equal) => Some(RangeOrdering::Cover),
             (Ordering::Greater, Ordering::Less) => Some(RangeOrdering::Within),
+            (Ordering::Equal, Ordering::Less) => Some(RangeOrdering::Within),
+            (Ordering::Greater, Ordering::Equal) => Some(RangeOrdering::Within),
             _ => None,
         }
     }
@@ -751,9 +756,6 @@ impl From<i64> for MemoryValueI64 {
         Self { start: x, stop: x }
     }
 }
-use std::cmp::Ordering;
-use std::ops::Sub;
-type Offset = MemoryValueI64;
 
 impl TryFrom<usize> for MemoryValueI64 {
     type Error = <i64 as TryFrom<usize>>::Error;
@@ -903,7 +905,7 @@ fn get_from_list<T>(
                     return closure(item, &(*i - current))
                 }
                 Some(RangeOrdering::Less) => {}
-                x => todo!("{x:?}"),
+                x => todo!("{x:?} {i:?} {current:?}"),
             }
             current = next;
         }
@@ -1003,7 +1005,7 @@ impl MemoryValueType {
                 18.. => None,
             }
         } else {
-            todo!()
+            todo!("{offset:?}")
         }
     }
     fn type_of() -> Type {
@@ -1076,32 +1078,6 @@ enum DoubleWordValue {
 #[non_exhaustive]
 enum CsrValue {
     Mhartid,
-}
-
-#[derive(Debug, Clone)]
-struct ImmediateRange(RangeInclusive<Immediate>);
-impl ImmediateRange {
-    pub fn exact(&self) -> Option<Immediate> {
-        if self.0.start() == self.0.end() {
-            Some(*self.0.start())
-        } else {
-            None
-        }
-    }
-}
-impl std::ops::Add for ImmediateRange {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self(*self.0.start() + *other.0.start()..=*self.0.end() + *other.0.end())
-    }
-}
-impl std::ops::Add<Immediate> for ImmediateRange {
-    type Output = Self;
-
-    fn add(self, other: Immediate) -> Self {
-        Self(*self.0.start() + other..=*self.0.end() + other)
-    }
 }
 
 // `wfi` is less racy than instructions like `sw` or `lw` so we could treat it more precisely
@@ -1186,12 +1162,14 @@ impl ProgramConfiguration {
 pub struct Explorerer {
     pub harts_range: Range<u8>,
     pub excluded: BTreeSet<ProgramConfiguration>,
+    /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
     pub second_ptr: NonNull<AstNode>,
     pub roots: Vec<NonNull<VerifierHarts>>,
 }
 
 impl Explorerer {
-    pub unsafe fn new_path(&mut self) -> ExplorererPath<'_> {
+    pub unsafe fn new_path(this: Rc<RefCell<Self>>) -> ExplorererPath {
+        let this_ref = this.borrow_mut();
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
         // different inputs and often follow different execution paths (effectively having a different AST).
@@ -1201,7 +1179,7 @@ impl Explorerer {
         // we record all the AST instructions that get touched.
         let touched = BTreeSet::<NonNull<AstNode>>::new();
 
-        let queue = self
+        let queue = this_ref
             .roots
             .iter()
             .enumerate()
@@ -1216,7 +1194,7 @@ impl Explorerer {
                             VerifierNode {
                                 prev,
                                 hart,
-                                node: self.second_ptr,
+                                node: this_ref.second_ptr,
                                 next: Vec::new(),
                             },
                         );
@@ -1232,9 +1210,10 @@ impl Explorerer {
                 branch
             })
             .collect::<VecDeque<_>>();
+        drop(this_ref);
 
         ExplorererPath {
-            explorerer: self,
+            explorerer: this,
             configuration,
             touched,
             queue,
@@ -1291,9 +1270,13 @@ impl Explorerer {
     }
 }
 
+use std::rc::Rc;
+
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
-pub struct ExplorererPath<'a> {
-    pub explorerer: &'a mut Explorerer,
+pub struct ExplorererPath {
+    // This could be a mutable reference. Its a `Rc<RefCell<_>>` becuase the borrow checker can't
+    // figure out its safe and I don't want to rework the code right now to help it.
+    pub explorerer: Rc<RefCell<Explorerer>>,
 
     pub configuration: ProgramConfiguration,
 
@@ -1370,7 +1353,7 @@ fn load_label(
     false
 }
 
-pub enum ExplorePathResult<'a> {
+pub enum ExplorePathResult {
     Valid {
         configuration: ProgramConfiguration,
         touched: BTreeSet<NonNull<AstNode>>,
@@ -1380,10 +1363,10 @@ pub enum ExplorePathResult<'a> {
         path: String,
         explanation: InvalidExplanation,
     },
-    Continue(ExplorererPath<'a>),
+    Continue(ExplorererPath),
 }
-impl<'a> ExplorePathResult<'a> {
-    pub fn continued(self) -> Option<ExplorererPath<'a>> {
+impl ExplorePathResult {
+    pub fn continued(self) -> Option<ExplorererPath> {
         match self {
             Self::Continue(c) => Some(c),
             _ => None,
@@ -1393,7 +1376,7 @@ impl<'a> ExplorePathResult<'a> {
 
 use itertools::intersperse;
 use tracing::debug;
-impl<'a> ExplorererPath<'a> {
+impl ExplorererPath {
     pub unsafe fn next_step(
         Self {
             explorerer,
@@ -1401,8 +1384,8 @@ impl<'a> ExplorererPath<'a> {
             mut touched,
             mut queue,
         }: Self,
-    ) -> ExplorePathResult<'a> {
-        trace!("excluded: {:?}", explorerer.excluded);
+    ) -> ExplorePathResult {
+        trace!("excluded: {:?}", explorerer.borrow().excluded);
         debug!("configuration: {configuration:?}");
 
         debug!(
@@ -1489,13 +1472,13 @@ impl<'a> ExplorererPath<'a> {
                 if !load_label(
                     label,
                     &mut configuration,
-                    &mut explorerer.excluded,
+                    &mut explorerer.borrow_mut().excluded,
                     cast.clone(),
                     *locality,
                     hart,
                 ) {
                     return invalid_path(
-                        explorerer,
+                        explorerer.clone(),
                         configuration,
                         harts,
                         InvalidExplanation::La(label.clone()),
@@ -1506,13 +1489,13 @@ impl<'a> ExplorererPath<'a> {
                 if !load_label(
                     label,
                     &mut configuration,
-                    &mut explorerer.excluded,
+                    &mut explorerer.borrow_mut().excluded,
                     None,
                     None,
                     hart,
                 ) {
                     return invalid_path(
-                        explorerer,
+                        explorerer.clone(),
                         configuration,
                         harts,
                         InvalidExplanation::Lat(label.clone()),
@@ -1523,13 +1506,13 @@ impl<'a> ExplorererPath<'a> {
                 if !load_label(
                     label,
                     &mut configuration,
-                    &mut explorerer.excluded,
+                    &mut explorerer.borrow_mut().excluded,
                     None,
                     None,
                     hart,
                 ) {
                     return invalid_path(
-                        explorerer,
+                        explorerer.clone(),
                         configuration,
                         harts,
                         InvalidExplanation::La(label.clone()),
@@ -1542,42 +1525,17 @@ impl<'a> ExplorererPath<'a> {
                 from: _,
                 offset,
             }) => {
-                // Collect the state.
-                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                let state = find_state(&record, root, harts, first_step, &configuration);
-
-                // Check the destination is valid.
-                match state.registers[hart as usize].get(to) {
-                    Some(RegisterValue::Address(MemoryLocation {
-                        tag: from_label,
-                        offset: from_offset,
-                    })) => {
-                        let (_locality, ttype) =
-                            state.configuration.get(from_label.into()).unwrap();
-                        // If attempting to access outside the memory space for the label.
-                        let full_offset = MemoryValueI64::from(4)
-                            + *from_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-                        if let Some(ord) = size.compare(&full_offset) {
-                            if ord == Ordering::Less {
-                                return invalid_path(
-                                    explorerer,
-                                    configuration,
-                                    harts,
-                                    InvalidExplanation::Sw,
-                                );
-                            }
-                            // Else we found the label and we can validate that the loading
-                            // of a word with the given offset is within the address space.
-                            // So we continue exploration.
-                            // The path is invalid, so we add the current types to the
-                            // excluded list and restart exploration.
-                        } else {
-                            todo!()
-                        }
-                    }
-                    x => todo!("{x:?}"),
+                if let Some(res) = check_store(
+                    explorerer.clone(),
+                    branch_ptr,
+                    branch,
+                    &configuration,
+                    to,
+                    offset,
+                    4,
+                    InvalidExplanation::Sw,
+                ) {
+                    return res;
                 }
             }
             Instruction::Sb(Sb {
@@ -1585,42 +1543,17 @@ impl<'a> ExplorererPath<'a> {
                 from: _,
                 offset,
             }) => {
-                // Collect the state.
-                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                let state = find_state(&record, root, harts, first_step, &configuration);
-
-                // Check the destination is valid.
-                match state.registers[hart as usize].get(to) {
-                    Some(RegisterValue::Address(MemoryLocation {
-                        tag: from_label,
-                        offset: from_offset,
-                    })) => {
-                        let (_locality, ttype) =
-                            state.configuration.get(from_label.into()).unwrap();
-                        // If attempting to access outside the memory space for the label.
-                        let full_offset = MemoryValueI64::from(1)
-                            + *from_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-                        if let Some(ord) = size.compare(&full_offset) {
-                            if ord == Ordering::Less {
-                                return invalid_path(
-                                    explorerer,
-                                    configuration,
-                                    harts,
-                                    InvalidExplanation::Sw,
-                                );
-                            }
-                            // Else we found the label and we can validate that the loading
-                            // of a word with the given offset is within the address space.
-                            // So we continue exploration.
-                            // The path is invalid, so we add the current types to the
-                            // excluded list and restart exploration.
-                        } else {
-                            todo!()
-                        }
-                    }
-                    x => todo!("{x:?}"),
+                if let Some(res) = check_store(
+                    explorerer.clone(),
+                    branch_ptr,
+                    branch,
+                    &configuration,
+                    to,
+                    offset,
+                    1,
+                    InvalidExplanation::Sb,
+                ) {
+                    return res;
                 }
             }
             // TODO A lot of the checking loads code is duplicated, reduce this duplication.
@@ -1631,10 +1564,10 @@ impl<'a> ExplorererPath<'a> {
                 offset,
             }) => {
                 if let Some(res) = check_load(
-                    explorerer,
+                    explorerer.clone(),
                     branch_ptr,
                     branch,
-                    configuration,
+                    &configuration,
                     from,
                     offset,
                     8,
@@ -1643,105 +1576,22 @@ impl<'a> ExplorererPath<'a> {
                     return res;
                 }
             }
-            Instruction::Ld(Ld {
-                to: _,
-                from,
-                offset,
-            }) => {
-                // Collect the state.
-                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                let state = find_state(&record, root, harts, first_step, &configuration);
-
-                // Check the destination is valid.
-                match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(MemoryLocation {
-                        tag: from_label,
-                        offset: from_offset,
-                    })) => {
-                        let (_locality, ttype) =
-                            state.configuration.get(from_label.into()).unwrap();
-
-                        // If attempting to access outside the memory space for the label.
-                        let full_offset = MemoryValueI64::from(8)
-                            + MemoryValueI64::from(offset.value.value)
-                            + *from_offset;
-                        let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-                        if let Some(ord) = size.compare(&full_offset) {
-                            match ord {
-                                RangeOrdering::Less | RangeOrdering::Within => {
-                                    // The path is invalid, so we add the current types to the
-                                    // excluded list and restart exploration.
-                                    return invalid_path(
-                                        explorerer,
-                                        configuration,
-                                        harts,
-                                        InvalidExplanation::Ld,
-                                    );
-                                }
-                                RangeOrdering::Greater
-                                | RangeOrdering::Cover
-                                | RangeOrdering::Matches => {
-                                    // Else, we found the label and we can validate that the loading
-                                    // of a word with the given offset is within the address space.
-                                    // So we continue exploration.
-                                }
-                                x => todo!("{x:?}"),
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    x => todo!("{x:?}"),
-                }
-            }
             Instruction::Lw(Lw {
                 to: _,
                 from,
                 offset,
             }) => {
-                // Collect the state.
-                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                let state = find_state(&record, root, harts, first_step, &configuration);
-
-                // Check the destination is valid.
-                match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(MemoryLocation {
-                        tag: from_label,
-                        offset: from_offset,
-                    })) => {
-                        let (_locality, ttype) =
-                            state.configuration.get(from_label.into()).unwrap();
-                        // If attempting to access outside the memory space for the label.
-                        let full_offset = MemoryValueI64::from(4)
-                            + MemoryValueI64::from(offset.value.value)
-                            + *from_offset;
-                        let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-                        if let Some(ord) = size.compare(&full_offset) {
-                            match ord {
-                                RangeOrdering::Less | RangeOrdering::Within => {
-                                    // The path is invalid, so we add the current types to the
-                                    // excluded list and restart exploration.
-                                    return invalid_path(
-                                        explorerer,
-                                        configuration,
-                                        harts,
-                                        InvalidExplanation::Lw,
-                                    );
-                                }
-                                RangeOrdering::Greater
-                                | RangeOrdering::Cover
-                                | RangeOrdering::Matches => {
-                                    // Else, we found the label and we can validate that the loading
-                                    // of a word with the given offset is within the address space.
-                                    // So we continue exploration.
-                                }
-                                x => todo!("{x:?}"),
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    x => todo!("{x:?}"),
+                if let Some(res) = check_load(
+                    explorerer.clone(),
+                    branch_ptr,
+                    branch,
+                    &configuration,
+                    from,
+                    offset,
+                    4,
+                    InvalidExplanation::Lw,
+                ) {
+                    return res;
                 }
             }
             Instruction::Lb(Lb {
@@ -1749,54 +1599,28 @@ impl<'a> ExplorererPath<'a> {
                 from,
                 offset,
             }) => {
-                // Collect the state.
-                let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
-                let state = find_state(&record, root, harts, first_step, &configuration);
-
-                // Check the destination is valid.
-                match state.registers[branch.hart as usize].get(from) {
-                    Some(RegisterValue::Address(MemoryLocation {
-                        tag: from_label,
-                        offset: from_offset,
-                    })) => {
-                        let (_locality, ttype) =
-                            state.configuration.get(from_label.into()).unwrap();
-                        // If attempting to access outside the memory space for the label.
-                        let full_offset = MemoryValueI64::from(1)
-                            + MemoryValueI64::from(offset.value.value)
-                            + *from_offset;
-                        let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-                        if let Some(ord) = size.compare(&full_offset) {
-                            match ord {
-                                RangeOrdering::Less | RangeOrdering::Within => {
-                                    // The path is invalid, so we add the current types to the
-                                    // excluded list and restart exploration.
-                                    return invalid_path(
-                                        explorerer,
-                                        configuration,
-                                        harts,
-                                        InvalidExplanation::Lb,
-                                    );
-                                }
-                                RangeOrdering::Greater
-                                | RangeOrdering::Cover
-                                | RangeOrdering::Matches => {
-                                    // Else, we found the label and we can validate that the loading
-                                    // of a word with the given offset is within the address space.
-                                    // So we continue exploration.
-                                }
-                                x => todo!("{x:?}"),
-                            }
-                        } else {
-                            todo!()
-                        }
-                    }
-                    x => todo!("{x:?}"),
+                let opt = check_load(
+                    explorerer.clone(),
+                    branch_ptr,
+                    branch,
+                    &configuration,
+                    from,
+                    offset,
+                    1,
+                    InvalidExplanation::Lb,
+                );
+                if let Some(res) = opt {
+                    return res;
                 }
             }
             // If any fail is encountered then the path is invalid.
             Instruction::Fail(_) => {
-                return invalid_path(explorerer, configuration, harts, InvalidExplanation::Fail)
+                return invalid_path(
+                    explorerer.clone(),
+                    configuration,
+                    harts,
+                    InvalidExplanation::Fail,
+                )
             }
             x => todo!("{x:?}"),
         }
@@ -1811,17 +1635,74 @@ impl<'a> ExplorererPath<'a> {
     }
 }
 
-/// Verifies a load is valid for a given configuration.
-unsafe fn check_load<'a>(
-    explorerer: &'a mut Explorerer,
+unsafe fn check_store(
+    explorerer: Rc<RefCell<Explorerer>>,
     branch_ptr: NonNull<VerifierNode>,
     branch: &VerifierNode,
-    configuration: ProgramConfiguration,
+    configuration: &ProgramConfiguration,
+    to: &Register,
+    offset: &crate::ast::Offset,
+    type_size: i64,
+    invalid: InvalidExplanation,
+) -> Option<ExplorePathResult> {
+    // Collect the state.
+    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+    let state = find_state(&record, root, harts, first_step, &configuration);
+
+    // Check the destination is valid.
+    match state.registers[branch.hart as usize].get(to) {
+        Some(RegisterValue::Address(MemoryLocation {
+            tag: from_label,
+            offset: from_offset,
+        })) => {
+            let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+            // If attempting to access outside the memory space for the label.
+            let full_offset = MemoryValueI64::from(type_size)
+                + *from_offset
+                + MemoryValueI64::from(offset.value.value);
+            let size = MemoryValueI64::try_from(size(ttype)).unwrap();
+            if let Some(ord) = size.compare(&full_offset) {
+                match ord {
+                    RangeOrdering::Less | RangeOrdering::Within => {
+                        // The path is invalid, so we add the current types to the
+                        // excluded list and restart exploration.
+                        return Some(invalid_path(
+                            explorerer.clone(),
+                            configuration.clone(),
+                            harts,
+                            invalid,
+                        ));
+                    }
+                    RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
+                        // Else we found the label and we can validate that the loading
+                        // of a word with the given offset is within the address space.
+                        // So we continue exploration.
+                        None
+                    }
+                    RangeOrdering::Cover => unreachable!(),
+                    x => todo!("{x:?} {size:?} {full_offset:?}"),
+                }
+            } else {
+                todo!()
+            }
+        }
+        x => todo!("{x:?}"),
+    }
+}
+
+use std::cell::RefCell;
+
+/// Verifies a load is valid for a given configuration.
+unsafe fn check_load(
+    explorerer: Rc<RefCell<Explorerer>>,
+    branch_ptr: NonNull<VerifierNode>,
+    branch: &VerifierNode,
+    configuration: &ProgramConfiguration,
     from: &Register,
     offset: &crate::ast::Offset,
     type_size: i64,
     invalid: InvalidExplanation,
-) -> Option<ExplorePathResult<'a>> {
+) -> Option<ExplorePathResult> {
     // Collect the state.
     let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
     let state = find_state(&record, root, harts, first_step, &configuration);
@@ -1844,14 +1725,20 @@ unsafe fn check_load<'a>(
                     RangeOrdering::Less | RangeOrdering::Within => {
                         // The path is invalid, so we add the current types to the
                         // excluded list and restart exploration.
-                        return Some(invalid_path(explorerer, configuration, harts, invalid));
+                        return Some(invalid_path(
+                            explorerer.clone(),
+                            configuration.clone(),
+                            harts,
+                            invalid,
+                        ));
                     }
-                    RangeOrdering::Greater | RangeOrdering::Cover | RangeOrdering::Matches => {
+                    RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
                         // Else, we found the label and we can validate that the loading
                         // of a word with the given offset is within the address space.
                         // So we continue exploration.
                         None
                     }
+                    RangeOrdering::Cover => unreachable!(),
                     x => todo!("{x:?}"),
                 }
             } else {
@@ -1880,6 +1767,8 @@ pub enum InvalidExplanation {
     #[error("todo")]
     Sw,
     #[error("todo")]
+    Sb,
+    #[error("todo")]
     Ld,
     #[error("todo")]
     Lw,
@@ -1890,17 +1779,18 @@ pub enum InvalidExplanation {
 }
 
 unsafe fn invalid_path(
-    explorerer: &mut Explorerer,
+    explorerer: Rc<RefCell<Explorerer>>,
     configuration: ProgramConfiguration,
     harts: u8,
     explanation: InvalidExplanation,
-) -> ExplorePathResult<'_> {
+) -> ExplorePathResult {
+    let mut explorer_ref = explorerer.borrow_mut();
     // We need to track covered ground so we don't retread it.
-    explorerer.excluded.insert(configuration.clone());
+    explorer_ref.excluded.insert(configuration.clone());
 
-    trace!("excluded: {:?}", explorerer.excluded);
+    trace!("excluded: {:?}", explorer_ref.excluded);
 
-    let harts_root = explorerer
+    let harts_root = explorer_ref
         .roots
         .iter()
         .find(|root| root.as_ref().harts == harts)
@@ -1914,7 +1804,7 @@ unsafe fn invalid_path(
     });
 
     // Dealloc the current tree so we can restart.
-    for mut root in explorerer.roots.iter().copied() {
+    for mut root in explorer_ref.roots.iter().copied() {
         let stack = &mut root.as_mut().next;
         while let Some(next) = stack.pop() {
             stack.extend(next.as_ref().next.iter());
@@ -2066,7 +1956,7 @@ unsafe fn queue_up(
                     match (lhs, rhs) {
                         (Some(l), Some(r)) => {
                             if let Some(ord) = l.compare(r) {
-                                if ord == Ordering::Less {
+                                if ord == RangeOrdering::Less {
                                     let label_node = find_label(node, label).unwrap();
                                     followup(label_node, hart)
                                 } else {
@@ -2090,7 +1980,7 @@ unsafe fn queue_up(
                     match (lhs, rhs) {
                         (Some(l), Some(r)) => {
                             if let Some(ord) = l.compare(r) {
-                                if ord == Ordering::Equal {
+                                if ord == RangeOrdering::Equal {
                                     let label_node = find_label(node, out).unwrap();
                                     followup(label_node, hart)
                                 } else {
@@ -2114,7 +2004,7 @@ unsafe fn queue_up(
                     match (lhs, rhs) {
                         (Some(l), Some(r)) => {
                             if let Some(ord) = l.compare(r) {
-                                if ord == Ordering::Equal {
+                                if ord == RangeOrdering::Equal {
                                     followup(node_ref.next.unwrap(), hart)
                                 } else {
                                     let label_node = find_label(node, out).unwrap();
@@ -2138,7 +2028,7 @@ unsafe fn queue_up(
                     match src {
                         Some(RegisterValue::I8(imm)) => {
                             if let Some(eq) = imm.compare(&MemoryValueI8::ZERO) {
-                                if eq == Ordering::Equal {
+                                if eq == RangeOrdering::Equal {
                                     followup(node_ref.next.unwrap(), hart)
                                 } else {
                                     let label_node = find_label(node, dest).unwrap();
@@ -2150,7 +2040,7 @@ unsafe fn queue_up(
                         }
                         Some(RegisterValue::U8(imm)) => {
                             if let Some(eq) = imm.compare(&MemoryValueU8::ZERO) {
-                                if eq == Ordering::Equal {
+                                if eq == RangeOrdering::Equal {
                                     followup(node_ref.next.unwrap(), hart)
                                 } else {
                                     let label_node = find_label(node, dest).unwrap();
@@ -2182,7 +2072,7 @@ unsafe fn queue_up(
                     match src {
                         Some(RegisterValue::U8(imm)) => {
                             if let Some(eq) = imm.compare(&MemoryValueU8::ZERO) {
-                                if eq == Ordering::Equal {
+                                if eq == RangeOrdering::Equal {
                                     let label_node = find_label(node, label).unwrap();
                                     followup(label_node, hart)
                                 } else {
@@ -2194,7 +2084,7 @@ unsafe fn queue_up(
                         }
                         Some(RegisterValue::I8(imm)) => {
                             if let Some(eq) = imm.compare(&MemoryValueI8::ZERO) {
-                                if eq == Ordering::Equal {
+                                if eq == RangeOrdering::Equal {
                                     let label_node = find_label(node, label).unwrap();
                                     followup(label_node, hart)
                                 } else {
@@ -2226,7 +2116,7 @@ unsafe fn queue_up(
                             // don't need to actually visit/evaluate the branch at runtime.
                             if let Some(cmp) = l.compare(r) {
                                 match cmp {
-                                    Ordering::Greater => {
+                                    RangeOrdering::Greater => {
                                         let label_node = find_label(node, out).unwrap();
                                         followup(label_node, hart)
                                     }
