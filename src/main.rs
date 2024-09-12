@@ -199,103 +199,106 @@ mod tests {
             // With each step we check the logs to ensure the state is as expected.
 
             // At the start of the program there are no found variables so no initial types for variables.
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
+            let config_is_empty = asserter.matches("configuration: ProgramConfiguration({})");
             // The initial state of the queue contains the 1st instruction for
             // the 1st hart for each number of running harts (in this case we
             // are checking program for systems with 1 hart and with 2 harts).
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:2:0\" }, { hart: 1/2, instruction: \"./assets/two.s:2:0\" }]");
-            // The current instruction is the first instruction popped off the queue.
-            let c = asserter.matches("current: { hart: 1/1, instruction: \"./assets/two.s:2:0\" }");
+            let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:2:0\" }, { hart: 1/2, instruction: \"./assets/two.s:2:0\" }]");
             // We start with no types explored so none excluded.
-            let d = asserter.matches("excluded: {}");
+            let empty_excluded = asserter.matches("excluded: {}");
+            // There are no racy instructions when queueing up the next instructions.
+            let is_not_racy = asserter.matches("racy: false");
+            // The initial conditions.
+            let base_assertions = &(&config_is_empty & &is_not_racy) & &empty_excluded;
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b & c & d).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/2, instruction: \"./assets/two.s:2:0\" }, \
                 { hart: 1/1, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:5:0\" }, \
                 { hart: 2/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a =
+            let u8_config =
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            let base_assertions = &u8_config & &empty_excluded.repeat() & is_not_racy.repeat();
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 2/2, instruction: \"./assets/two.s:5:0\" }, \
                 { hart: 1/1, instruction: \"./assets/two.s:6:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a =
-                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:6:0\" }, \
                 { hart: 2/2, instruction: \"./assets/two.s:6:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a =
-                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 2/2, instruction: \"./assets/two.s:6:0\" }, \
                 { hart: 1/1, instruction: \"./assets/two.s:9:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a =
-                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            let is_racy = asserter.matches("racy: true");
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:9:0\" }, \
                 { hart: 2/2, instruction: \"./assets/two.s:9:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            u8_config.assert().reset();
+            empty_excluded.assert().reset();
+            is_racy.assert().reset();
+            queue.assert();
 
-            let a =
-                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 2/2, instruction: \"./assets/two.s:9:0\" }, \
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
             // Since we are storing a word in `value` it cannot be u8 as this would store outside of memory.
-            let a =
-                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-            let b = asserter.matches(
+            u8_config.reset();
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
-            let c = asserter.matches(
+            let u8_excluded = asserter.matches(
                 "excluded: {\
                 ProgramConfiguration({\"value\": (Global, U8)})\
             }",
@@ -307,7 +310,9 @@ mod tests {
                     ..
                 }
             ));
-            (a & b & c).assert();
+            u8_config.assert();
+            queue.assert();
+            u8_excluded.assert().reset();
 
             path = Explorerer::new_path(explorerer.clone());
 
@@ -316,15 +321,15 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a =
+            let i8_config =
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
-            let c = asserter.matches(
+            let excluded = asserter.matches(
                 "excluded: {\
                 ProgramConfiguration({\"value\": (Global, U8)}), \
                 ProgramConfiguration({\"value\": (Global, I8)})\
@@ -337,7 +342,7 @@ mod tests {
                     ..
                 }
             ));
-            (a & b & c).assert();
+            (i8_config & queue & excluded).assert();
 
             path = Explorerer::new_path(explorerer.clone());
 
@@ -346,15 +351,15 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a =
+            let u16_config =
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
-            let c = asserter.matches(
+            let excluded = asserter.matches(
                 "excluded: {\
                 ProgramConfiguration({\"value\": (Global, U8)}), \
                 ProgramConfiguration({\"value\": (Global, I8)}), \
@@ -368,7 +373,7 @@ mod tests {
                     ..
                 }
             ));
-            (a & b & c).assert();
+            (u16_config & queue & excluded).assert();
 
             path = Explorerer::new_path(explorerer.clone());
 
@@ -376,15 +381,15 @@ mod tests {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 
-            let a =
+            let i32_config =
                 asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
                 { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
-            let c = asserter.matches(
+            let excluded = asserter.matches(
                 "excluded: {\
                 ProgramConfiguration({\"value\": (Global, U8)}), \
                 ProgramConfiguration({\"value\": (Global, I8)}), \
@@ -399,573 +404,184 @@ mod tests {
                     ..
                 }
             ));
-            (a & b & c).assert();
+            (i32_config & queue & excluded).assert();
 
+            // The valid path is now entered with `value` as `u32`.
             path = Explorerer::new_path(explorerer.clone());
 
-            // 454
-            for _ in 0..300 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            let c = asserter.matches(
+            let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:2:0\" }, { hart: 1/2, instruction: \"./assets/two.s:2:0\" }]");
+            let excluded = asserter.matches(
                 "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)}), \
+                ProgramConfiguration({\"value\": (Global, I16)})\
             }",
             );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
+            let base_assertions = (&config_is_empty.repeat() & &excluded) & is_not_racy.repeat();
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..6 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..6 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..6 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..3 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..6 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U8}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            // Iterate over all possibilities for `value: I8` on hart 0.
-            // let mut types_iter = TYPE_LIST.iter().skip(1);
-            // for _ in 0..7 {
-            //     path = Explorerer::new_path(explorerer.clone());
-            //     for _ in 0..6 {
-            //         path = ExplorererPath::next_step(path).continued().unwrap();
-            //     }
-
-            //     let s = format!(
-            //         "configuration: ProgramConfiguration({})",
-            //         types_iter.next().unwrap()
-            //     );
-            //     let a = asserter.matches(s);
-            //     let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
-            //     assert!(matches!(
-            //         ExplorererPath::next_step(path),
-            //         ExplorePathResult::Invalid {
-            //             complete: false,
-            //             ..
-            //         }
-            //     ));
-            //     a.assert();
-            //     assert!(b);
-            // }
-
-            path = Explorerer::new_path(explorerer.clone());
-
-            for _ in 0..3 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": I8}, 1: {}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            for _ in 0..8 {
-                path = Explorerer::new_path(explorerer.clone());
-                for _ in 0..6 {
-                    path = ExplorererPath::next_step(path).continued().unwrap();
-                }
-                assert!(matches!(
-                    ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid {
-                        complete: false,
-                        ..
-                    }
-                ));
-            }
-            path = Explorerer::new_path(explorerer.clone());
-            for _ in 0..3 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": I8}, 1: {}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": U16}, 1: {}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            for _ in 0..8 {
-                path = Explorerer::new_path(explorerer.clone());
-                for _ in 0..6 {
-                    path = ExplorererPath::next_step(path).continued().unwrap();
-                }
-                assert!(matches!(
-                    ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid {
-                        complete: false,
-                        ..
-                    }
-                ));
-            }
-            path = Explorerer::new_path(explorerer.clone());
-            for _ in 0..3 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches("queue: [{ hart: 2/2, instruction: \"./assets/two.s:6:0\" }, { hart: 1/1, instruction: \"./assets/two.s:9:0\" }]");
-            let c = asserter.matches(
-                "excluded: {\
-                {0: {\"value\": U8}, 1: {}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": I8}, 1: {}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I8}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I16}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I32}}, \
-                {0: {\"value\": I8}, 1: {\"value\": U64}}, \
-                {0: {\"value\": I8}, 1: {\"value\": I64}}, \
-                {0: {\"value\": U16}, 1: {}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U8}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I8}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U16}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I16}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U32}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I32}}, \
-                {0: {\"value\": U16}, 1: {\"value\": U64}}, \
-                {0: {\"value\": U16}, 1: {\"value\": I64}}, \
-                {0: {\"value\": I16}, 1: {}}, \
-                {0: {\"value\": I16}, 1: {\"value\": U8}}, \
-                {0: {\"value\": I16}, 1: {\"value\": I8}}, \
-                {0: {\"value\": I16}, 1: {\"value\": U16}}, \
-                {0: {\"value\": I16}, 1: {\"value\": I16}}, \
-                {0: {\"value\": I16}, 1: {\"value\": U32}}, \
-                {0: {\"value\": I16}, 1: {\"value\": I32}}, \
-                {0: {\"value\": I16}, 1: {\"value\": U64}}, \
-                {0: {\"value\": I16}, 1: {\"value\": I64}}\
-            }",
-            );
-            assert!(matches!(
-                ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
-                    complete: false,
-                    ..
-                }
-            ));
-            (a & b & c).assert();
-
-            // Now starting with U32, we have reached a type for `value` in hart 0 that will pass.
-            // It will need to iterate up to U32 for `value` in hart 1.
-            for _ in 0..4 {
-                path = Explorerer::new_path(explorerer.clone());
-                for _ in 0..11 {
-                    path = ExplorererPath::next_step(path).continued().unwrap();
-                }
-                assert!(matches!(
-                    ExplorererPath::next_step(path),
-                    ExplorePathResult::Invalid {
-                        complete: false,
-                        ..
-                    }
-                ));
-            }
-
-            // Now we are on the u32 path for `value` in both harts.
-            path = Explorerer::new_path(explorerer.clone());
-            for _ in 0..8 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-            // So now is the first time we get past `sw t1, (t0)` on both harts.
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }\
+                { hart: 1/2, instruction: \"./assets/two.s:2:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }, \
-                { hart: 1/1, instruction: \"addi t1, t1, 1\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:5:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:5:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches("configuration: ProgramConfiguration({})");
-            let b = asserter.matches(
+            let u32_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
+            let queue = asserter.matches(
                 "queue: [\
-                { hart: 1/1, instruction: \"addi t1, t1, 1\" }, \
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:5:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:6:0\" }\
+            ]",
+            );
+            let base_assertions = &u32_config & &excluded & is_not_racy;
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/two.s:6:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:6:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            (a & b).assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:6:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:9:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/two.s:9:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            config_is_empty.assert().reset();
+            excluded.assert().reset();
+            is_racy.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }, \
                 { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches(
+            let queue = asserter.matches(
                 "queue: [\
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }\
+                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            base_assertions.assert().reset();
+            queue.assert();
 
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
-            ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            // // 454
+            // for _ in 0..300 {
+            //     path = ExplorererPath::next_step(path).continued().unwrap();
+            // }
 
-            // See the queue has grown.
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }\
-            ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            // let a = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
+            // let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
+            // let c = asserter.matches(
+            //     "excluded: {\
+            //     {0: {\"value\": U8}, 1: {\"value\": U8}}, \
+            //     {0: {\"value\": U8}, 1: {\"value\": I8}}, \
+            //     {0: {\"value\": U8}, 1: {\"value\": U16}}, \
+            //     {0: {\"value\": U8}, 1: {\"value\": I16}}, \
+            //     {0: {\"value\": U8}, 1: {\"value\": U32}}\
+            // }",
+            // );
+            // assert!(matches!(
+            //     ExplorererPath::next_step(path),
+            //     ExplorePathResult::Invalid {
+            //         complete: false,
+            //         ..
+            //     }
+            // ));
+            // (a & b & c).assert();
 
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"addi t1, t1, 1\" }\
-            ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            // path = Explorerer::new_path(explorerer.clone());
 
-            // And it grows again.
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
-                ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            // // TODO I think this is where the endless loop comes from, we get stuck on the racy instructions.
+            // let mut count = 0;
+            // let invalid = loop {
+            //     if count % 10_000 == 0 {
+            //         print!(".");
+            //         std::io::stdout().flush().unwrap();
+            //     }
+            //     // // Prints the tree for 1 harts
+            //     // if count % 3_000_000 == 0 {
+            //     //     let root = path
+            //     //         .explorerer
+            //     //         .roots
+            //     //         .iter()
+            //     //         .find(|r| r.as_ref().harts == 1)
+            //     //         .unwrap();
+            //     //     let [hart_root] = root.as_ref().next.as_slice() else {
+            //     //         panic!()
+            //     //     };
+            //     //     let check = draw_tree(*hart_root, 2, |n| {
+            //     //         let r = n.as_ref();
+            //     //         format!("{}", r.node.as_ref().this)
+            //     //     });
+            //     //     println!();
+            //     //     println!("{check}");
+            //     //     println!();
+            //     // }
+            //     path = match ExplorererPath::next_step(path) {
+            //         ExplorePathResult::Continue(p) => p,
+            //         invalid @ ExplorePathResult::Invalid { .. } => break invalid,
+            //         _ => todo!(),
+            //     };
+            //     count += 1;
+            // };
+            // let ExplorePathResult::Invalid {
+            //     complete,
+            //     path,
+            //     explanation,
+            // } = invalid
+            // else {
+            //     panic!()
+            // };
 
-            // And it grows again.
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }\
-            ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
+            // println!("test time: {:?}", now.elapsed());
 
-            let a = asserter.matches(
-                "queue: [\
-                { hart: 1/1, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"addi t1, t1, 1\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 2/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"lw t1, (t0)\" }, \
-                { hart: 1/2, instruction: \"addi t1, t1, 1\" }\
-            ]",
-            );
-            path = ExplorererPath::next_step(path).continued().unwrap();
-            a.assert();
-
-            // TODO I think this is where the endless loop comes from, we get stuck on the racy instructions.
-            let mut count = 0;
-            let invalid = loop {
-                if count % 10_000 == 0 {
-                    print!(".");
-                    std::io::stdout().flush().unwrap();
-                }
-                // // Prints the tree for 1 harts
-                // if count % 3_000_000 == 0 {
-                //     let root = path
-                //         .explorerer
-                //         .roots
-                //         .iter()
-                //         .find(|r| r.as_ref().harts == 1)
-                //         .unwrap();
-                //     let [hart_root] = root.as_ref().next.as_slice() else {
-                //         panic!()
-                //     };
-                //     let check = draw_tree(*hart_root, 2, |n| {
-                //         let r = n.as_ref();
-                //         format!("{}", r.node.as_ref().this)
-                //     });
-                //     println!();
-                //     println!("{check}");
-                //     println!();
-                // }
-                path = match ExplorererPath::next_step(path) {
-                    ExplorePathResult::Continue(p) => p,
-                    invalid @ ExplorePathResult::Invalid { .. } => break invalid,
-                    _ => todo!(),
-                };
-                count += 1;
-            };
-            let ExplorePathResult::Invalid {
-                complete,
-                path,
-                explanation,
-            } = invalid
-            else {
-                panic!()
-            };
-
-            println!("test time: {:?}", now.elapsed());
-
-            println!("\n\n{complete}\n\n");
-            println!("\n\n{path}\n\n");
-            println!("\n\n{explanation}\n\n");
+            // println!("\n\n{complete}\n\n");
+            // println!("\n\n{path}\n\n");
+            // println!("\n\n{explanation}\n\n");
         }
 
         drop(guard);

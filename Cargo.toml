@@ -11,7 +11,7 @@ thiserror = "1.0.63"
 [dev-dependencies]
 tracing-test = "0.2.5"
 tracing-subscriber = "0.3.18"
-tracing-assertions = "0.1.3"
+tracing-assertions = "0.3.0"
 # tracing-loki = "0.2.5"
 # url = "2.5.2"
 # tokio = { version = "1.40.0", features = ["full"] }

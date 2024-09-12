@@ -5,14 +5,17 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::iter::once;
+use std::ops::Add;
 use std::ops::Range;
 use std::ops::Sub;
 use std::ptr;
+use std::rc::Rc;
 use std::{
     alloc::alloc,
     collections::{HashMap, VecDeque},
     ptr::NonNull,
 };
+use thiserror::Error;
 use tracing::error;
 use tracing::trace;
 
@@ -1037,7 +1040,6 @@ impl RegisterValue {
     }
 }
 
-use std::ops::Add;
 impl From<DoubleWordValue> for RegisterValue {
     fn from(x: DoubleWordValue) -> Self {
         match x {
@@ -1270,8 +1272,6 @@ impl Explorerer {
     }
 }
 
-use std::rc::Rc;
-
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
 pub struct ExplorererPath {
     // This could be a mutable reference. Its a `Rc<RefCell<_>>` becuase the borrow checker can't
@@ -1283,8 +1283,6 @@ pub struct ExplorererPath {
     pub touched: BTreeSet<NonNull<AstNode>>,
     pub queue: VecDeque<NonNull<VerifierNode>>,
 }
-
-use itertools::Itertools;
 
 /// Attempts to modify initial types to include a new variable, if it cannot add it,
 /// existing is added to excluded, then returns true.
@@ -1823,10 +1821,7 @@ unsafe fn invalid_path(
     }
 }
 
-use thiserror::Error;
-
 // Get the number of harts of this sub-tree and record the path.
-
 unsafe fn get_backpath_harts(
     prev: NonNull<VerifierNode>,
 ) -> (Vec<usize>, NonNull<VerifierHarts>, u8, usize) {
@@ -1922,10 +1917,17 @@ unsafe fn queue_up(
             | Instruction::Lb(Lb { from: register, .. }) => {
                 let value = state.registers[hart as usize].get(register).unwrap();
                 if let RegisterValue::Address(MemoryLocation { tag, offset: _ }) = value {
-                    let (locality, _ttype) = state.configuration.get(tag.into()).unwrap();
-                    match locality {
-                        Locality::Global => Some(Ok((hart, node))),  // Racy
-                        Locality::Thread => Some(Err((hart, node))), // Non-racy
+                    match tag {
+                        // Racy
+                        MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
+                        // Non-racy
+                        MemoryLabel::Thread {
+                            label: _,
+                            hart: thart,
+                        } => {
+                            assert_eq!(*thart, hart);
+                            Some(Err((hart, node)))
+                        }
                     }
                 } else {
                     todo!()
@@ -1943,6 +1945,7 @@ unsafe fn queue_up(
 
     let next_nodes = fronts
         .iter()
+        // TODO Document why reverse order is important here.
         .rev()
         .filter_map(|(&hart, &node)| {
             let node_ref = node.as_ref();
@@ -2158,6 +2161,22 @@ unsafe fn queue_up(
 
     debug!("racy: {}", next_nodes.is_ok());
 
+    debug!(
+        "next: {:?}",
+        next_nodes
+            .as_ref()
+            .map(|racy| racy
+                .iter()
+                .map(|(h, n)| format!(
+                    "{{ hart: {h}, instruction: {} }}",
+                    n.as_ref().this.to_string()
+                ))
+                .collect::<Vec<_>>())
+            .map_err(|(h, n)| format!(
+                "{{ hart: {h}, instruction: {} }}",
+                n.as_ref().this.to_string()
+            ))
+    );
     match next_nodes {
         // If there was a non-racy node, enqueue this single node.
         Err((hart, non_racy_next)) => {
