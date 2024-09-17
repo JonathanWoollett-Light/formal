@@ -98,14 +98,14 @@ struct MemoryMap {
 #[derive(Debug)]
 struct Slice {
     base: MemoryLabel,
-    offset: MemoryValueI64,
-    len: MemoryValueU64,
+    offset: MemoryValueU64,
+    len: u64,
 }
 
 #[derive(Debug)]
 struct SubSlice {
-    offset: MemoryValueI64,
-    len: MemoryValueU64,
+    offset: MemoryValueU64,
+    len: u64,
 }
 
 #[derive(Debug, Error)]
@@ -132,7 +132,7 @@ impl MemoryMap {
             .get(base)
             .ok_or(GetMemoryMapError::Missing)?
             .get(&SubSlice {
-                offset: *offset,
+                offset: offset.clone(),
                 len: len.clone(),
             })
             .map_err(GetMemoryMapError::Value)
@@ -143,14 +143,16 @@ impl MemoryMap {
         // Memory location.
         key: &MemoryPtr,
         // Register length.
-        len: &MemoryValueU64,
+        len: &u64,
         // Register value.
         value: MemoryValue,
     ) -> Result<(), SetMemoryMapError> {
+        dbg!(&value);
         let MemoryPtr(Some(NonNullMemoryPtr { tag, offset })) = key else {
             return Err(SetMemoryMapError::NullPtr);
         };
         let existing = self.map.get_mut(tag).ok_or(SetMemoryMapError::Missing)?;
+        dbg!(&existing);
         existing
             .set(offset, len, value)
             .map_err(SetMemoryMapError::Value)
@@ -190,7 +192,7 @@ impl MemoryMap {
                             MemoryValue::U64(MemoryValueU64::from(FlatType::from(&t) as u64)),
                             MemoryValue::Ptr(MemoryPtr(addr.map(|tag| NonNullMemoryPtr {
                                 tag,
-                                offset: MemoryValueI64::ZERO,
+                                offset: MemoryValueU64::ZERO,
                             }))),
                             MemoryValue::U64(MemoryValueU64::from(if let Type::List(l) = &t {
                                 l.len()
@@ -236,7 +238,7 @@ impl MemoryMap {
                         MemoryValue::U64(MemoryValueU64::from(FlatType::List as u64)),
                         MemoryValue::Ptr(MemoryPtr(addr.map(|tag| NonNullMemoryPtr {
                             tag,
-                            offset: MemoryValueI64::ZERO,
+                            offset: MemoryValueU64::ZERO,
                         }))),
                         MemoryValue::U64(MemoryValueU64::from(list.len())),
                         MemoryValue::U8(MemoryValueU8::from(Locality::Thread as u8)),
@@ -326,13 +328,13 @@ struct MemoryPtr(Option<NonNullMemoryPtr>);
 #[derive(Debug, Clone)]
 struct NonNullMemoryPtr {
     tag: MemoryLabel,
-    offset: MemoryValueI64,
+    offset: MemoryValueU64,
 }
 
 #[derive(Debug, Error)]
 enum MemoryValuePtrGetError {
-    #[error("Potentially access outside type with {0}")]
-    Outside(MemoryValueI64),
+    #[error("Potentially access outside type with {0:?}")]
+    Outside(MemoryValueU64),
 }
 
 impl MemoryPtr {
@@ -340,18 +342,25 @@ impl MemoryPtr {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValuePtrGetError> {
-        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+        let end = offset.clone() + MemoryValueU64::from(*len);
+        let value_size = size(&Type::U32);
 
-        match end.compare(&MemoryValueI64::from(size(&Type::U32) as i64)) {
-            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
-                Err(MemoryValuePtrGetError::Outside(end))
-            }
-            RangeOrdering::Equal => match offset.exact() {
-                Some(0) => Ok(MemoryValue::Ptr(self.clone())),
-                _ => todo!(),
+        match end.compare_scalar(&value_size) {
+            RangeScalarOrdering::Less => Err(MemoryValuePtrGetError::Outside(end)),
+            // It will probably never be valid to grab a couple bytes from a pointer.
+            // But in this case it should be supported by simply returning a range that is from min to max.
+            RangeScalarOrdering::Greater => match *len {
+                ..8 => {
+                    // TODO This can be narrowed. If a ptr has an offset of 4, we know it is atleast >4.
+                    // Return unknown bytes.
+                    Ok(MemoryValue::from(Type::List(
+                        (0..*len).map(|_| Type::U8).collect(),
+                    )))
+                }
+                _ => unreachable!(),
             },
-            RangeOrdering::Within => match (offset.exact(), len.exact()) {
-                (Some(o), Some(l)) if l == size(&Type::U64) => {
+            RangeScalarOrdering::Within => match offset.exact() {
+                Some(o) if *len == u64::from(size(&Type::U64)) => {
                     debug_assert_eq!(o, 0);
                     Ok(MemoryValue::Ptr(self.clone()))
                 }
@@ -467,6 +476,8 @@ enum MemoryValueGetError {
     Ptr(MemoryValuePtrGetError),
     #[error("This would get multiple items from a list, this is currently not supported.")]
     ListMultiple,
+    #[error("Failed to get i64: {0}")]
+    I64(MemoryValueI64GetError),
 }
 
 #[derive(Debug, Error)]
@@ -477,12 +488,14 @@ enum MemoryValueSetError {
     TooLarge,
     #[error("This would set multiple items from in the list, this is currently not supported.")]
     ListMultiple,
+    #[error("The offset may be larger than the size of the type: {0}")]
+    Offset(<MemoryValueU64 as TryFrom<MemoryValueI64>>::Error),
 }
 
-fn memory_range(offset: &MemoryValueI64, len: &MemoryValueI64) -> MemoryValueI64 {
-    MemoryValueI64 {
+fn memory_range(offset: &MemoryValueU64, len: &u64) -> MemoryValueU64 {
+    MemoryValueU64 {
         start: offset.start,
-        stop: offset.stop + len.stop,
+        stop: offset.stop + *len,
     }
 }
 
@@ -493,11 +506,11 @@ impl MemoryValue {
             U8(x) => x.get(subslice).map_err(MemoryValueGetError::U8),
             U32(x) => x.get(subslice).map_err(MemoryValueGetError::U32),
             U64(x) => x.get(subslice).map_err(MemoryValueGetError::U64),
+            I64(x) => x.get(subslice).map_err(MemoryValueGetError::I64),
             Ptr(x) => x.get(subslice).map_err(MemoryValueGetError::Ptr),
             List(list) => {
                 let SubSlice { offset, len } = subslice;
-                let memrange =
-                    memory_range(offset, &MemoryValueI64::try_from(len.clone()).unwrap());
+                let memrange = memory_range(offset, len);
                 let mut previous = 0;
                 let mut covers = Vec::new();
                 let mut iter = list.iter().enumerate();
@@ -505,8 +518,8 @@ impl MemoryValue {
                 // Iterate items before.
                 loop {
                     let Some((i, item)) = iter.next() else { break };
-                    let next = previous + size(&Type::from(item)) as i64;
-                    let current = MemoryValueI64 {
+                    let next = previous + size(&Type::from(item));
+                    let current = MemoryValueU64 {
                         start: previous,
                         stop: next,
                     };
@@ -516,7 +529,7 @@ impl MemoryValue {
                         // Gets some bytes within this item.
                         RangeOrdering::Within => {
                             return item.get(&SubSlice {
-                                offset: (*offset - current),
+                                offset: (offset.clone() - current),
                                 len: len.clone(),
                             });
                         }
@@ -535,8 +548,8 @@ impl MemoryValue {
                 // Iterate items within
                 loop {
                     let Some((i, item)) = iter.next() else { break };
-                    let next = previous + size(&Type::from(item)) as i64;
-                    let current = MemoryValueI64 {
+                    let next = previous + size(&Type::from(item));
+                    let current = MemoryValueU64 {
                         start: previous,
                         stop: next,
                     };
@@ -563,39 +576,48 @@ impl MemoryValue {
     fn set(
         &mut self,
         // Offset in memory.
-        offset: &MemoryValueI64,
+        offset: &MemoryValueU64,
         // Register position.
         // The `len` should always be exact since it matches to instruction e.g. `sw` has `len=4`.
-        // I don't know if there ios`offset` can be dynamic.
-        len: &MemoryValueU64,
+        // I don't know if there is `offset` can be dynamic.
+        len: &u64,
         // Register value.
         value: MemoryValue,
     ) -> Result<(), MemoryValueSetError> {
-        let size_of_existing = MemoryValueI64::from(size(&Type::from(self.clone())) as i64);
-        let diff = size_of_existing - *offset;
-        let size_of_value = len.exact().clone().unwrap();
+        let size_of_existing = size(&Type::from(self.clone()));
+        let diff = MemoryValueU64::from(size_of_existing) - offset.clone();
 
         // we can't use recursion for lists since it may affect multiple items in a list.
 
-        // Compare the size of the value we are attempting to store to the space within the memory type with the offset.
-        match MemoryValueI64::try_from(len.clone())
-            .unwrap()
-            .compare(&diff)
-        {
+        // Compare the size of the value we are attempting to store with the size of the type minus the offset.
+        // Essentially asks "does storing `value` store it up to the last address in `self`?"
+        match diff.compare_scalar(len) {
             // Setting bytes from the offset reaching the end of the type.
-            RangeOrdering::Equal => {
-                // In the case of setting all bytes, its very simple.
-                match (
-                    offset.exact(),
-                    size_of_value == size(&Type::from(value.clone())),
-                ) {
-                    (Some(0), true) => {
-                        *self = value;
-                        return Ok(());
-                    }
-                    _ => {}
-                }
+            RangeScalarOrdering::Within => {
+                dbg!(offset);
+                // dbg!(size_of_value);
+                // dbg!(size(&Type::from(value.clone())));
+
+                // dbg!(&self);
+                // dbg!(&value);
                 match self {
+                    MemoryValue::U32(_) => match value {
+                        MemoryValue::I64(from) => {
+                            let new_value = from
+                                .get(&SubSlice {
+                                    offset: offset.clone(),
+                                    len: 4,
+                                })
+                                .unwrap();
+                            debug_assert_eq!(
+                                size(&Type::from(new_value.clone())),
+                                size_of_existing
+                            );
+                            *self = new_value;
+                            Ok(())
+                        }
+                        _ => todo!(),
+                    },
                     MemoryValue::U8(_) => unreachable!(),
                     // If we are setting bytes that reach the end, we know this will be the last element.
                     // We can also reach this case where we are setting an empty list to an empty list,
@@ -605,9 +627,9 @@ impl MemoryValue {
                             // In the case of empty list setting we don't need to do anything.
                             return Ok(());
                         };
-                        let size_of_item = size(&Type::from(item.clone()));
+                        let size_of_item = u64::from(size(&Type::from(item.clone())));
                         // Compare the size of the list item with the size of the value we are trying to set,
-                        match size_of_item.cmp(&size_of_value) {
+                        match size_of_item.cmp(&len) {
                             // if the size is equal it fully covers the last item in the list.
                             Ordering::Equal => {
                                 *item = value;
@@ -621,16 +643,13 @@ impl MemoryValue {
                             Ordering::Less => todo!(),
                         }
                     }
-                    _ => todo!(),
+                    x => todo!("{x:?}"),
                 }
             }
             // Setting bytes from the offset not reaching the end of the type.
-            RangeOrdering::Less => match self {
+            RangeScalarOrdering::Less => match self {
                 MemoryValue::List(list) => {
-                    let memrange = memory_range(
-                        offset,
-                        &MemoryValueI64::from(size(&Type::from(value.clone())) as i64),
-                    );
+                    let memrange = memory_range(offset, &size(&Type::from(value.clone())));
                     let mut previous = 0;
                     let mut covers = Vec::new();
                     let mut iter = list.iter_mut().enumerate();
@@ -638,8 +657,8 @@ impl MemoryValue {
                     // Iterate items before.
                     loop {
                         let Some((i, item)) = iter.next() else { break };
-                        let next = previous + size(&Type::from(item.clone())) as i64;
-                        let current = MemoryValueI64 {
+                        let next = previous + size(&Type::from(item.clone()));
+                        let current = MemoryValueU64 {
                             start: previous,
                             stop: next,
                         };
@@ -668,8 +687,8 @@ impl MemoryValue {
                     // Iterate items within
                     loop {
                         let Some((i, item)) = iter.next() else { break };
-                        let next = previous + size(&Type::from(item.clone())) as i64;
-                        let current = MemoryValueI64 {
+                        let next = previous + size(&Type::from(item.clone()));
+                        let current = MemoryValueU64 {
                             start: previous,
                             stop: next,
                         };
@@ -692,9 +711,7 @@ impl MemoryValue {
                 _ => todo!(),
             },
             // Setting bytes after the end of the type.
-            RangeOrdering::Greater => Err(MemoryValueSetError::TooLarge),
-            RangeOrdering::Within | RangeOrdering::Cover => todo!(),
-            x => todo!("{x:?}"),
+            RangeScalarOrdering::Greater => Err(MemoryValueSetError::TooLarge),
         }
     }
 
@@ -887,8 +904,8 @@ impl RangeType for MemoryValueU8 {
 
 #[derive(Debug, Error)]
 enum MemoryValueU8GetError {
-    #[error("Potentially access outside type with {0}")]
-    Outside(MemoryValueI64),
+    #[error("Potentially access outside type with {0:?}")]
+    Outside(MemoryValueU64),
 }
 
 impl MemoryValueU8 {
@@ -898,19 +915,12 @@ impl MemoryValueU8 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU8GetError> {
-        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
-        let value_size = MemoryValueI64::from(size(&Type::U8) as i64);
-
-        match end.compare(&value_size) {
-            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
-                Err(MemoryValueU8GetError::Outside(end))
-            }
-            RangeOrdering::Equal => match offset.exact() {
-                Some(0) => Ok(MemoryValue::U8(self.clone())),
-                x => todo!("{x:?}"),
-            },
-            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
-                (Some(o), Some(l), _) if l == size(&Type::U8) => {
+        let end = offset.clone() + MemoryValueU64::from(len.clone());
+        let value_size = size(&Type::U8);
+        match end.lte(&value_size) {
+            false => Err(MemoryValueU8GetError::Outside(end)),
+            true => match (offset.exact(), self.exact()) {
+                (Some(o), _) if *len == size(&Type::U8) => {
                     debug_assert_eq!(o, 0);
                     Ok(MemoryValue::U8(self.clone()))
                 }
@@ -1000,8 +1010,8 @@ impl From<MemoryValue> for Type {
 
 #[derive(Debug, Error)]
 enum MemoryValueU32GetError {
-    #[error("Potentially access outside type with {0}")]
-    Outside(MemoryValueI64),
+    #[error("Potentially access outside type with {0:?}")]
+    Outside(MemoryValueU64),
 }
 
 impl MemoryValueU32 {
@@ -1009,25 +1019,20 @@ impl MemoryValueU32 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU32GetError> {
-        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+        let end = offset.clone() + MemoryValueU64::from(*len);
+        let value_size = size(&Type::U32);
 
-        match end.compare(&MemoryValueI64::from(size(&Type::U32) as i64)) {
-            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
-                Err(MemoryValueU32GetError::Outside(end))
-            }
-            RangeOrdering::Equal => match offset.exact() {
-                Some(0) => Ok(MemoryValue::U32(self.clone())),
-                _ => todo!(),
-            },
-            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
-                (Some(o), Some(l), Some(v)) if l == size(&Type::U8) => {
+        match end.lte(&value_size) {
+            false => Err(MemoryValueU32GetError::Outside(end)),
+            true => match (offset.exact(), self.exact()) {
+                (Some(o), Some(v)) if *len == size(&Type::U8) => {
                     let byte = v.to_ne_bytes()[o as usize];
                     Ok(MemoryValue::U8(MemoryValueU8 {
                         start: byte,
                         stop: byte,
                     }))
                 }
-                (Some(o), Some(l), _) if l == size(&Type::U32) => {
+                (Some(o), _) if *len == size(&Type::U32) => {
                     debug_assert_eq!(o, 0);
                     Ok(MemoryValue::U32(self.clone()))
                 }
@@ -1084,11 +1089,20 @@ impl From<MemoryValueU8> for MemoryValueU64 {
         }
     }
 }
+impl TryFrom<MemoryValueI64> for MemoryValueU64 {
+    type Error = <u64 as TryFrom<i64>>::Error;
+    fn try_from(other: MemoryValueI64) -> Result<Self, Self::Error> {
+        Ok(Self {
+            start: u64::try_from(other.start)?,
+            stop: u64::try_from(other.stop)?,
+        })
+    }
+}
 
 #[derive(Debug, Error)]
 enum MemoryValueU64GetError {
-    #[error("Potentially access outside type with {0}")]
-    Outside(MemoryValueI64),
+    #[error("Potentially access outside type with {0:?}")]
+    Outside(MemoryValueU64),
 }
 
 impl MemoryValueU64 {
@@ -1098,31 +1112,25 @@ impl MemoryValueU64 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU64GetError> {
-        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+        let end = offset.clone() + MemoryValueU64::from(*len);
+        let value_size = size(&Type::U64);
 
-        match end.compare(&MemoryValueI64::from(size(&Type::U64) as i64)) {
-            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
-                Err(MemoryValueU64GetError::Outside(end))
-            }
-            RangeOrdering::Equal => match offset.exact() {
-                Some(0) => Ok(MemoryValue::U64(self.clone())),
-                _ => todo!(),
-            },
-            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
-                (Some(o), Some(l), Some(v)) if l == size(&Type::U8) => {
+        match end.lte(&value_size) {
+            false => Err(MemoryValueU64GetError::Outside(end)),
+            true => match (offset.exact(), self.exact()) {
+                (Some(o), Some(v)) if *len == size(&Type::U8) => {
                     let byte = v.to_ne_bytes()[o as usize];
                     Ok(MemoryValue::U8(MemoryValueU8 {
                         start: byte,
                         stop: byte,
                     }))
                 }
-                (Some(o), Some(l), _) if l == size(&Type::U64) => {
+                (Some(o), _) if *len == size(&Type::U64) => {
                     debug_assert_eq!(o, 0);
                     Ok(MemoryValue::U64(self.clone()))
                 }
                 x => todo!("{x:?}"),
             },
-            _ => todo!(),
         }
     }
     fn exact(&self) -> Option<u64> {
@@ -1160,6 +1168,32 @@ trait RangeType {
     type Base: Eq + PartialEq + Ord + PartialOrd;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
+    /// Returns if the given scalar is greater than, less than or within `self`.
+    fn compare_scalar(&self, other: &Self::Base) -> RangeScalarOrdering {
+        match (other.cmp(&self.start()), other.cmp(&self.stop())) {
+            (Ordering::Greater, Ordering::Greater) => RangeScalarOrdering::Greater,
+            (Ordering::Less, Ordering::Less) => RangeScalarOrdering::Less,
+            (Ordering::Greater, Ordering::Less) => RangeScalarOrdering::Within,
+            (Ordering::Equal, Ordering::Equal) => RangeScalarOrdering::Within,
+            (Ordering::Greater, Ordering::Equal) => RangeScalarOrdering::Within,
+            (Ordering::Equal, Ordering::Less) => RangeScalarOrdering::Within,
+            _ => unreachable!(),
+        }
+    }
+    /// Less than or equal to a given scalar.
+    fn lte(&self, other: &Self::Base) -> bool {
+        match self.stop().cmp(other) {
+            Ordering::Less | Ordering::Equal => true,
+            Ordering::Greater => false,
+        }
+    }
+    /// Equal to a given scalar.
+    fn eq(&self, other: &Self::Base) -> bool {
+        match (self.start().cmp(other), self.stop().cmp(other)) {
+            (Ordering::Equal, Ordering::Equal) => true,
+            _ => false,
+        }
+    }
     fn compare(&self, other: &Self) -> RangeOrdering {
         match (
             self.start().cmp(&other.start()),
@@ -1201,6 +1235,15 @@ impl TryFrom<MemoryValueU64> for MemoryValueI64 {
         })
     }
 }
+impl Sub for MemoryValueU64 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            start: self.start - rhs.stop,
+            stop: self.stop - rhs.start,
+        }
+    }
+}
 
 /// The `Equal` variant is handled like this since if you have a value `x` in the
 /// range 1..3 and a value `y` in the range 1..3 it would not be correct to say these
@@ -1219,6 +1262,16 @@ enum RangeOrdering {
     Within,
     /// 1..3 matches 1..3
     Matches,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
+enum RangeScalarOrdering {
+    /// 3 is less than 4..7
+    Less,
+    /// 8 is greater than 4..7
+    Greater,
+    /// 5 is within 4..7
+    Within,
 }
 
 impl fmt::Display for MemoryValueI64 {
@@ -1253,8 +1306,8 @@ impl Sub for MemoryValueI64 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
-            start: self.start - rhs.start,
-            stop: self.stop - rhs.stop,
+            start: self.start - rhs.stop,
+            stop: self.stop - rhs.start,
         }
     }
 }
@@ -1274,8 +1327,51 @@ impl From<MemoryValueU8> for MemoryValueI64 {
         }
     }
 }
+
+#[derive(Debug, Error)]
+enum MemoryValueI64GetError {
+    #[error("Potentially access outside type with {0:?}")]
+    Outside(MemoryValueU64),
+}
+
 impl MemoryValueI64 {
     const ZERO: Self = Self { start: 0, stop: 0 };
+    fn get(
+        &self,
+        SubSlice { offset, len }: &SubSlice,
+    ) -> Result<MemoryValue, MemoryValueI64GetError> {
+        let end = offset.clone() + MemoryValueU64::from(*len);
+        let value_size = size(&Type::I64);
+
+        match end.lte(&value_size) {
+            false => Err(MemoryValueI64GetError::Outside(end)),
+            true => match (offset.exact(), self.exact()) {
+                (Some(o), Some(v)) if *len == size(&Type::U8).into() => {
+                    let byte = v.to_ne_bytes()[o as usize];
+                    Ok(MemoryValue::U8(MemoryValueU8 {
+                        start: byte,
+                        stop: byte,
+                    }))
+                }
+                (Some(o), Some(v)) if *len == size(&Type::U32).into() => {
+                    let a = o as usize;
+                    let b = a + *len as usize;
+                    let bytes = <[u8; 4]>::try_from(&v.to_ne_bytes()[a..b]).unwrap();
+                    let integer = u32::from_ne_bytes(bytes);
+                    Ok(MemoryValue::U32(MemoryValueU32 {
+                        start: integer,
+                        stop: integer,
+                    }))
+                }
+                (Some(o), _) if *len == size(&Type::U64).into() => {
+                    debug_assert_eq!(o, 0);
+                    Ok(MemoryValue::I64(self.clone()))
+                }
+                x => todo!("{x:?}"),
+            },
+            _ => todo!(),
+        }
+    }
     fn exact(&self) -> Option<i64> {
         (self.start == self.stop).then_some(self.start)
     }
@@ -1350,7 +1446,7 @@ impl MemoryValueType {
                     .map(|l| {
                         DoubleWordValue::Address(MemoryPtr(Some(NonNullMemoryPtr {
                             tag: l.clone(),
-                            offset: MemoryValueI64::ZERO,
+                            offset: MemoryValueU64::ZERO,
                         })))
                     })
                     .ok_or(MemoryValueTypeGetU64Error::NoAddress),
@@ -1398,13 +1494,15 @@ impl Add for MemoryValue {
             (U8(a), U8(b)) => U8(a + b),
             (Ptr(MemoryPtr(None)), _) => Ptr(MemoryPtr(None)),
             (Ptr(MemoryPtr(Some(mut a))), U8(b)) => {
-                let c = MemoryValueI64::from(b);
+                let c = MemoryValueU64::from(b);
                 a.offset = a.offset + c;
                 Ptr(MemoryPtr(Some(a)))
             }
             (Ptr(MemoryPtr(Some(mut a))), I8(b)) => {
                 let c = MemoryValueI64::from(b);
-                a.offset = a.offset + c;
+                a.offset =
+                    MemoryValueU64::try_from(MemoryValueI64::try_from(a.offset).unwrap() - c)
+                        .unwrap();
                 Ptr(MemoryPtr(Some(a)))
             }
             (U32(a), U8(b)) => U32(a + MemoryValueU32::from(b)),
@@ -1983,7 +2081,7 @@ unsafe fn check_store(
     configuration: &ProgramConfiguration,
     to: &Register,
     offset: &crate::ast::Offset,
-    type_size: i64,
+    type_size: u64,
     invalid: InvalidExplanation,
 ) -> Option<ExplorePathResult> {
     // Collect the state.
@@ -1998,12 +2096,13 @@ unsafe fn check_store(
         })))) => {
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
             // If attempting to access outside the memory space for the label.
-            let full_offset = MemoryValueI64::from(type_size)
-                + *from_offset
-                + MemoryValueI64::from(offset.value.value);
-            let size = MemoryValueI64::try_from(size(ttype) as i64).unwrap();
-            match size.compare(&full_offset) {
-                RangeOrdering::Less | RangeOrdering::Within => {
+            let full_offset = MemoryValueU64::from(type_size)
+                + from_offset.clone()
+                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+            let size = size(ttype);
+
+            match full_offset.lte(&size) {
+                false => {
                     // The path is invalid, so we add the current types to the
                     // excluded list and restart exploration.
                     return Some(invalid_path(
@@ -2013,13 +2112,12 @@ unsafe fn check_store(
                         invalid,
                     ));
                 }
-                RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
+                true => {
                     // Else we found the label and we can validate that the loading
                     // of a word with the given offset is within the address space.
                     // So we continue exploration.
                     None
                 }
-                RangeOrdering::Cover => unreachable!(),
             }
         }
         x => todo!("{x:?}"),
@@ -2036,7 +2134,7 @@ unsafe fn check_load(
     configuration: &ProgramConfiguration,
     from: &Register,
     offset: &crate::ast::Offset,
-    type_size: i64,
+    type_size: u64,
     invalid: InvalidExplanation,
 ) -> Option<ExplorePathResult> {
     // Collect the state.
@@ -2052,12 +2150,12 @@ unsafe fn check_load(
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
 
             // If attempting to access outside the memory space for the label.
-            let full_offset = MemoryValueI64::from(type_size)
-                + MemoryValueI64::from(offset.value.value)
-                + *from_offset;
-            let size = MemoryValueI64::try_from(size(ttype) as i64).unwrap();
-            match size.compare(&full_offset) {
-                RangeOrdering::Less | RangeOrdering::Within => {
+            let full_offset = MemoryValueU64::from(type_size)
+                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())
+                + from_offset.clone();
+            let size = size(ttype);
+            match full_offset.lte(&size) {
+                false => {
                     // The path is invalid, so we add the current types to the
                     // excluded list and restart exploration.
                     return Some(invalid_path(
@@ -2067,13 +2165,12 @@ unsafe fn check_load(
                         invalid,
                     ));
                 }
-                RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
+                true => {
                     // Else, we found the label and we can validate that the loading
                     // of a word with the given offset is within the address space.
                     // So we continue exploration.
                     None
                 }
-                RangeOrdering::Cover => unreachable!(),
             }
         }
         x => todo!("{x:?}"),
@@ -2364,22 +2461,22 @@ unsafe fn queue_up(
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(MemoryValue::I8(imm)) => match imm.compare(&MemoryValueI8::ZERO) {
-                            RangeOrdering::Less | RangeOrdering::Greater => {
+                        Some(MemoryValue::I8(imm)) => {
+                            if imm.eq(&0) {
+                                followup(node_ref.next.unwrap(), hart)
+                            } else {
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
                             }
-                            RangeOrdering::Equal => followup(node_ref.next.unwrap(), hart),
-                            _ => todo!(),
-                        },
-                        Some(MemoryValue::U8(imm)) => match imm.compare(&MemoryValueU8::ZERO) {
-                            RangeOrdering::Less | RangeOrdering::Greater => {
+                        }
+                        Some(MemoryValue::U8(imm)) => {
+                            if imm.eq(&0) {
+                                followup(node_ref.next.unwrap(), hart)
+                            } else {
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
                             }
-                            RangeOrdering::Equal => followup(node_ref.next.unwrap(), hart),
-                            _ => todo!(),
-                        },
+                        }
                         Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
                             if hart != 0 {
                                 let label_node = find_label(node, dest).unwrap();
@@ -2400,26 +2497,22 @@ unsafe fn queue_up(
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(MemoryValue::U8(imm)) => match imm.compare(&MemoryValueU8::ZERO) {
-                            RangeOrdering::Equal => {
+                        Some(MemoryValue::U8(imm)) => {
+                            if imm.eq(&0) {
                                 let label_node = find_label(node, label).unwrap();
                                 followup(label_node, hart)
-                            }
-                            RangeOrdering::Less | RangeOrdering::Greater => {
+                            } else {
                                 followup(node_ref.next.unwrap(), hart)
                             }
-                            _ => todo!(),
-                        },
-                        Some(MemoryValue::I8(imm)) => match imm.compare(&MemoryValueI8::ZERO) {
-                            RangeOrdering::Equal => {
+                        }
+                        Some(MemoryValue::I8(imm)) => {
+                            if imm.eq(&0) {
                                 let label_node = find_label(node, label).unwrap();
                                 followup(label_node, hart)
-                            }
-                            RangeOrdering::Less | RangeOrdering::Greater => {
+                            } else {
                                 followup(node_ref.next.unwrap(), hart)
                             }
-                            _ => todo!(),
-                        },
+                        }
                         Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
                             if hart == 0 {
                                 let label_node = find_label(node, label).unwrap();
@@ -2631,7 +2724,7 @@ unsafe fn find_state(
                 let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
                 let ptr = MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                     tag: loc.clone(),
-                    offset: MemoryValueI64::ZERO,
+                    offset: MemoryValueU64::ZERO,
                 })));
                 state.registers[hartu].insert(*register, ptr).unwrap();
 
@@ -2660,7 +2753,7 @@ unsafe fn find_state(
                                     hart,
                                 },
                             },
-                            offset: MemoryValueI64::ZERO,
+                            offset: MemoryValueU64::ZERO,
                         }))),
                     )
                     .unwrap();
@@ -2672,6 +2765,8 @@ unsafe fn find_state(
                 let Some(from_value) = state.registers[hartu].get(from) else {
                     todo!()
                 };
+                dbg!(&state.registers[hartu]);
+                dbg!(from_value);
                 match to_value {
                     MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: to_label,
@@ -2679,23 +2774,18 @@ unsafe fn find_state(
                     }))) => {
                         let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        let sizeof = MemoryValueI64::from(size(to_type) as i64);
-                        let final_offset = MemoryValueI64::from(4)
-                            + *to_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        debug_assert!(matches!(
-                            sizeof.compare(&final_offset),
-                            RangeOrdering::Greater | RangeOrdering::Equal
-                        ));
+                        let sizeof = size(to_type);
+                        let final_offset = MemoryValueU64::from(4u64)
+                            + to_offset.clone()
+                            + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                        debug_assert!(final_offset.lte(&sizeof));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                             tag: to_label.clone(),
-                            offset: *to_offset + MemoryValueI64::from(offset.value.value),
+                            offset: to_offset.clone()
+                                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
                         }));
-                        state
-                            .memory
-                            .set(&memloc, &MemoryValueU64::from(4u64), from_value.clone())
-                            .unwrap();
+                        state.memory.set(&memloc, &4, from_value.clone()).unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2714,23 +2804,18 @@ unsafe fn find_state(
                     }))) => {
                         let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        let sizeof = MemoryValueI64::from(size(to_type) as i64);
-                        let final_offset = MemoryValueI64::from(1)
-                            + *to_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        debug_assert!(matches!(
-                            sizeof.compare(&final_offset),
-                            RangeOrdering::Greater | RangeOrdering::Equal
-                        ));
+                        let sizeof = size(to_type);
+                        let final_offset = MemoryValueU64::from(1u64)
+                            + to_offset.clone()
+                            + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                        debug_assert!(final_offset.lte(&sizeof));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                             tag: to_label.clone(),
-                            offset: *to_offset + MemoryValueI64::from(offset.value.value),
+                            offset: to_offset.clone()
+                                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
                         }));
-                        state
-                            .memory
-                            .set(&memloc, &MemoryValueU64::from(1u64), from_value.clone())
-                            .unwrap();
+                        state.memory.set(&memloc, &1, from_value.clone()).unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2747,21 +2832,19 @@ unsafe fn find_state(
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
-                        let final_offset = MemoryValueI64::from(8)
-                            + *from_offset
-                            + MemoryValueI64::from(offset.value.value);
+                        let sizeof = size(from_type);
+                        let final_offset = MemoryValueU64::from(8u64)
+                            + from_offset.clone()
+                            + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
 
-                        debug_assert!(matches!(
-                            sizeof.compare(&final_offset),
-                            RangeOrdering::Greater | RangeOrdering::Equal
-                        ));
+                        debug_assert!(final_offset.lte(&sizeof));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
 
                         let memloc = Slice {
                             base: from_label.clone(),
-                            offset: *from_offset + MemoryValueI64::from(offset.value.value),
-                            len: MemoryValueU64::from(size(&Type::U64)),
+                            offset: from_offset.clone()
+                                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                            len: size(&Type::U64),
                         };
                         let value = state.memory.get(&memloc).unwrap();
                         state.registers[hartu].insert(*to, value).unwrap();
@@ -2781,19 +2864,17 @@ unsafe fn find_state(
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
-                        let final_offset = MemoryValueI64::from(4)
-                            + *from_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        debug_assert!(matches!(
-                            sizeof.compare(&final_offset),
-                            RangeOrdering::Greater | RangeOrdering::Equal
-                        ));
+                        let sizeof = size(from_type);
+                        let final_offset = MemoryValueU64::from(4u64)
+                            + from_offset.clone()
+                            + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                        debug_assert!(final_offset.lte(&sizeof));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = Slice {
                             base: from_label.clone(),
-                            offset: *from_offset + MemoryValueI64::from(offset.value.value),
-                            len: MemoryValueU64::from(size(&Type::U32)),
+                            offset: from_offset.clone()
+                                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                            len: size(&Type::U32),
                         };
                         let mem_value = state.memory.get(&memloc).unwrap();
                         state.registers[hartu].insert(*to, mem_value).unwrap();
@@ -2813,19 +2894,17 @@ unsafe fn find_state(
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
-                        let final_offset = MemoryValueI64::from(1)
-                            + *from_offset
-                            + MemoryValueI64::from(offset.value.value);
-                        debug_assert!(matches!(
-                            sizeof.compare(&final_offset),
-                            RangeOrdering::Greater | RangeOrdering::Equal
-                        ));
+                        let sizeof = size(from_type);
+                        let final_offset = MemoryValueU64::from(1u64)
+                            + from_offset.clone()
+                            + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                        debug_assert!(final_offset.lte(&sizeof));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
                         let memloc = Slice {
                             base: from_label.clone(),
-                            offset: *from_offset + MemoryValueI64::from(offset.value.value),
-                            len: MemoryValueU64::from(size(&Type::U8)),
+                            offset: from_offset.clone()
+                                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                            len: size(&Type::U8),
                         };
                         let mem_value = state.memory.get(&memloc).unwrap();
                         state.registers[hartu].insert(*to, mem_value).unwrap();
@@ -2859,4 +2938,38 @@ unsafe fn find_state(
         current = current.as_ref().next[*next];
     }
     state
+}
+
+
+fn find_state_load(state: &mut State, hartu: usize, to: &Register, from:&Register, offset:&Offset, len: u64) {
+    let Some(from_value) = state.registers[hartu].get(from) else {
+        todo!()
+    };
+    match from_value {
+        MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+            tag: from_label,
+            offset: from_offset,
+        }))) => {
+            let (locality, from_type) =
+                state.configuration.get(from_label.into()).unwrap();
+            // We should have already checked the type is large enough for the load.
+            let sizeof = size(from_type);
+            let final_offset = MemoryValueU64::from(len)
+                + from_offset.clone()
+                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+
+            debug_assert!(final_offset.lte(&sizeof));
+            debug_assert_eq!(locality, <&Locality>::from(from_label));
+
+            let memloc = Slice {
+                base: from_label.clone(),
+                offset: from_offset.clone()
+                    + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                len,
+            };
+            let value = state.memory.get(&memloc).unwrap();
+            state.registers[hartu].insert(*to, value).unwrap();
+        }
+        x => todo!("{x:?}"),
+    }
 }
