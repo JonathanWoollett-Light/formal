@@ -20,7 +20,7 @@ use tracing::error;
 use tracing::trace;
 
 /// Compile time size
-fn size(t: &Type) -> usize {
+fn size(t: &Type) -> u64 {
     use Type::*;
     match t {
         U8 => 1,
@@ -94,41 +94,68 @@ struct MemoryMap {
     map: HashMap<MemoryLabel, MemoryValue>,
 }
 
+/// Repreresents memory `mem[base+offset..base+offset+len]``
+#[derive(Debug)]
+struct Slice {
+    base: MemoryLabel,
+    offset: MemoryValueI64,
+    len: MemoryValueU64,
+}
+
+#[derive(Debug)]
+struct SubSlice {
+    offset: MemoryValueI64,
+    len: MemoryValueU64,
+}
+
+#[derive(Debug, Error)]
+enum GetMemoryMapError {
+    #[error("Failed to find the label in the memory map.")]
+    Missing,
+    #[error("Failed to get the value: {0}")]
+    Value(MemoryValueGetError),
+}
+
+#[derive(Debug, Error)]
+enum SetMemoryMapError {
+    #[error("Attempted to set null ptr.")]
+    NullPtr,
+    #[error("Failed to find the label in the memory map.")]
+    Missing,
+    #[error("Failed to set the value: {0}")]
+    Value(MemoryValueSetError),
+}
+
 impl MemoryMap {
-    fn get_u8(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<MemoryValueU8> {
-        let value = self.map.get(tag)?;
-        value.get_u8(offset)
+    fn get(&self, Slice { base, offset, len }: &Slice) -> Result<MemoryValue, GetMemoryMapError> {
+        self.map
+            .get(base)
+            .ok_or(GetMemoryMapError::Missing)?
+            .get(&SubSlice {
+                offset: *offset,
+                len: len.clone(),
+            })
+            .map_err(GetMemoryMapError::Value)
     }
-    fn get_u32(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<MemoryValueU32> {
-        let value = self.map.get(tag)?;
-        value.get_u32(offset)
+
+    fn set(
+        &mut self,
+        // Memory location.
+        key: &MemoryPtr,
+        // Register position.
+        slice: &SubSlice,
+        // Register value.
+        value: MemoryValue
+    ) -> Result<(), SetMemoryMapError> {
+        let MemoryPtr(Some(NonNullMemoryPtr { tag, offset })) = key else {
+            return Err(SetMemoryMapError::NullPtr);
+        };
+        let existing = self.map.get_mut(tag).ok_or(SetMemoryMapError::Missing)?;
+        existing
+            .set(offset, slice,value)
+            .map_err(SetMemoryMapError::Value)
     }
-    fn get_u64(&self, MemoryLocation { tag, offset }: &MemoryLocation) -> Option<DoubleWordValue> {
-        let value = self.map.get(tag)?;
-        value.get_u64(offset)
-    }
-    fn set_u8(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: u8) {
-        let existing = self.map.get_mut(tag).unwrap();
-        existing.set_u8(offset, value);
-    }
-    fn set_u32(&mut self, MemoryLocation { tag, offset }: &MemoryLocation, value: u32) {
-        let existing = self.map.get_mut(tag).unwrap();
-        match existing {
-            MemoryValue::U32(word) => {
-                if let Some(ord) = offset.compare(&MemoryValueI64::ZERO) {
-                    if ord == RangeOrdering::Equal {
-                        word.start = value;
-                        word.stop = value;
-                    } else {
-                        todo!();
-                    }
-                } else {
-                    todo!();
-                }
-            }
-            _ => todo!(),
-        }
-    }
+
     // TODO This should be improved, I'm pretty sure the current approach is bad.
     // In setting a type type we need to set many sublabels for the sub-types.
     fn set_type(
@@ -159,12 +186,19 @@ impl MemoryMap {
                 let memory_types = vec
                     .drain(left + 1..right)
                     .map(|(addr, t)| {
-                        MemoryValue::Type(MemoryValueType {
-                            type_value: FlatType::from(&t),
-                            addr,
-                            length: if let Type::List(l) = &t { l.len() } else { 0 },
-                            locality: Locality::Thread,
-                        })
+                        MemoryValue::List(vec![
+                            MemoryValue::U64(MemoryValueU64::from(FlatType::from(&t) as u64)),
+                            MemoryValue::Ptr(MemoryPtr(addr.map(|tag| NonNullMemoryPtr {
+                                tag,
+                                offset: MemoryValueI64::ZERO,
+                            }))),
+                            MemoryValue::U64(MemoryValueU64::from(if let Type::List(l) = &t {
+                                l.len()
+                            } else {
+                                0
+                            })),
+                            MemoryValue::U8(MemoryValueU8::from(Locality::Thread as u8)),
+                        ])
                     })
                     .collect::<Vec<_>>();
                 let tag = tag_iter.next().unwrap();
@@ -198,23 +232,26 @@ impl MemoryMap {
             (addr @ Some(_), Type::List(list)) => {
                 self.map.insert(
                     final_tag.clone(),
-                    MemoryValue::Type(MemoryValueType {
-                        type_value: FlatType::List,
-                        addr,
-                        length: list.len(),
-                        locality: Locality::Thread,
-                    }),
+                    MemoryValue::List(vec![
+                        MemoryValue::U64(MemoryValueU64::from(FlatType::List as u64)),
+                        MemoryValue::Ptr(MemoryPtr(addr.map(|tag| NonNullMemoryPtr {
+                            tag,
+                            offset: MemoryValueI64::ZERO,
+                        }))),
+                        MemoryValue::U64(MemoryValueU64::from(list.len())),
+                        MemoryValue::U8(MemoryValueU8::from(Locality::Thread as u8)),
+                    ]),
                 );
             }
             (None, t) => {
                 self.map.insert(
                     final_tag.clone(),
-                    MemoryValue::Type(MemoryValueType {
-                        type_value: FlatType::from(t),
-                        addr: None,
-                        length: 0,
-                        locality: Locality::Thread,
-                    }),
+                    MemoryValue::List(vec![
+                        MemoryValue::U64(MemoryValueU64::from(FlatType::from(&t) as u64)),
+                        MemoryValue::Ptr(MemoryPtr(None)),
+                        MemoryValue::U64(MemoryValueU64::ZERO),
+                        MemoryValue::U8(MemoryValueU8::from(Locality::Thread as u8)),
+                    ]),
                 );
             }
             _ => unreachable!(),
@@ -227,9 +264,23 @@ impl MemoryMap {
 #[derive(Debug)]
 struct State {
     // Each hart has its own registers.
-    registers: Vec<HashMap<Register, RegisterValue>>,
+    registers: Vec<RegisterValues>,
     memory: MemoryMap,
     configuration: ProgramConfiguration,
+}
+#[derive(Debug)]
+struct RegisterValues(HashMap<Register, MemoryValue>);
+impl RegisterValues {
+    fn insert(&mut self, key: Register, value: MemoryValue) -> Result<Option<MemoryValue>, ()> {
+        // Attempting to store a list that is larger than 64 bits into a 64 bit register will fail.
+        if let MemoryValue::List(_) = value {
+            todo!()
+        }
+        Ok(self.0.insert(key, value))
+    }
+    fn get(&self, key: &Register) -> Option<&MemoryValue> {
+        self.0.get(key)
+    }
 }
 
 impl State {
@@ -263,7 +314,7 @@ impl State {
         }
 
         Self {
-            registers: (0..harts).map(|_| HashMap::new()).collect(),
+            registers: (0..harts).map(|_| RegisterValues(HashMap::new())).collect(),
             memory,
             configuration: configuration.clone(),
         }
@@ -271,9 +322,44 @@ impl State {
 }
 
 #[derive(Debug, Clone)]
-struct MemoryLocation {
+struct MemoryPtr(Option<NonNullMemoryPtr>);
+#[derive(Debug, Clone)]
+struct NonNullMemoryPtr {
     tag: MemoryLabel,
     offset: MemoryValueI64,
+}
+
+#[derive(Debug, Error)]
+enum MemoryValuePtrGetError {
+    #[error("Potentially access outside type with {0}")]
+    Outside(MemoryValueI64),
+}
+
+impl MemoryPtr {
+    fn get(
+        &self,
+        SubSlice { offset, len }: &SubSlice,
+    ) -> Result<MemoryValue, MemoryValuePtrGetError> {
+        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+
+        match end.compare(&MemoryValueI64::from(size(&Type::U32) as i64)) {
+            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
+                Err(MemoryValuePtrGetError::Outside(end))
+            }
+            RangeOrdering::Equal => match offset.exact() {
+                Some(0) => Ok(MemoryValue::Ptr(self.clone())),
+                _ => todo!(),
+            },
+            RangeOrdering::Within => match (offset.exact(), len.exact()) {
+                (Some(o), Some(l)) if l == size(&Type::U64) => {
+                    debug_assert_eq!(o, 0);
+                    Ok(MemoryValue::Ptr(self.clone()))
+                }
+                x => todo!("{x:?}"),
+            },
+            _ => todo!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -309,11 +395,8 @@ impl<'a> From<&'a MemoryLabel> for &'a Locality {
 
 // It is possible to technically store a 4 byte virtual value (e.g. DATA_END)
 // then edit 2 bytes of it. So we will need additional complexity to support this case
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum MemoryValue {
-    /// `Type` and `Types` shouldn't exist, these should be implemented using `List`.
-    Type(MemoryValueType),
-    Types(Vec<MemoryValueType>),
     U64(MemoryValueU64),
     U32(MemoryValueU32),
     U16(MemoryValueU16),
@@ -322,6 +405,313 @@ enum MemoryValue {
     I8(MemoryValueI8),
     I64(MemoryValueI64),
     I16(MemoryValueI16),
+    Ptr(MemoryPtr),
+    Csr(CsrValue),
+}
+
+impl From<Immediate> for MemoryValue {
+    fn from(imm: Immediate) -> Self {
+        Self::I64(MemoryValueI64::from(imm.value))
+    }
+}
+
+impl From<&MemoryValue> for Type {
+    fn from(mv: &MemoryValue) -> Self {
+        match mv {
+            MemoryValue::U8(_) => Type::U8,
+            x @ _ => todo!("{x:?}"),
+        }
+    }
+}
+
+impl From<Type> for MemoryValue {
+    fn from(base: Type) -> Self {
+        match base {
+            Type::U8 => MemoryValue::U8(MemoryValueU8 {
+                start: u8::MIN,
+                stop: u8::MAX,
+            }),
+            Type::List(list) => {
+                MemoryValue::List(list.into_iter().map(MemoryValue::from).collect())
+            }
+            Type::I8 => MemoryValue::I8(MemoryValueI8 {
+                start: i8::MIN,
+                stop: i8::MAX,
+            }),
+            Type::U16 => MemoryValue::U16(MemoryValueU16 {
+                start: u16::MIN,
+                stop: u16::MAX,
+            }),
+            Type::I16 => MemoryValue::I16(MemoryValueI16 {
+                start: i16::MIN,
+                stop: i16::MAX,
+            }),
+            Type::U32 => MemoryValue::U32(MemoryValueU32 {
+                start: u32::MIN,
+                stop: u32::MAX,
+            }),
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+enum MemoryValueGetError {
+    #[error("Failed to get u8: {0}")]
+    U8(MemoryValueU8GetError),
+    #[error("Failed to get u32: {0}")]
+    U32(MemoryValueU32GetError),
+    #[error("Failed to get u64: {0}")]
+    U64(MemoryValueU64GetError),
+    #[error("Failed to get ptr: {0}")]
+    Ptr(MemoryValuePtrGetError),
+    #[error("This would get multiple items from a list, this is currently not supported.")]
+    ListMultiple,
+}
+
+#[derive(Debug, Error)]
+enum MemoryValueSetError {
+    #[error("Potentially access outside type with {0}")]
+    Outside(MemoryValueI64),
+    #[error("Attempting to set too large value.")]
+    TooLarge,
+    #[error("This would set multiple items from in the list, this is currently not supported.")]
+    ListMultiple,
+}
+
+fn memory_range(offset: &MemoryValueI64, len: &MemoryValueI64) -> MemoryValueI64 {
+    MemoryValueI64 {
+        start: offset.start,
+        stop: offset.stop + len.stop,
+    }
+}
+
+impl MemoryValue {
+    fn get(&self, subslice: &SubSlice) -> Result<MemoryValue, MemoryValueGetError> {
+        use MemoryValue::*;
+        match self {
+            U8(x) => x.get(subslice).map_err(MemoryValueGetError::U8),
+            U32(x) => x.get(subslice).map_err(MemoryValueGetError::U32),
+            U64(x) => x.get(subslice).map_err(MemoryValueGetError::U64),
+            Ptr(x) => x.get(subslice).map_err(MemoryValueGetError::Ptr),
+            List(list) => {
+                let SubSlice { offset, len } = subslice;
+                let memrange =
+                    memory_range(offset, &MemoryValueI64::try_from(len.clone()).unwrap());
+                let mut previous = 0;
+                let mut covers = Vec::new();
+                let mut iter = list.iter().enumerate();
+
+                // Iterate items before.
+                loop {
+                    let Some((i, item)) = iter.next() else { break };
+                    let next = previous + size(&Type::from(item)) as i64;
+                    let current = MemoryValueI64 {
+                        start: previous,
+                        stop: next,
+                    };
+                    match memrange.compare(&current) {
+                        // Gets all bytes of this item.
+                        RangeOrdering::Matches => return Ok(item.clone()),
+                        // Gets some bytes within this item.
+                        RangeOrdering::Within => {
+                            return item.get(&SubSlice {
+                                offset: (*offset - current),
+                                len: len.clone(),
+                            });
+                        }
+                        RangeOrdering::Cover => {
+                            covers.push(i);
+                            previous = next;
+                            break;
+                        }
+                        RangeOrdering::Less => unreachable!(),
+                        RangeOrdering::Greater => {
+                            previous = next;
+                        }
+                        x => todo!("{x:?}"),
+                    }
+                }
+                // Iterate items within
+                loop {
+                    let Some((i, item)) = iter.next() else { break };
+                    let next = previous + size(&Type::from(item)) as i64;
+                    let current = MemoryValueI64 {
+                        start: previous,
+                        stop: next,
+                    };
+                    match memrange.compare(&current) {
+                        RangeOrdering::Matches => unreachable!(),
+                        RangeOrdering::Within => unreachable!(),
+                        RangeOrdering::Cover => {
+                            covers.push(i);
+                            previous = next;
+                        }
+                        RangeOrdering::Less => break,
+                        RangeOrdering::Greater => unreachable!(),
+                        x => todo!("{x:?}"),
+                    }
+                }
+
+                // Use `covers` to apply the change.
+                Err(MemoryValueGetError::ListMultiple)
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn set(
+        &mut self,
+        // Offset in memory.
+        offset: &MemoryValueI64,
+        // Register position.
+        // The `len` should always be exact since it matches to instruction e.g. `sw` has `len=4`.
+        // I don't know if the `offset` can be dynamic.
+        subslice: &SubSlice,
+        // Register value.
+        value: MemoryValue,
+    ) -> Result<(), MemoryValueSetError> {
+        let size_of_existing = MemoryValueI64::from(size(&Type::from(self.clone())) as i64);
+        let diff = size_of_existing - *offset;
+        let size_of_value = subslice.len;
+
+        // we can't use recursion for lists since it may affect multiple items in a list.
+
+        // Compare the size of the value we are attempting to store to the space within the memory type with the offset.
+        match MemoryValueI64::try_from(subslice.len).unwrap().compare(&diff) {
+            // Setting bytes from the offset reaching the end of the type.
+            RangeOrdering::Equal => {
+                // In the case of setting all bytes, its very simple.
+                if let Some(0) = offset.exact() {
+                    *self = value;
+                    return Ok(());
+                }
+                match self {
+                    MemoryValue::U8(_) => unreachable!(),
+                    // If we are setting bytes that reach the end, we know this will be the last element.
+                    // We can also reach this case where we are setting an empty list to an empty list,
+                    // both have equal sizes, but both are 0 and contain no elements.
+                    MemoryValue::List(list) => {
+                        let Some(item) = list.last_mut() else {
+                            // In the case of empty list setting we don't need to do anything.
+                            return Ok(());
+                        };
+                        let size_of_item = size(&Type::from(item.clone()));
+                        // Compare the size of the list item with the size of the value we are trying to set,
+                        match size_of_item.cmp(&size_of_value) {
+                            // if the size is equal it fully covers the last item in the list.
+                            Ordering::Equal => {
+                                *item = value;
+                                Ok(())
+                            }
+                            // if the size of the value is larger it will leak into earlier
+                            // items in the list.
+                            Ordering::Greater => todo!(),
+                            // if the size of the value is smaller it will only cover the
+                            // later bytes of the last item in the list.
+                            Ordering::Less => todo!(),
+                        }
+                    }
+                    _ => todo!(),
+                }
+            }
+            // Setting bytes from the offset not reaching the end of the type.
+            RangeOrdering::Less => match self {
+                MemoryValue::List(list) => {
+                    let memrange = memory_range(
+                        offset,
+                        &MemoryValueI64::from(size(&Type::from(value.clone())) as i64),
+                    );
+                    let mut previous = 0;
+                    let mut covers = Vec::new();
+                    let mut iter = list.iter_mut().enumerate();
+
+                    // Iterate items before.
+                    loop {
+                        let Some((i, item)) = iter.next() else { break };
+                        let next = previous + size(&Type::from(item.clone())) as i64;
+                        let current = MemoryValueI64 {
+                            start: previous,
+                            stop: next,
+                        };
+                        match memrange.compare(&current) {
+                            // Sets all bytes of this item.
+                            RangeOrdering::Matches => {
+                                *item = value;
+                                return Ok(());
+                            }
+                            // Sets some bytes within this item.
+                            RangeOrdering::Within => todo!(),
+                            RangeOrdering::Cover => {
+                                covers.push(i);
+                                previous = next;
+                                break;
+                            }
+                            RangeOrdering::Less => unreachable!(),
+                            RangeOrdering::Greater => {
+                                previous = next;
+                            }
+                            x => todo!("{x:?}"),
+                        }
+                    }
+                    // Iterate items within
+                    loop {
+                        let Some((i, item)) = iter.next() else { break };
+                        let next = previous + size(&Type::from(item.clone())) as i64;
+                        let current = MemoryValueI64 {
+                            start: previous,
+                            stop: next,
+                        };
+                        match memrange.compare(&current) {
+                            RangeOrdering::Matches => unreachable!(),
+                            RangeOrdering::Within => unreachable!(),
+                            RangeOrdering::Cover => {
+                                covers.push(i);
+                                previous = next;
+                            }
+                            RangeOrdering::Less => break,
+                            RangeOrdering::Greater => unreachable!(),
+                            x => todo!("{x:?}"),
+                        }
+                    }
+
+                    // Use `covers` to apply the change.
+                    Err(MemoryValueSetError::ListMultiple)
+                }
+                _ => todo!(),
+            },
+            // Setting bytes after the end of the type.
+            RangeOrdering::Greater => Err(MemoryValueSetError::TooLarge),
+            RangeOrdering::Within | RangeOrdering::Cover => todo!(),
+            x => todo!("{x:?}"),
+        }
+    }
+
+    fn compare(&self, other: &Self) -> Option<RangeOrdering> {
+        use MemoryValue::*;
+        match (self, other) {
+            (U8(a), U8(b)) => Some(a.compare(b)),
+            (I8(a), I8(b)) => Some(a.compare(b)),
+            (U16(a), U16(b)) => Some(a.compare(b)),
+            (I16(a), I16(b)) => Some(a.compare(b)),
+            (U32(a), U32(b)) => Some(a.compare(b)),
+            (U64(a), U64(b)) => Some(a.compare(b)),
+            (I64(a), I64(b)) => Some(a.compare(b)),
+            (U32(a), U8(b)) => Some(a.compare(&MemoryValueU32::from(b.clone()))),
+            (U64(a), U8(b)) => Some(a.compare(&MemoryValueU64::from(b.clone()))),
+            _ => todo!(),
+        }
+    }
+
+    fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
+        match self {
+            Self::List(list) => {
+                set_into_list(list, i, |item, offset, value| item.set_u8(offset, value), n).unwrap()
+            }
+            Self::U8(byte) => byte.set_u8(i, n),
+            _ => todo!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -493,32 +883,42 @@ impl RangeType for MemoryValueU8 {
         self.stop
     }
 }
+
+#[derive(Debug, Error)]
+enum MemoryValueU8GetError {
+    #[error("Potentially access outside type with {0}")]
+    Outside(MemoryValueI64),
+}
+
 impl MemoryValueU8 {
     const ZERO: Self = Self { start: 0, stop: 0 };
 
-    fn get_u8(&self, i: &MemoryValueI64) -> Option<MemoryValueU8> {
-        if i.start == i.stop {
-            let i = usize::try_from(i.start).unwrap();
-            if i > 0 {
-                return None;
+    fn get(
+        &self,
+        SubSlice { offset, len }: &SubSlice,
+    ) -> Result<MemoryValue, MemoryValueU8GetError> {
+        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+        let size = MemoryValueI64::from(size(&Type::U8) as i64);
+
+        match end.compare(&size) {
+            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
+                Err(MemoryValueU8GetError::Outside(end))
             }
-            Some(self.clone())
-        } else {
-            todo!()
+            RangeOrdering::Equal => match offset.exact() {
+                Some(0) => Ok(MemoryValue::U8(self.clone())),
+                x => todo!("{x:?}"),
+            },
+            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
+                (Some(o), Some(l), _) if l == size(&Type::U8) => {
+                    debug_assert_eq!(o, 0);
+                    Ok(MemoryValue::U8(self.clone()))
+                }
+                x => todo!("{x:?}"),
+            },
+            x => todo!("{x:?}"),
         }
     }
-    fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
-        if let Some(ord) = i.compare(&MemoryValueI64::ZERO) {
-            if ord == RangeOrdering::Equal {
-                self.start = n;
-                self.stop = n;
-            } else {
-                todo!()
-            }
-        } else {
-            todo!()
-        }
-    }
+
     fn exact(&self) -> Option<u8> {
         (self.start == self.stop).then_some(self.start)
     }
@@ -579,45 +979,63 @@ impl RangeType for MemoryValueU32 {
     }
 }
 
+impl From<MemoryValue> for Type {
+    fn from(mv: MemoryValue) -> Type {
+        use MemoryValue::*;
+        match mv {
+            U64(_) => Type::U64,
+            U32(_) => Type::U32,
+            U16(_) => Type::U16,
+            U8(_) => Type::U8,
+            List(x) => Type::List(x.into_iter().map(Type::from).collect()),
+            I8(_) => Type::I8,
+            I64(_) => Type::I64,
+            I16(_) => Type::I16,
+            Ptr(_) => Type::I64,
+            Csr(_) => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+enum MemoryValueU32GetError {
+    #[error("Potentially access outside type with {0}")]
+    Outside(MemoryValueI64),
+}
+
 impl MemoryValueU32 {
-    fn get_u8(&self, i: &MemoryValueI64) -> Option<MemoryValueU8> {
-        if i.start == i.stop {
-            let i = usize::try_from(i.start).unwrap();
-            assert!(i < 4);
-            if i > 3 {
-                return None;
+    fn get(
+        &self,
+        SubSlice { offset, len }: &SubSlice,
+    ) -> Result<MemoryValue, MemoryValueU32GetError> {
+        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+
+        match end.compare(&MemoryValueI64::from(size(&Type::U32) as i64)) {
+            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
+                Err(MemoryValueU32GetError::Outside(end))
             }
-            if self.start == self.stop {
-                let byte = self.start.to_ne_bytes()[i];
-                return Some(MemoryValueU8 {
-                    start: byte,
-                    stop: byte,
-                });
-            }
-            todo!()
-        } else {
-            todo!()
+            RangeOrdering::Equal => match offset.exact() {
+                Some(0) => Ok(MemoryValue::U32(self.clone())),
+                _ => todo!(),
+            },
+            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
+                (Some(o), Some(l), Some(v)) if l == size(&Type::U8) => {
+                    let byte = v.to_ne_bytes()[o as usize];
+                    Ok(MemoryValue::U8(MemoryValueU8 {
+                        start: byte,
+                        stop: byte,
+                    }))
+                }
+                (Some(o), Some(l), _) if l == size(&Type::U32) => {
+                    debug_assert_eq!(o, 0);
+                    Ok(MemoryValue::U32(self.clone()))
+                }
+                x => todo!("{x:?}"),
+            },
+            _ => todo!(),
         }
     }
-    fn get_u32(&self, i: &MemoryValueI64) -> Option<MemoryValueU32> {
-        if i.start == i.stop {
-            let i = usize::try_from(i.start).unwrap();
-            assert!(i < 1);
-            if i > 0 {
-                return None;
-            }
-            if self.start == self.stop {
-                let word = self.start;
-                return Some(MemoryValueU32 {
-                    start: word,
-                    stop: word,
-                });
-            }
-            todo!()
-        } else {
-            todo!()
-        }
-    }
+
     fn exact(&self) -> Option<u32> {
         (self.start == self.stop).then_some(self.start)
     }
@@ -666,6 +1084,51 @@ impl From<MemoryValueU8> for MemoryValueU64 {
     }
 }
 
+#[derive(Debug, Error)]
+enum MemoryValueU64GetError {
+    #[error("Potentially access outside type with {0}")]
+    Outside(MemoryValueI64),
+}
+
+impl MemoryValueU64 {
+    const ZERO: Self = Self { start: 0, stop: 0 };
+
+    fn get(
+        &self,
+        SubSlice { offset, len }: &SubSlice,
+    ) -> Result<MemoryValue, MemoryValueU64GetError> {
+        let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
+
+        match end.compare(&MemoryValueI64::from(size(&Type::U64) as i64)) {
+            RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
+                Err(MemoryValueU64GetError::Outside(end))
+            }
+            RangeOrdering::Equal => match offset.exact() {
+                Some(0) => Ok(MemoryValue::U64(self.clone())),
+                _ => todo!(),
+            },
+            RangeOrdering::Within => match (offset.exact(), len.exact(), self.exact()) {
+                (Some(o), Some(l), Some(v)) if l == size(&Type::U8) => {
+                    let byte = v.to_ne_bytes()[o as usize];
+                    Ok(MemoryValue::U8(MemoryValueU8 {
+                        start: byte,
+                        stop: byte,
+                    }))
+                }
+                (Some(o), Some(l), _) if l == size(&Type::U64) => {
+                    debug_assert_eq!(o, 0);
+                    Ok(MemoryValue::U64(self.clone()))
+                }
+                x => todo!("{x:?}"),
+            },
+            _ => todo!(),
+        }
+    }
+    fn exact(&self) -> Option<u64> {
+        (self.start == self.stop).then_some(self.start)
+    }
+}
+
 #[derive(Debug, Hash, Clone, Copy)]
 struct MemoryValueI64 {
     start: i64,
@@ -696,27 +1159,26 @@ trait RangeType {
     type Base: Eq + PartialEq + Ord + PartialOrd;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
-    fn compare(&self, other: &Self) -> Option<RangeOrdering> {
+    fn compare(&self, other: &Self) -> RangeOrdering {
         match (
             self.start().cmp(&other.start()),
             self.stop().cmp(&other.stop()),
         ) {
-            (Ordering::Less, Ordering::Less) => Some(RangeOrdering::Less),
-            (Ordering::Greater, Ordering::Greater) => Some(RangeOrdering::Greater),
-            (Ordering::Equal, Ordering::Equal) => Some({
+            (Ordering::Less, Ordering::Less) => RangeOrdering::Less,
+            (Ordering::Greater, Ordering::Greater) => RangeOrdering::Greater,
+            (Ordering::Equal, Ordering::Equal) => {
                 if self.start() == self.stop() {
                     RangeOrdering::Equal
                 } else {
                     RangeOrdering::Matches
                 }
-            }),
-            (Ordering::Less, Ordering::Greater) => Some(RangeOrdering::Cover),
-            (Ordering::Equal, Ordering::Greater) => Some(RangeOrdering::Cover),
-            (Ordering::Less, Ordering::Equal) => Some(RangeOrdering::Cover),
-            (Ordering::Greater, Ordering::Less) => Some(RangeOrdering::Within),
-            (Ordering::Equal, Ordering::Less) => Some(RangeOrdering::Within),
-            (Ordering::Greater, Ordering::Equal) => Some(RangeOrdering::Within),
-            _ => None,
+            }
+            (Ordering::Less, Ordering::Greater) => RangeOrdering::Cover,
+            (Ordering::Equal, Ordering::Greater) => RangeOrdering::Cover,
+            (Ordering::Less, Ordering::Equal) => RangeOrdering::Cover,
+            (Ordering::Greater, Ordering::Less) => RangeOrdering::Within,
+            (Ordering::Equal, Ordering::Less) => RangeOrdering::Within,
+            (Ordering::Greater, Ordering::Equal) => RangeOrdering::Within,
         }
     }
 }
@@ -729,6 +1191,16 @@ impl RangeType for MemoryValueI64 {
         self.stop
     }
 }
+impl TryFrom<MemoryValueU64> for MemoryValueI64 {
+    type Error = <i64 as TryFrom<u64>>::Error;
+    fn try_from(MemoryValueU64 { start, stop }: MemoryValueU64) -> Result<Self, Self::Error> {
+        Ok(Self {
+            start: i64::try_from(start)?,
+            stop: i64::try_from(stop)?,
+        })
+    }
+}
+
 /// The `Equal` variant is handled like this since if you have a value `x` in the
 /// range 1..3 and a value `y` in the range 1..3 it would not be correct to say these
 /// values are equal.
@@ -808,113 +1280,6 @@ impl MemoryValueI64 {
     }
 }
 
-impl MemoryValueU64 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-    fn get_u64(&self, i: &MemoryValueI64) -> Option<DoubleWordValue> {
-        if i.start == i.stop {
-            let i = usize::try_from(i.start).unwrap();
-            if i > 0 {
-                return None;
-            }
-            Some(DoubleWordValue::Literal(self.clone()))
-        } else {
-            todo!()
-        }
-    }
-    fn get_u8(&self, i: &MemoryValueI64) -> Option<MemoryValueU8> {
-        if i.start == i.stop {
-            let i = usize::try_from(i.start).unwrap();
-            assert!(i < 8);
-            if i > 7 {
-                return None;
-            }
-            if self.start == self.stop {
-                let byte = self.start.to_ne_bytes()[i];
-                Some(MemoryValueU8 {
-                    start: byte,
-                    stop: byte,
-                })
-            } else {
-                todo!()
-            }
-        } else {
-            todo!()
-        }
-    }
-    fn exact(&self) -> Option<u64> {
-        (self.start == self.stop).then_some(self.start)
-    }
-}
-
-impl From<&MemoryValue> for Type {
-    fn from(mv: &MemoryValue) -> Self {
-        match mv {
-            MemoryValue::U8(_) => Type::U8,
-            MemoryValue::Type(_) => MemoryValueType::type_of(),
-            x @ _ => todo!("{x:?}"),
-        }
-    }
-}
-
-impl From<Type> for MemoryValue {
-    fn from(base: Type) -> Self {
-        match base {
-            Type::U8 => MemoryValue::U8(MemoryValueU8 {
-                start: u8::MIN,
-                stop: u8::MAX,
-            }),
-            Type::List(list) => {
-                MemoryValue::List(list.into_iter().map(MemoryValue::from).collect())
-            }
-            Type::I8 => MemoryValue::I8(MemoryValueI8 {
-                start: i8::MIN,
-                stop: i8::MAX,
-            }),
-            Type::U16 => MemoryValue::U16(MemoryValueU16 {
-                start: u16::MIN,
-                stop: u16::MAX,
-            }),
-            Type::I16 => MemoryValue::I16(MemoryValueI16 {
-                start: i16::MIN,
-                stop: i16::MAX,
-            }),
-            Type::U32 => MemoryValue::U32(MemoryValueU32 {
-                start: u32::MIN,
-                stop: u32::MAX,
-            }),
-            _ => todo!(),
-        }
-    }
-}
-
-fn get_from_list<T>(
-    list: &[MemoryValue],
-    i: &MemoryValueI64,
-    closure: fn(&MemoryValue, &MemoryValueI64) -> Option<T>,
-) -> Option<T> {
-    let mut iter = list.iter();
-    if let Some(item) = iter.next() {
-        let mut current = MemoryValueI64 {
-            start: 0,
-            stop: size(&Type::from(item)) as i64,
-        };
-
-        for item in iter {
-            // While the offset is less than an entry in the list iterate.
-            let next = current + MemoryValueI64::from(size(&Type::from(item)) as i64);
-            match i.compare(&current) {
-                Some(RangeOrdering::Equal) => return closure(item, &MemoryValueI64::ZERO),
-                Some(RangeOrdering::Within | RangeOrdering::Matches) => {
-                    return closure(item, &(*i - current))
-                }
-                Some(RangeOrdering::Less) => {}
-                x => todo!("{x:?} {i:?} {current:?}"),
-            }
-            current = next;
-        }
-    }
-    None
-}
 fn set_into_list<T>(
     list: &mut [MemoryValue],
     i: &MemoryValueI64,
@@ -932,11 +1297,11 @@ fn set_into_list<T>(
             // While the offset is less than an entry in the list iterate.
             let next = current + MemoryValueI64::from(size(&Type::from(&*item)) as i64);
             match i.compare(&current) {
-                Some(RangeOrdering::Equal) => return Ok(closure(item, &MemoryValueI64::ZERO, n)),
-                Some(RangeOrdering::Within | RangeOrdering::Matches) => {
+                RangeOrdering::Equal => return Ok(closure(item, &MemoryValueI64::ZERO, n)),
+                RangeOrdering::Within | RangeOrdering::Matches => {
                     return Ok(closure(item, &(*i - current), n))
                 }
-                Some(RangeOrdering::Less) => {}
+                RangeOrdering::Less => {}
                 x => todo!("{x:?}"),
             }
             current = next;
@@ -945,41 +1310,7 @@ fn set_into_list<T>(
     Err(())
 }
 
-impl MemoryValue {
-    fn get_u64(&self, i: &MemoryValueI64) -> Option<DoubleWordValue> {
-        match self {
-            Self::U32(_) => None,
-            Self::U8(_) => None,
-            Self::List(list) => get_from_list(list, i, |item, offset| item.get_u64(offset)),
-            Self::Type(ttype) => ttype.get_u64(i),
-            x @ _ => todo!("{x:?}"),
-        }
-    }
-    fn get_u8(&self, i: &MemoryValueI64) -> Option<MemoryValueU8> {
-        match self {
-            Self::U32(word) => word.get_u8(i),
-            Self::U8(byte) => byte.get_u8(i),
-            Self::List(list) => get_from_list(list, i, |item, offset| item.get_u8(offset)),
-            _ => todo!(),
-        }
-    }
-    fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
-        match self {
-            Self::List(list) => {
-                set_into_list(list, i, |item, offset, value| item.set_u8(offset, value), n).unwrap()
-            }
-            Self::U8(byte) => byte.set_u8(i, n),
-            _ => todo!(),
-        }
-    }
-    fn get_u32(&self, i: &MemoryValueI64) -> Option<MemoryValueU32> {
-        match self {
-            Self::U32(x) => x.get_u32(i),
-            _ => todo!(),
-        }
-    }
-}
-
+// TODO Remove this, it should just be a list.
 #[derive(Debug)]
 struct MemoryValueType {
     type_value: FlatType,
@@ -987,28 +1318,48 @@ struct MemoryValueType {
     length: usize,
     locality: Locality,
 }
+
+#[derive(Debug, Error)]
+enum MemoryValueTypeGetU64Error {
+    #[error("Address is below type.")]
+    TooLow,
+    #[error("Address is above type.")]
+    TooHigh,
+    #[error("Type doesn't have an address.")]
+    NoAddress,
+    #[error("todo: {0}")]
+    Todo(MemoryValueI64),
+}
+
 impl MemoryValueType {
-    fn get_u64(&self, offset: &MemoryValueI64) -> Option<DoubleWordValue> {
+    fn get_u64(
+        &self,
+        offset: &MemoryValueI64,
+    ) -> Result<DoubleWordValue, MemoryValueTypeGetU64Error> {
         if let Some(exact) = offset.exact() {
             match exact {
-                ..0 => None,
-                0 => Some(DoubleWordValue::Literal(MemoryValueU64::from(
+                ..0 => Err(MemoryValueTypeGetU64Error::TooLow),
+                0 => Ok(DoubleWordValue::Literal(MemoryValueU64::from(
                     self.type_value as u64,
                 ))),
-                1..8 => todo!(),
-                8 => self.addr.as_ref().map(|l| {
-                    DoubleWordValue::Address(MemoryLocation {
-                        tag: l.clone(),
-                        offset: MemoryValueI64::ZERO,
+                1..8 => Err(MemoryValueTypeGetU64Error::Todo(*offset)),
+                8 => self
+                    .addr
+                    .as_ref()
+                    .map(|l| {
+                        DoubleWordValue::Address(MemoryPtr(Some(NonNullMemoryPtr {
+                            tag: l.clone(),
+                            offset: MemoryValueI64::ZERO,
+                        })))
                     })
-                }),
-                9..16 => todo!(),
-                16 => Some(DoubleWordValue::Literal(MemoryValueU64::from(self.length))),
-                17 => todo!(),
-                18.. => None,
+                    .ok_or(MemoryValueTypeGetU64Error::NoAddress),
+                9..16 => Err(MemoryValueTypeGetU64Error::Todo(*offset)),
+                16 => Ok(DoubleWordValue::Literal(MemoryValueU64::from(self.length))),
+                17 => Err(MemoryValueTypeGetU64Error::Todo(*offset)),
+                18.. => Err(MemoryValueTypeGetU64Error::TooHigh),
             }
         } else {
-            todo!("{offset:?}")
+            Err(MemoryValueTypeGetU64Error::Todo(*offset))
         }
     }
     fn type_of() -> Type {
@@ -1018,26 +1369,16 @@ impl MemoryValueType {
 
 #[derive(Debug, Clone)]
 enum RegisterValue {
-    Address(MemoryLocation),
-    Csr(CsrValue),
-    U8(MemoryValueU8),
-    U32(MemoryValueU32),
     U64(MemoryValueU64),
+    U32(MemoryValueU32),
+    U16(MemoryValueU16),
+    U8(MemoryValueU8),
+    List(Vec<RegisterValue>),
     I8(MemoryValueI8),
     I64(MemoryValueI64),
-}
-impl RegisterValue {
-    fn compare(&self, other: &Self) -> Option<RangeOrdering> {
-        use RegisterValue::*;
-        match (self, other) {
-            (U8(a), U8(b)) => a.compare(b),
-            (U32(a), U32(b)) => a.compare(b),
-            (U64(a), U64(b)) => a.compare(b),
-            (U32(a), U8(b)) => a.compare(&MemoryValueU32::from(b.clone())),
-            (U64(a), U8(b)) => a.compare(&MemoryValueU64::from(b.clone())),
-            x => todo!("{x:?}"),
-        }
-    }
+    I16(MemoryValueI16),
+    Address(MemoryPtr),
+    Csr(CsrValue),
 }
 
 impl From<DoubleWordValue> for RegisterValue {
@@ -1048,21 +1389,22 @@ impl From<DoubleWordValue> for RegisterValue {
         }
     }
 }
-impl Add for RegisterValue {
+impl Add for MemoryValue {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        use RegisterValue::*;
+        use MemoryValue::*;
         match (self, rhs) {
-            (U8(a), U8(b)) => RegisterValue::U8(a + b),
-            (Address(mut a), U8(b)) => {
+            (U8(a), U8(b)) => U8(a + b),
+            (Ptr(MemoryPtr(None)), _) => Ptr(MemoryPtr(None)),
+            (Ptr(MemoryPtr(Some(mut a))), U8(b)) => {
                 let c = MemoryValueI64::from(b);
                 a.offset = a.offset + c;
-                Self::Address(a)
+                Ptr(MemoryPtr(Some(a)))
             }
-            (Address(mut a), I8(b)) => {
+            (Ptr(MemoryPtr(Some(mut a))), I8(b)) => {
                 let c = MemoryValueI64::from(b);
                 a.offset = a.offset + c;
-                Self::Address(a)
+                Ptr(MemoryPtr(Some(a)))
             }
             (U32(a), U8(b)) => U32(a + MemoryValueU32::from(b)),
             x => todo!("{x:?}"),
@@ -1073,7 +1415,7 @@ impl Add for RegisterValue {
 #[derive(Debug, Clone)]
 enum DoubleWordValue {
     Literal(MemoryValueU64),
-    Address(MemoryLocation),
+    Address(MemoryPtr),
 }
 
 #[derive(Debug, Clone)]
@@ -1649,39 +1991,34 @@ unsafe fn check_store(
 
     // Check the destination is valid.
     match state.registers[branch.hart as usize].get(to) {
-        Some(RegisterValue::Address(MemoryLocation {
+        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
             tag: from_label,
             offset: from_offset,
-        })) => {
+        })))) => {
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueI64::from(type_size)
                 + *from_offset
                 + MemoryValueI64::from(offset.value.value);
-            let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-            if let Some(ord) = size.compare(&full_offset) {
-                match ord {
-                    RangeOrdering::Less | RangeOrdering::Within => {
-                        // The path is invalid, so we add the current types to the
-                        // excluded list and restart exploration.
-                        return Some(invalid_path(
-                            explorerer.clone(),
-                            configuration.clone(),
-                            harts,
-                            invalid,
-                        ));
-                    }
-                    RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
-                        // Else we found the label and we can validate that the loading
-                        // of a word with the given offset is within the address space.
-                        // So we continue exploration.
-                        None
-                    }
-                    RangeOrdering::Cover => unreachable!(),
-                    x => todo!("{x:?} {size:?} {full_offset:?}"),
+            let size = MemoryValueI64::try_from(size(ttype) as i64).unwrap();
+            match size.compare(&full_offset) {
+                RangeOrdering::Less | RangeOrdering::Within => {
+                    // The path is invalid, so we add the current types to the
+                    // excluded list and restart exploration.
+                    return Some(invalid_path(
+                        explorerer.clone(),
+                        configuration.clone(),
+                        harts,
+                        invalid,
+                    ));
                 }
-            } else {
-                todo!()
+                RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
+                    // Else we found the label and we can validate that the loading
+                    // of a word with the given offset is within the address space.
+                    // So we continue exploration.
+                    None
+                }
+                RangeOrdering::Cover => unreachable!(),
             }
         }
         x => todo!("{x:?}"),
@@ -1707,40 +2044,35 @@ unsafe fn check_load(
 
     // Check the destination is valid.
     match state.registers[branch.hart as usize].get(from) {
-        Some(RegisterValue::Address(MemoryLocation {
+        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
             tag: from_label,
             offset: from_offset,
-        })) => {
+        })))) => {
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
 
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueI64::from(type_size)
                 + MemoryValueI64::from(offset.value.value)
                 + *from_offset;
-            let size = MemoryValueI64::try_from(size(ttype)).unwrap();
-            if let Some(ord) = size.compare(&full_offset) {
-                match ord {
-                    RangeOrdering::Less | RangeOrdering::Within => {
-                        // The path is invalid, so we add the current types to the
-                        // excluded list and restart exploration.
-                        return Some(invalid_path(
-                            explorerer.clone(),
-                            configuration.clone(),
-                            harts,
-                            invalid,
-                        ));
-                    }
-                    RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
-                        // Else, we found the label and we can validate that the loading
-                        // of a word with the given offset is within the address space.
-                        // So we continue exploration.
-                        None
-                    }
-                    RangeOrdering::Cover => unreachable!(),
-                    x => todo!("{x:?}"),
+            let size = MemoryValueI64::try_from(size(ttype) as i64).unwrap();
+            match size.compare(&full_offset) {
+                RangeOrdering::Less | RangeOrdering::Within => {
+                    // The path is invalid, so we add the current types to the
+                    // excluded list and restart exploration.
+                    return Some(invalid_path(
+                        explorerer.clone(),
+                        configuration.clone(),
+                        harts,
+                        invalid,
+                    ));
                 }
-            } else {
-                todo!()
+                RangeOrdering::Greater | RangeOrdering::Matches | RangeOrdering::Equal => {
+                    // Else, we found the label and we can validate that the loading
+                    // of a word with the given offset is within the address space.
+                    // So we continue exploration.
+                    None
+                }
+                RangeOrdering::Cover => unreachable!(),
             }
         }
         x => todo!("{x:?}"),
@@ -1916,7 +2248,9 @@ unsafe fn queue_up(
             | Instruction::Lw(Lw { from: register, .. })
             | Instruction::Lb(Lb { from: register, .. }) => {
                 let value = state.registers[hart as usize].get(register).unwrap();
-                if let RegisterValue::Address(MemoryLocation { tag, offset: _ }) = value {
+                if let MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) =
+                    value
+                {
                     match tag {
                         // Racy
                         MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
@@ -2029,31 +2363,23 @@ unsafe fn queue_up(
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(RegisterValue::I8(imm)) => {
-                            if let Some(eq) = imm.compare(&MemoryValueI8::ZERO) {
-                                if eq == RangeOrdering::Equal {
-                                    followup(node_ref.next.unwrap(), hart)
-                                } else {
-                                    let label_node = find_label(node, dest).unwrap();
-                                    followup(label_node, hart)
-                                }
-                            } else {
-                                todo!()
+                        Some(MemoryValue::I8(imm)) => match imm.compare(&MemoryValueI8::ZERO) {
+                            RangeOrdering::Less | RangeOrdering::Greater => {
+                                let label_node = find_label(node, dest).unwrap();
+                                followup(label_node, hart)
                             }
-                        }
-                        Some(RegisterValue::U8(imm)) => {
-                            if let Some(eq) = imm.compare(&MemoryValueU8::ZERO) {
-                                if eq == RangeOrdering::Equal {
-                                    followup(node_ref.next.unwrap(), hart)
-                                } else {
-                                    let label_node = find_label(node, dest).unwrap();
-                                    followup(label_node, hart)
-                                }
-                            } else {
-                                todo!()
+                            RangeOrdering::Equal => followup(node_ref.next.unwrap(), hart),
+                            _ => todo!(),
+                        },
+                        Some(MemoryValue::U8(imm)) => match imm.compare(&MemoryValueU8::ZERO) {
+                            RangeOrdering::Less | RangeOrdering::Greater => {
+                                let label_node = find_label(node, dest).unwrap();
+                                followup(label_node, hart)
                             }
-                        }
-                        Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
+                            RangeOrdering::Equal => followup(node_ref.next.unwrap(), hart),
+                            _ => todo!(),
+                        },
+                        Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
                             if hart != 0 {
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
@@ -2073,31 +2399,27 @@ unsafe fn queue_up(
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(RegisterValue::U8(imm)) => {
-                            if let Some(eq) = imm.compare(&MemoryValueU8::ZERO) {
-                                if eq == RangeOrdering::Equal {
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    followup(node_ref.next.unwrap(), hart)
-                                }
-                            } else {
-                                todo!()
+                        Some(MemoryValue::U8(imm)) => match imm.compare(&MemoryValueU8::ZERO) {
+                            RangeOrdering::Equal => {
+                                let label_node = find_label(node, label).unwrap();
+                                followup(label_node, hart)
                             }
-                        }
-                        Some(RegisterValue::I8(imm)) => {
-                            if let Some(eq) = imm.compare(&MemoryValueI8::ZERO) {
-                                if eq == RangeOrdering::Equal {
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    followup(node_ref.next.unwrap(), hart)
-                                }
-                            } else {
-                                todo!()
+                            RangeOrdering::Less | RangeOrdering::Greater => {
+                                followup(node_ref.next.unwrap(), hart)
                             }
-                        }
-                        Some(RegisterValue::Csr(CsrValue::Mhartid)) => {
+                            _ => todo!(),
+                        },
+                        Some(MemoryValue::I8(imm)) => match imm.compare(&MemoryValueI8::ZERO) {
+                            RangeOrdering::Equal => {
+                                let label_node = find_label(node, label).unwrap();
+                                followup(label_node, hart)
+                            }
+                            RangeOrdering::Less | RangeOrdering::Greater => {
+                                followup(node_ref.next.unwrap(), hart)
+                            }
+                            _ => todo!(),
+                        },
+                        Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
                             if hart == 0 {
                                 let label_node = find_label(node, label).unwrap();
                                 followup(label_node, hart)
@@ -2123,7 +2445,8 @@ unsafe fn queue_up(
                                         let label_node = find_label(node, out).unwrap();
                                         followup(label_node, hart)
                                     }
-                                    _ => followup(node_ref.next.unwrap(), hart),
+                                    RangeOrdering::Less => followup(node_ref.next.unwrap(), hart),
+                                    _ => todo!(),
                                 }
                             } else {
                                 todo!()
@@ -2297,8 +2620,8 @@ unsafe fn find_state(
                 register,
                 immediate,
             }) => {
-                let register_value = RegisterValue::from(immediate);
-                state.registers[hartu].insert(*register, register_value);
+                let mem_value = MemoryValue::from(*immediate);
+                state.registers[hartu].insert(*register, mem_value);
             }
             // TOOD This is the only place where in finding state we need to modify `state.configuration`
             // is this the best way to do this? Could these types not be defined in `next_step` (like `la`)?
@@ -2307,10 +2630,10 @@ unsafe fn find_state(
                 let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
                 state.registers[hartu].insert(
                     *register,
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: loc.clone(),
                         offset: MemoryValueI64::ZERO,
-                    }),
+                    }))),
                 );
 
                 // Each type type is thread local and unique between `lat` instructions.
@@ -2324,10 +2647,10 @@ unsafe fn find_state(
                 hart_type_state.append(subtypes);
             }
             Instruction::La(La { register, label }) => {
-                let (locality, to_type) = state.configuration.get(label).unwrap();
+                let (locality, _to_type) = state.configuration.get(label).unwrap();
                 state.registers[hartu].insert(
                     *register,
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: match locality {
                             Locality::Global => MemoryLabel::Global {
                                 label: label.clone(),
@@ -2338,7 +2661,7 @@ unsafe fn find_state(
                             },
                         },
                         offset: MemoryValueI64::ZERO,
-                    }),
+                    }))),
                 );
             }
             Instruction::Sw(Sw { to, from, offset }) => {
@@ -2349,41 +2672,41 @@ unsafe fn find_state(
                     todo!()
                 };
                 match to_value {
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: to_label,
                         offset: to_offset,
-                    }) => {
+                    }))) => {
                         let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        let sizeof = MemoryValueI64::try_from(size(to_type)).unwrap();
+                        let sizeof = MemoryValueI64::from(size(to_type) as i64);
                         let final_offset = MemoryValueI64::from(4)
                             + *to_offset
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
+                            RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
-                            RegisterValue::U32(from_imm) => {
+                            MemoryValue::U32(from_imm) => {
                                 if let Some(imm) = from_imm.exact() {
-                                    let memloc = MemoryLocation {
+                                    let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                                         tag: to_label.clone(),
                                         offset: *to_offset
                                             + MemoryValueI64::from(offset.value.value),
-                                    };
+                                    }));
                                     state.memory.set_u32(&memloc, imm);
                                 } else {
                                     todo!()
                                 }
                             }
-                            RegisterValue::U8(from_imm) => {
+                            MemoryValue::U8(from_imm) => {
                                 if let Some(imm) = from_imm.exact() {
-                                    let memloc = MemoryLocation {
+                                    let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                                         tag: to_label.clone(),
                                         offset: *to_offset
                                             + MemoryValueI64::from(offset.value.value),
-                                    };
+                                    }));
                                     state.memory.set_u32(&memloc, u32::from(imm));
                                 } else {
                                     todo!()
@@ -2403,33 +2726,29 @@ unsafe fn find_state(
                     todo!()
                 };
                 match to_value {
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: to_label,
                         offset: to_offset,
-                    }) => {
+                    }))) => {
                         let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
                         // We should have already checked the type is large enough for the store.
-                        let sizeof = MemoryValueI64::try_from(size(to_type)).unwrap();
+                        let sizeof = MemoryValueI64::from(size(to_type) as i64);
                         let final_offset = MemoryValueI64::from(1)
                             + *to_offset
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
+                            RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
                         match from_value {
-                            RegisterValue::U8(from_imm) => {
-                                if let Some(imm) = from_imm.exact() {
-                                    let memloc = MemoryLocation {
-                                        tag: to_label.clone(),
-                                        offset: *to_offset
-                                            + MemoryValueI64::from(offset.value.value),
-                                    };
-                                    state.memory.set_u8(&memloc, imm);
-                                } else {
-                                    todo!()
-                                }
+                            MemoryValue::U8(from_imm) => {
+                                let memloc = MemoryPtr(Some(NonNullMemoryPtr {
+                                    tag: to_label.clone(),
+                                    offset: *to_offset
+                                        + MemoryValueI64::from(offset.value.value),
+                                }));
+                                state.memory.set(&memloc, MemoryValue::U8(from_imm.clone()));
                             }
                             _ => todo!(),
                         }
@@ -2442,34 +2761,31 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: from_label,
                         offset: from_offset,
-                    }) => {
+                    }))) => {
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
+                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
                         let final_offset = MemoryValueI64::from(8)
                             + *from_offset
                             + MemoryValueI64::from(offset.value.value);
 
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
+                            RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
 
-                        let memloc = MemoryLocation {
-                            tag: from_label.clone(),
+                        let memloc = Slice {
+                            base: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
+                            len: MemoryValueU64::from(size(&Type::U64)),
                         };
-                        let doubleword = state.memory.get_u64(&memloc).unwrap_or_else(|| {
-                            dbg!(&memloc);
-                            dbg!(&state.memory);
-                            panic!();
-                        });
-                        state.registers[hartu].insert(*to, RegisterValue::from(doubleword));
+                        let value = state.memory.get(&memloc).unwrap();
+                        state.registers[hartu].insert(*to, value);
                     }
                     x => todo!("{x:?}"),
                 }
@@ -2479,30 +2795,29 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: from_label,
                         offset: from_offset,
-                    }) => {
+                    }))) => {
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
+                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
                         let final_offset = MemoryValueI64::from(4)
                             + *from_offset
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
+                            RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
-                        let memloc = MemoryLocation {
-                            tag: from_label.clone(),
+                        let memloc = Slice {
+                            base: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
+                            len: MemoryValueU64::from(size(&Type::U32)),
                         };
-                        let Some(word) = state.memory.get_u32(&memloc) else {
-                            todo!("{memloc:?}");
-                        };
-                        state.registers[hartu].insert(*to, RegisterValue::U32(word));
+                        let mem_value = state.memory.get(&memloc).unwrap();
+                        state.registers[hartu].insert(*to, mem_value);
                     }
                     _ => todo!(),
                 }
@@ -2512,41 +2827,46 @@ unsafe fn find_state(
                     todo!()
                 };
                 match from_value {
-                    RegisterValue::Address(MemoryLocation {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                         tag: from_label,
                         offset: from_offset,
-                    }) => {
+                    }))) => {
                         let (locality, from_type) =
                             state.configuration.get(from_label.into()).unwrap();
                         // We should have already checked the type is large enough for the load.
-                        let sizeof = MemoryValueI64::try_from(size(from_type)).unwrap();
+                        let sizeof = MemoryValueI64::from(size(from_type) as i64);
                         let final_offset = MemoryValueI64::from(1)
                             + *from_offset
                             + MemoryValueI64::from(offset.value.value);
                         debug_assert!(matches!(
                             sizeof.compare(&final_offset),
-                            Some(RangeOrdering::Greater | RangeOrdering::Equal)
+                            RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(from_label));
-                        let memloc = MemoryLocation {
-                            tag: from_label.clone(),
+                        let memloc = Slice {
+                            base: from_label.clone(),
                             offset: *from_offset + MemoryValueI64::from(offset.value.value),
+                            len: MemoryValueU64::from(size(&Type::U8)),
                         };
-                        let Some(byte) = state.memory.get_u8(&memloc) else {
-                            todo!("{memloc:?}")
-                        };
-                        state.registers[hartu].insert(*to, RegisterValue::U8(byte));
+                        let mem_value = state.memory.get(&memloc).unwrap();
+                        state.registers[hartu].insert(*to, mem_value);
                     }
                     _ => todo!(),
                 }
             }
             Instruction::Addi(Addi { out, lhs, rhs }) => {
                 let lhs_value = state.registers[hartu].get(lhs).cloned().unwrap();
-                state.registers[hartu].insert(*out, lhs_value + RegisterValue::from(rhs));
+                let rhs_value = MemoryValue::from(*rhs);
+                dbg!(&lhs_value);
+                dbg!(&rhs_value);
+                let out_value = lhs_value + rhs_value;
+                dbg!(&out_value);
+                state.registers[hartu].insert(*out, out_value);
             }
+            #[allow(unreachable_patterns)]
             Instruction::Csrr(Csrr { dest, src }) => match src {
                 Csr::Mhartid => {
-                    state.registers[hartu].insert(*dest, RegisterValue::Csr(CsrValue::Mhartid));
+                    state.registers[hartu].insert(*dest, MemoryValue::Csr(CsrValue::Mhartid));
                 }
                 _ => todo!(),
             },

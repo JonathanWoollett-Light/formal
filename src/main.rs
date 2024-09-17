@@ -109,8 +109,6 @@ fn print_ast(root: Option<NonNull<AstNode>>) {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use crate::*;
 
     // use opentelemetry::global;
@@ -498,20 +496,93 @@ mod tests {
             base_assertions.assert().reset();
             queue.assert();
 
+            let racy_assertions = &u32_config & &excluded & is_racy;
             let queue = asserter.matches(
                 "queue: [\
-                { hart: 2/2, instruction: \"./assets/two.s:9:0\" }, \
-                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }\
+                { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            racy_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"./assets/two.s:5:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:13:0\" }\
             ]",
             );
             path = ExplorererPath::next_step(path).continued().unwrap();
             base_assertions.assert().reset();
             queue.assert();
 
-            // // 454
-            // for _ in 0..300 {
-            //     path = ExplorererPath::next_step(path).continued().unwrap();
-            // }
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/two.s:13:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:6:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"./assets/two.s:6:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:14:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/two.s:14:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            racy_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"./assets/two.s:9:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:15:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            racy_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/two.s:15:0\" }, \
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            racy_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/2, instruction: \"./assets/two.s:10:0\" }, \
+                { hart: 1/1, instruction: \"./assets/two.s:20:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            racy_assertions.assert().reset();
+            queue.assert();
+
+            // 454
+            for _ in 0..4000 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
 
             // let a = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
             // let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
@@ -577,7 +648,7 @@ mod tests {
             //     panic!()
             // };
 
-            // println!("test time: {:?}", now.elapsed());
+            println!("test time: {:?}", now.elapsed());
 
             // println!("\n\n{complete}\n\n");
             // println!("\n\n{path}\n\n");

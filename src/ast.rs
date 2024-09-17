@@ -30,6 +30,26 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
     let mut b = 0;
     let mut row = 1;
     while b < src.len() {
+        // See https://stackoverflow.com/questions/1761051/difference-between-n-and-r
+        #[cfg(target_os = "windows")]
+        match src.get(b..=b + 1) {
+            Some(['\r', '\n']) => {
+                alloc_node(
+                    &src[a..b],
+                    &mut front_opt,
+                    Span {
+                        path: path.clone(),
+                        row,
+                        column: 0,
+                    },
+                );
+                row += 1;
+                a = b + 2;
+            }
+            _ => {}
+        }
+
+        #[cfg(target_os = "linux")]
         if src[b] == '\n' {
             alloc_node(
                 &src[a..b],
@@ -239,8 +259,8 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Locality {
-    Thread,
-    Global,
+    Thread = 1,
+    Global = 0,
 }
 
 impl fmt::Display for Locality {
@@ -298,7 +318,6 @@ impl TryFrom<FlatType> for Type {
 }
 
 use itertools::intersperse;
-use itertools::Itertools;
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -446,8 +465,6 @@ impl fmt::Display for Define {
 }
 
 fn new_cast(src: &[char]) -> Define {
-    let mut iter = src.split(|c| *c == ' ');
-
     let mut i = 0;
     let mut j = 1;
 
@@ -1261,6 +1278,7 @@ pub enum Csr {
 
 impl fmt::Display for Csr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        #[allow(unreachable_patterns)]
         match self {
             Csr::Mhartid => write!(f, "mhartid"),
             _ => todo!(),
