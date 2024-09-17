@@ -142,17 +142,17 @@ impl MemoryMap {
         &mut self,
         // Memory location.
         key: &MemoryPtr,
-        // Register position.
-        slice: &SubSlice,
+        // Register length.
+        len: &MemoryValueU64,
         // Register value.
-        value: MemoryValue
+        value: MemoryValue,
     ) -> Result<(), SetMemoryMapError> {
         let MemoryPtr(Some(NonNullMemoryPtr { tag, offset })) = key else {
             return Err(SetMemoryMapError::NullPtr);
         };
         let existing = self.map.get_mut(tag).ok_or(SetMemoryMapError::Missing)?;
         existing
-            .set(offset, slice,value)
+            .set(offset, len, value)
             .map_err(SetMemoryMapError::Value)
     }
 
@@ -566,25 +566,34 @@ impl MemoryValue {
         offset: &MemoryValueI64,
         // Register position.
         // The `len` should always be exact since it matches to instruction e.g. `sw` has `len=4`.
-        // I don't know if the `offset` can be dynamic.
-        subslice: &SubSlice,
+        // I don't know if there ios`offset` can be dynamic.
+        len: &MemoryValueU64,
         // Register value.
         value: MemoryValue,
     ) -> Result<(), MemoryValueSetError> {
         let size_of_existing = MemoryValueI64::from(size(&Type::from(self.clone())) as i64);
         let diff = size_of_existing - *offset;
-        let size_of_value = subslice.len;
+        let size_of_value = len.exact().clone().unwrap();
 
         // we can't use recursion for lists since it may affect multiple items in a list.
 
         // Compare the size of the value we are attempting to store to the space within the memory type with the offset.
-        match MemoryValueI64::try_from(subslice.len).unwrap().compare(&diff) {
+        match MemoryValueI64::try_from(len.clone())
+            .unwrap()
+            .compare(&diff)
+        {
             // Setting bytes from the offset reaching the end of the type.
             RangeOrdering::Equal => {
                 // In the case of setting all bytes, its very simple.
-                if let Some(0) = offset.exact() {
-                    *self = value;
-                    return Ok(());
+                match (
+                    offset.exact(),
+                    size_of_value == size(&Type::from(value.clone())),
+                ) {
+                    (Some(0), true) => {
+                        *self = value;
+                        return Ok(());
+                    }
+                    _ => {}
                 }
                 match self {
                     MemoryValue::U8(_) => unreachable!(),
@@ -602,7 +611,7 @@ impl MemoryValue {
                             // if the size is equal it fully covers the last item in the list.
                             Ordering::Equal => {
                                 *item = value;
-                                Ok(())
+                                return Ok(());
                             }
                             // if the size of the value is larger it will leak into earlier
                             // items in the list.
@@ -640,6 +649,8 @@ impl MemoryValue {
                                 *item = value;
                                 return Ok(());
                             }
+                            // This case is likely to be a pain since the sub-type might itself be a list, so we need some
+                            // stack based recursion.
                             // Sets some bytes within this item.
                             RangeOrdering::Within => todo!(),
                             RangeOrdering::Cover => {
@@ -699,16 +710,6 @@ impl MemoryValue {
             (I64(a), I64(b)) => Some(a.compare(b)),
             (U32(a), U8(b)) => Some(a.compare(&MemoryValueU32::from(b.clone()))),
             (U64(a), U8(b)) => Some(a.compare(&MemoryValueU64::from(b.clone()))),
-            _ => todo!(),
-        }
-    }
-
-    fn set_u8(&mut self, i: &MemoryValueI64, n: u8) {
-        match self {
-            Self::List(list) => {
-                set_into_list(list, i, |item, offset, value| item.set_u8(offset, value), n).unwrap()
-            }
-            Self::U8(byte) => byte.set_u8(i, n),
             _ => todo!(),
         }
     }
@@ -898,9 +899,9 @@ impl MemoryValueU8 {
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU8GetError> {
         let end = *offset + MemoryValueI64::try_from(len.clone()).unwrap();
-        let size = MemoryValueI64::from(size(&Type::U8) as i64);
+        let value_size = MemoryValueI64::from(size(&Type::U8) as i64);
 
-        match end.compare(&size) {
+        match end.compare(&value_size) {
             RangeOrdering::Less | RangeOrdering::Greater | RangeOrdering::Cover => {
                 Err(MemoryValueU8GetError::Outside(end))
             }
@@ -2621,20 +2622,18 @@ unsafe fn find_state(
                 immediate,
             }) => {
                 let mem_value = MemoryValue::from(*immediate);
-                state.registers[hartu].insert(*register, mem_value);
+                state.registers[hartu].insert(*register, mem_value).unwrap();
             }
             // TOOD This is the only place where in finding state we need to modify `state.configuration`
             // is this the best way to do this? Could these types not be defined in `next_step` (like `la`)?
             Instruction::Lat(Lat { register, label }) => {
                 let (_locality, typeof_type) = state.configuration.get(label).unwrap();
                 let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
-                state.registers[hartu].insert(
-                    *register,
-                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                        tag: loc.clone(),
-                        offset: MemoryValueI64::ZERO,
-                    }))),
-                );
+                let ptr = MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                    tag: loc.clone(),
+                    offset: MemoryValueI64::ZERO,
+                })));
+                state.registers[hartu].insert(*register, ptr).unwrap();
 
                 // Each type type is thread local and unique between `lat` instructions.
                 let hart_type_state = &mut state.configuration;
@@ -2648,21 +2647,23 @@ unsafe fn find_state(
             }
             Instruction::La(La { register, label }) => {
                 let (locality, _to_type) = state.configuration.get(label).unwrap();
-                state.registers[hartu].insert(
-                    *register,
-                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                        tag: match locality {
-                            Locality::Global => MemoryLabel::Global {
-                                label: label.clone(),
+                state.registers[hartu]
+                    .insert(
+                        *register,
+                        MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                            tag: match locality {
+                                Locality::Global => MemoryLabel::Global {
+                                    label: label.clone(),
+                                },
+                                Locality::Thread => MemoryLabel::Thread {
+                                    label: label.clone(),
+                                    hart,
+                                },
                             },
-                            Locality::Thread => MemoryLabel::Thread {
-                                label: label.clone(),
-                                hart,
-                            },
-                        },
-                        offset: MemoryValueI64::ZERO,
-                    }))),
-                );
+                            offset: MemoryValueI64::ZERO,
+                        }))),
+                    )
+                    .unwrap();
             }
             Instruction::Sw(Sw { to, from, offset }) => {
                 let Some(to_value) = state.registers[hartu].get(to) else {
@@ -2687,33 +2688,14 @@ unsafe fn find_state(
                             RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
-                        match from_value {
-                            MemoryValue::U32(from_imm) => {
-                                if let Some(imm) = from_imm.exact() {
-                                    let memloc = MemoryPtr(Some(NonNullMemoryPtr {
-                                        tag: to_label.clone(),
-                                        offset: *to_offset
-                                            + MemoryValueI64::from(offset.value.value),
-                                    }));
-                                    state.memory.set_u32(&memloc, imm);
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            MemoryValue::U8(from_imm) => {
-                                if let Some(imm) = from_imm.exact() {
-                                    let memloc = MemoryPtr(Some(NonNullMemoryPtr {
-                                        tag: to_label.clone(),
-                                        offset: *to_offset
-                                            + MemoryValueI64::from(offset.value.value),
-                                    }));
-                                    state.memory.set_u32(&memloc, u32::from(imm));
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            x @ _ => todo!("{x:?}"),
-                        }
+                        let memloc = MemoryPtr(Some(NonNullMemoryPtr {
+                            tag: to_label.clone(),
+                            offset: *to_offset + MemoryValueI64::from(offset.value.value),
+                        }));
+                        state
+                            .memory
+                            .set(&memloc, &MemoryValueU64::from(4u64), from_value.clone())
+                            .unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2741,17 +2723,14 @@ unsafe fn find_state(
                             RangeOrdering::Greater | RangeOrdering::Equal
                         ));
                         debug_assert_eq!(locality, <&Locality>::from(to_label));
-                        match from_value {
-                            MemoryValue::U8(from_imm) => {
-                                let memloc = MemoryPtr(Some(NonNullMemoryPtr {
-                                    tag: to_label.clone(),
-                                    offset: *to_offset
-                                        + MemoryValueI64::from(offset.value.value),
-                                }));
-                                state.memory.set(&memloc, MemoryValue::U8(from_imm.clone()));
-                            }
-                            _ => todo!(),
-                        }
+                        let memloc = MemoryPtr(Some(NonNullMemoryPtr {
+                            tag: to_label.clone(),
+                            offset: *to_offset + MemoryValueI64::from(offset.value.value),
+                        }));
+                        state
+                            .memory
+                            .set(&memloc, &MemoryValueU64::from(1u64), from_value.clone())
+                            .unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2785,7 +2764,7 @@ unsafe fn find_state(
                             len: MemoryValueU64::from(size(&Type::U64)),
                         };
                         let value = state.memory.get(&memloc).unwrap();
-                        state.registers[hartu].insert(*to, value);
+                        state.registers[hartu].insert(*to, value).unwrap();
                     }
                     x => todo!("{x:?}"),
                 }
@@ -2817,7 +2796,7 @@ unsafe fn find_state(
                             len: MemoryValueU64::from(size(&Type::U32)),
                         };
                         let mem_value = state.memory.get(&memloc).unwrap();
-                        state.registers[hartu].insert(*to, mem_value);
+                        state.registers[hartu].insert(*to, mem_value).unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2849,7 +2828,7 @@ unsafe fn find_state(
                             len: MemoryValueU64::from(size(&Type::U8)),
                         };
                         let mem_value = state.memory.get(&memloc).unwrap();
-                        state.registers[hartu].insert(*to, mem_value);
+                        state.registers[hartu].insert(*to, mem_value).unwrap();
                     }
                     _ => todo!(),
                 }
@@ -2861,12 +2840,14 @@ unsafe fn find_state(
                 dbg!(&rhs_value);
                 let out_value = lhs_value + rhs_value;
                 dbg!(&out_value);
-                state.registers[hartu].insert(*out, out_value);
+                state.registers[hartu].insert(*out, out_value).unwrap();
             }
             #[allow(unreachable_patterns)]
             Instruction::Csrr(Csrr { dest, src }) => match src {
                 Csr::Mhartid => {
-                    state.registers[hartu].insert(*dest, MemoryValue::Csr(CsrValue::Mhartid));
+                    state.registers[hartu]
+                        .insert(*dest, MemoryValue::Csr(CsrValue::Mhartid))
+                        .unwrap();
                 }
                 _ => todo!(),
             },
