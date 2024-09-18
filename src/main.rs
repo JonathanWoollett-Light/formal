@@ -8,6 +8,8 @@ use ast::*;
 mod verifier;
 use verifier::*;
 
+mod verifier_types;
+
 mod draw;
 
 use std::cell::RefCell;
