@@ -1,4 +1,6 @@
 use crate::ast::*;
+use num::CheckedAdd;
+use num::CheckedSub;
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -30,15 +32,6 @@ impl From<i8> for MemoryValueI8 {
         Self { start: x, stop: x }
     }
 }
-impl Add for MemoryValueI8 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
-    }
-}
 
 impl MemoryValueI8 {
     const ZERO: Self = Self { start: 0, stop: 0 };
@@ -59,6 +52,12 @@ impl MemoryValueI8 {
 }
 impl RangeType for MemoryValueI8 {
     type Base = i8;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -75,15 +74,6 @@ pub struct MemoryValueU16 {
 impl From<u16> for MemoryValueU16 {
     fn from(x: u16) -> Self {
         Self { start: x, stop: x }
-    }
-}
-impl Add for MemoryValueU16 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
     }
 }
 
@@ -106,6 +96,12 @@ impl MemoryValueU16 {
 }
 impl RangeType for MemoryValueU16 {
     type Base = u16;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -122,15 +118,6 @@ pub struct MemoryValueI16 {
 impl From<i16> for MemoryValueI16 {
     fn from(x: i16) -> Self {
         Self { start: x, stop: x }
-    }
-}
-impl Add for MemoryValueI16 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
     }
 }
 
@@ -153,6 +140,12 @@ impl MemoryValueI16 {
 }
 impl RangeType for MemoryValueI16 {
     type Base = i16;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -171,17 +164,14 @@ impl From<u8> for MemoryValueU8 {
         Self { start: x, stop: x }
     }
 }
-impl Add for MemoryValueU8 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
-    }
-}
 impl RangeType for MemoryValueU8 {
     type Base = u8;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -203,7 +193,7 @@ impl MemoryValueU8 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU8GetError> {
-        let end = offset.clone() + MemoryValueU64::from(len.clone());
+        let end = offset.clone().add(&MemoryValueU64::from(len.clone())).unwrap();
         let value_size = size(&Type::U8);
         match end.lte(&value_size) {
             false => Err(MemoryValueU8GetError::Outside(end)),
@@ -227,7 +217,7 @@ impl MemoryValueU32 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU32GetError> {
-        let end = offset.clone() + MemoryValueU64::from(*len);
+        let end = offset.clone().add(&MemoryValueU64::from(*len)).unwrap();
         let value_size = size(&Type::U32);
 
         match end.lte(&value_size) {
@@ -257,6 +247,12 @@ impl MemoryValueU32 {
 
 impl RangeType for MemoryValueU32 {
     type Base = u32;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -264,8 +260,15 @@ impl RangeType for MemoryValueU32 {
         self.stop
     }
 }
+
 impl RangeType for MemoryValueI64 {
     type Base = i64;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -273,8 +276,9 @@ impl RangeType for MemoryValueI64 {
         self.stop
     }
 }
+
 pub trait RangeType {
-    type Base: Eq + PartialEq + Ord + PartialOrd;
+    type Base: Eq + PartialEq + Ord + PartialOrd + num::CheckedAdd + num::CheckedSub;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
     /// Returns if the given scalar is greater than, less than or within `self`.
@@ -302,6 +306,27 @@ pub trait RangeType {
             (Ordering::Equal, Ordering::Equal) => true,
             _ => false,
         }
+    }
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self>
+    where
+        Self: Sized;
+    /// 4..8 + 2..4 = 6..12
+    fn add(&self, other: &Self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let start = self.start().checked_add(&other.start())?;
+        let stop = self.stop().checked_add(&other.stop())?;
+        Self::new(start, stop)
+    }
+    /// 4..8 - 2..4 = 0..6
+    fn sub(&self, other: &Self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let start = self.start().checked_sub(&other.stop())?;
+        let stop = self.stop().checked_sub(&other.start())?;
+        Self::new(start, stop)
     }
     fn compare(&self, other: &Self) -> RangeOrdering {
         match (
@@ -346,24 +371,6 @@ impl TryFrom<usize> for MemoryValueI64 {
         Ok(Self { start: y, stop: y })
     }
 }
-impl Add for MemoryValueI64 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
-    }
-}
-impl Sub for MemoryValueI64 {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start - rhs.stop,
-            stop: self.stop - rhs.start,
-        }
-    }
-}
 impl From<MemoryValueI8> for MemoryValueI64 {
     fn from(x: MemoryValueI8) -> Self {
         Self {
@@ -393,7 +400,7 @@ impl MemoryValueI64 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueI64GetError> {
-        let end = offset.clone() + MemoryValueU64::from(*len);
+        let end = offset.clone().add(&MemoryValueU64::from(*len)).unwrap();
         let value_size = size(&Type::I64);
 
         match end.lte(&value_size) {
@@ -472,6 +479,12 @@ pub struct MemoryValueU64 {
 }
 impl RangeType for MemoryValueU64 {
     type Base = u64;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
     fn start(&self) -> Self::Base {
         self.start
     }
@@ -488,15 +501,6 @@ impl From<usize> for MemoryValueU64 {
 impl From<u64> for MemoryValueU64 {
     fn from(x: u64) -> Self {
         Self { start: x, stop: x }
-    }
-}
-impl Add for MemoryValueU64 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
     }
 }
 impl From<MemoryValueU8> for MemoryValueU64 {
@@ -530,7 +534,7 @@ impl MemoryValueU64 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU64GetError> {
-        let end = offset.clone() + MemoryValueU64::from(*len);
+        let end = offset.clone().add(&MemoryValueU64::from(*len)).unwrap();
         let value_size = size(&Type::U64);
 
         match end.lte(&value_size) {
@@ -600,15 +604,6 @@ impl TryFrom<MemoryValueU64> for MemoryValueI64 {
         })
     }
 }
-impl Sub for MemoryValueU64 {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start - rhs.stop,
-            stop: self.stop - rhs.start,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct MemoryValueU32 {
@@ -632,50 +627,9 @@ impl TryFrom<MemoryValueI64> for MemoryValueU32 {
         })
     }
 }
-impl Add for MemoryValueU32 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            start: self.start + rhs.start,
-            stop: self.stop + rhs.stop,
-        }
-    }
-}
 impl From<u32> for MemoryValueU32 {
     fn from(x: u32) -> Self {
         Self { start: x, stop: x }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum RegisterValue {
-    U64(MemoryValueU64),
-    U32(MemoryValueU32),
-    U16(MemoryValueU16),
-    U8(MemoryValueU8),
-    List(Vec<RegisterValue>),
-    I8(MemoryValueI8),
-    I64(MemoryValueI64),
-    I16(MemoryValueI16),
-    Address(MemoryPtr),
-    Csr(CsrValue),
-}
-
-impl From<&Immediate> for RegisterValue {
-    fn from(immediate: &Immediate) -> Self {
-        // Store as the smallest value that can contain `immediate`.
-        let v = immediate.value as i128;
-        const I8_MIN: i128 = i8::MIN as i128;
-        const U8_MIN: i128 = u8::MIN as i128;
-        const U8_MAX: i128 = u8::MAX as i128;
-        const U32_MIN: i128 = u32::MIN as i128;
-        const U32_MAX: i128 = u32::MAX as i128;
-        match v {
-            I8_MIN..U8_MIN => RegisterValue::I8(MemoryValueI8::from(v as i8)),
-            U8_MIN..=U8_MAX => RegisterValue::U8(MemoryValueU8::from(v as u8)),
-            U32_MIN..=U32_MAX => RegisterValue::U32(MemoryValueU32::from(v as u32)),
-            x @ _ => todo!("{x:?}"),
-        }
     }
 }
 
@@ -748,6 +702,7 @@ impl From<&MemoryValue> for Type {
             MemoryValue::U8(_) => Type::U8,
             MemoryValue::U64(_) => Type::U64,
             MemoryValue::Ptr(_) => Type::U64,
+            MemoryValue::List(x) => Type::List(x.iter().map(Type::from).collect()),
             x @ _ => todo!("{x:?}"),
         }
     }
@@ -787,27 +742,29 @@ impl Add for MemoryValue {
     fn add(self, rhs: Self) -> Self::Output {
         use MemoryValue::*;
         match (self, rhs) {
-            (U8(a), U8(b)) => U8(a + b),
+            (U8(a), U8(b)) => U8(a.add(&b).unwrap()),
             (Ptr(MemoryPtr(None)), _) => Ptr(MemoryPtr(None)),
             (Ptr(MemoryPtr(Some(mut a))), U8(b)) => {
                 let c = MemoryValueU64::from(b);
-                a.offset = a.offset + c;
+                a.offset = a.offset.add(&c).unwrap();
                 Ptr(MemoryPtr(Some(a)))
             }
             (Ptr(MemoryPtr(Some(mut a))), I8(b)) => {
                 let c = MemoryValueI64::from(b);
                 a.offset =
-                    MemoryValueU64::try_from(MemoryValueI64::try_from(a.offset).unwrap() - c)
+                    MemoryValueU64::try_from(MemoryValueI64::try_from(a.offset).unwrap().sub(&c).unwrap())
                         .unwrap();
                 Ptr(MemoryPtr(Some(a)))
             }
-            (U32(a), U8(b)) => U32(a + MemoryValueU32::from(b)),
-            (U32(a), I64(b)) => U32(a + MemoryValueU32::try_from(b).unwrap()),
+            (U32(a), U8(b)) => U32(a.add(&MemoryValueU32::from(b)).unwrap()),
+            (U32(a), I64(b)) => U32(a.add(&MemoryValueU32::try_from(b).unwrap()).unwrap()),
             (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
-                let c = MemoryValueU64::try_from(b).unwrap();
-                a.offset = a.offset + c;
+                // dbg!(&b);
+                let c = MemoryValueI64::try_from(a.offset).unwrap();
+                a.offset = MemoryValueU64::try_from(c.add(&b).unwrap()).unwrap();
                 MemoryValue::Ptr(MemoryPtr(Some(a)))
             }
+            (I64(a),I64(b)) => I64(a.add(&b).unwrap()),
             x => todo!("{x:?}"),
         }
     }
@@ -842,7 +799,7 @@ impl MemoryValue {
                         // Gets some bytes within this item.
                         RangeOrdering::Within => {
                             return item.get(&SubSlice {
-                                offset: (offset.clone() - current),
+                                offset: (offset.clone().sub(&MemoryValueU64::from(previous)).unwrap()),
                                 len: len.clone(),
                             });
                         }
@@ -898,7 +855,7 @@ impl MemoryValue {
         value: MemoryValue,
     ) -> Result<(), MemoryValueSetError> {
         let size_of_existing = size(&Type::from(self.clone()));
-        let diff = MemoryValueU64::from(size_of_existing) - offset.clone();
+        let diff = MemoryValueU64::from(size_of_existing).sub(offset).unwrap();
 
         // we can't use recursion for lists since it may affect multiple items in a list.
 
@@ -1040,7 +997,9 @@ impl MemoryValue {
             (U64(a), U8(b)) => Some(a.compare(&MemoryValueU64::from(b.clone()))),
             (U32(a), I64(b)) => Some(MemoryValueI64::from(a.clone()).compare(b)),
             (U64(a), I64(b)) => {
-                let Ok(c) = MemoryValueI64::try_from(a.clone()) else { todo!() };
+                let Ok(c) = MemoryValueI64::try_from(a.clone()) else {
+                    todo!()
+                };
                 Some(c.compare(b))
             }
             x => todo!("{x:?}"),
@@ -1092,7 +1051,7 @@ impl MemoryPtr {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValuePtrGetError> {
-        let end = offset.clone() + MemoryValueU64::from(*len);
+        let end = offset.clone().add(&MemoryValueU64::from(*len)).unwrap();
         let value_size = size(&Type::U32);
 
         match end.compare_scalar(&value_size) {

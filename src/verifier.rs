@@ -1,24 +1,21 @@
 use crate::ast::*;
 use crate::verifier_types::*;
 use std::alloc::Layout;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::hash::Hash;
 use std::iter::once;
-use std::ops::Add;
 use std::ops::Range;
-use std::ops::Sub;
 use std::ptr;
 use std::rc::Rc;
 use std::{
     alloc::alloc,
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     ptr::NonNull,
 };
 use thiserror::Error;
 use tracing::error;
 use tracing::trace;
+use std::cell::RefCell;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -70,36 +67,6 @@ pub struct VerifierNode {
 /// Localites in order of best to worst
 fn locality_list() -> Vec<Locality> {
     vec![Locality::Thread, Locality::Global]
-}
-
-fn set_into_list<T>(
-    list: &mut [MemoryValue],
-    i: &MemoryValueI64,
-    closure: fn(&mut MemoryValue, &MemoryValueI64, T),
-    n: T,
-) -> Result<(), ()> {
-    let mut iter = list.iter_mut();
-    if let Some(item) = iter.next() {
-        let mut current = MemoryValueI64 {
-            start: 0,
-            stop: size(&Type::from(&*item)) as i64,
-        };
-
-        for item in iter {
-            // While the offset is less than an entry in the list iterate.
-            let next = current + MemoryValueI64::from(size(&Type::from(&*item)) as i64);
-            match i.compare(&current) {
-                RangeOrdering::Equal => return Ok(closure(item, &MemoryValueI64::ZERO, n)),
-                RangeOrdering::Within | RangeOrdering::Matches => {
-                    return Ok(closure(item, &(*i - current), n))
-                }
-                RangeOrdering::Less => {}
-                x => todo!("{x:?}"),
-            }
-            current = next;
-        }
-    }
-    Err(())
 }
 
 // `wfi` is less racy than instructions like `sw` or `lw` so we could treat it more precisely
@@ -603,8 +570,8 @@ unsafe fn check_store(
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueU64::from(type_size)
-                + from_offset.clone()
-                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                .add(from_offset).unwrap()
+                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
             let size = size(ttype);
 
             match full_offset.lte(&size) {
@@ -629,8 +596,6 @@ unsafe fn check_store(
         x => todo!("{x:?}"),
     }
 }
-
-use std::cell::RefCell;
 
 /// Verifies a load is valid for a given configuration.
 unsafe fn check_load(
@@ -657,8 +622,8 @@ unsafe fn check_load(
 
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueU64::from(type_size)
-                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())
-                + from_offset.clone();
+                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap()
+                .add(from_offset).unwrap();
             let size = size(ttype);
             match full_offset.lte(&size) {
                 false => {
@@ -1327,14 +1292,14 @@ fn find_state_store(
             // We should have already checked the type is large enough for the store.
             let sizeof = size(to_type);
             let final_offset = MemoryValueU64::from(len)
-                + to_offset.clone()
-                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                .add(to_offset).unwrap()
+                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
             debug_assert!(final_offset.lte(&sizeof));
             debug_assert_eq!(locality, <&Locality>::from(to_label));
             let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                 tag: to_label.clone(),
                 offset: to_offset.clone()
-                    + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                    .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap(),
             }));
             state.memory.set(&memloc, &len, from_value.clone()).unwrap();
         }
@@ -1362,16 +1327,15 @@ fn find_state_load(
             // We should have already checked the type is large enough for the load.
             let sizeof = size(from_type);
             let final_offset = MemoryValueU64::from(len)
-                + from_offset.clone()
-                + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap());
+                .add(from_offset).unwrap()
+                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
 
             debug_assert!(final_offset.lte(&sizeof));
             debug_assert_eq!(locality, <&Locality>::from(from_label));
 
             let memloc = Slice {
                 base: from_label.clone(),
-                offset: from_offset.clone()
-                    + MemoryValueU64::from(u64::try_from(offset.value.value).unwrap()),
+                offset: from_offset.clone().add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap(),
                 len,
             };
             let value = state.memory.get(&memloc).unwrap();

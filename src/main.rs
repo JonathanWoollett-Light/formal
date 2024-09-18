@@ -582,7 +582,7 @@ mod tests {
             queue.assert();
 
             // 454
-            for _ in 0..4000 {
+            for _ in 0..16000 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
 

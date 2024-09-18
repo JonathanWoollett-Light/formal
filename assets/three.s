@@ -25,8 +25,8 @@ _start:
     csrr t0, mhartid
     bnez t0, _wait
 
-    #$ welcome _ [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    #             H  e  l  l  o  ,     W  o  r  l  d  !  \n 0
+    #$ welcome _ [u8 u8]
+    #             H  0
     # Type exploration doesn't explore list types since they are infinite, so
     # to define a list a user must define it manually.
     # In this case we leave the locality as unspecified which will default to `thread`.
@@ -43,7 +43,7 @@ _start:
     # Check list length
     addi t0, t0, 16 # Increment address to point at length
     ld t1, (t0) # Load length
-    li t2, 15 # Load desired length
+    li t2, 3 # Load desired length
     bne t1, t2, _invalid
 
     # Check all values in list are u8
@@ -64,33 +64,7 @@ _no_items:
     # Set string
     la t0, welcome
     li t1, 72 # 'H'
-    sb t1, 0(t0)
-    li t1, 101 # 'e'
     sb t1, 1(t0)
-    li t1, 108 # 'l'
-    sb t1, 2(t0)
-    li t1, 108 # 'l'
-    sb t1, 3(t0)
-    li t1, 111 # 'o'
-    sb t1, 4(t0)
-    li t1, 44 # ','
-    sb t1, 5(t0)
-    li t1, 32 # ' '
-    sb t1, 6(t0)
-    li t1, 87 # 'W'
-    sb t1, 7(t0)
-    li t1, 111 # 'o'
-    sb t1, 8(t0)
-    li t1, 114 # 'r'
-    sb t1, 9(t0)
-    li t1, 108 # 'l'
-    sb t1, 10(t0)
-    li t1, 100 # 'd'
-    sb t1, 11(t0)
-    li t1, 32 # '!'
-    sb t1, 12(t0)
-    li t1, 10 # '\n'
-    sb t1, 13(t0)
     li t1, 48 # '0'
     sb t1, 14(t0)
 
