@@ -1,14 +1,24 @@
-### optimizing
+# language
+
+## assembly reference
+
+keyword|assembly symbol
+---|---
+`fail`|`#!`
+`unreachable`|`#?`
+`define`|`#$`
+
+## optimizing
 
 To optimize performance we can replace `ExplorererPath::queue` by immedately spawning a tokio spawn instead of when we would push an item to the queue.
 
 We want a way to preserve deterministic ordering so tests can check ordering. Maybe there is a setting in tokio to only run 1 task at a time (or reduce parallelism in some other way)?
 
-### logs with jaeger
+## logs with jaeger
 
 Follow jaeger tutorial at https://tokio.rs/tokio/topics/tracing-next-steps.
 
-### grafana loki for log monitoring
+## grafana loki for log monitoring
 
 **this currently errors becuase god knows all this software has dogshit documentation that was only tested in 1 specific enviroment with a specific setup with a bunch of undocumented pre-existing settings**
 
@@ -39,13 +49,13 @@ Go `+` in top right, click `import dashboard` enter the loki dashboard id (`1318
 Add loki datasource.
 
 
-### cli args
+## cli args
 
 - `list_depth`: How many layers of nested lists to explore during type exploration. The default is 0.
 - `list_width`: How many items to explore in lists during type exploration. The default is 0.
 - `union_depth`: How many layers of nested unions to explore during type exploration. The default is 0.
 
-#### placement
+### placement
 
 - global initialized data goes in `.data`
 - global initialized read-only data goes in `.rodata`
@@ -57,20 +67,20 @@ There should be an option (`tls`) whether to store `thread` locality in `.tdata`
 
 Both global and thread have static lifetimes. There should be a `local` locality, that is stored on the stack to minimize runtime memory usage.
 
-#### racy-ness
+### racy-ness
 
 thread local data is still stored in global memory so accesses are still racy. However the assumption only 1 thread accesses this data can massively speed up compile times as it means the majority of different orderings for loads/stores no longer need to be checked.
 
 So there should be a cli argument about whether to evaluate racyness for thread local data.
 
-#### exploring lists and unions
+### exploring lists and unions
 
 Since there are an indefinite number of lists exploration needs to be constrained. This can be done with 2 variables `list_depth` and `list_width`.
 
 Exploration of unions needs to be done with `union_depth` (the width is every possible type combinationthat doesn't nest unions more than `union_depth`).
 
 
-#### function args
+### function args
 When passing arms to functions they need to be flattened e.g.
 ```
 my_fn(x,y[2],my_other_fn(z))
@@ -98,7 +108,7 @@ I prefer the second approach since it moves code to user space and allows deeper
 The second approach also preserves the purity of `@` doing nothing. In the first approach it must have runtime affects e.g. its essentially a mem copy for identifiers and literally but does nothing for functions (which is not consistent behavior).
 
 The problem with the second approach is that if we want to make it truly generic it needs to pass the args as strings so it can support custom syntax (e.g. dot syntax `x.n`).
-#### other
+### other
 The assembly layer is to simplify control flow and type evaluation. It will not be valid assembly. As it requires special type stuff.
 
 When exploring types, we are looking for the initial type to treat variables as (before they are explicitly cast to a type). In this sense all variables act as unions, being the maximum size of all types they are cast as and being able to be cast to arbitrary types.
@@ -107,6 +117,7 @@ When exploring types, we are looking for the initial type to treat variables as 
 2. Address space keyword (e.g. address 0x100 0x200 read write)
 3. CSR handling (e.g. mhartid will each be different and one will be 0)
 4. Interrupt handling (e.g. wfi) (need to learn more about how this works to figure this out)
+
 ## CLI arms
 
 - Harts: Hart range to verify
