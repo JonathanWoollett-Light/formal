@@ -420,8 +420,7 @@ fn new_type(src: &[char]) -> Type {
                     return ttype;
                 }
             }
-
-            _ => todo!(),
+            x => todo!("{x:?} {src:?}"),
         }
     }
     todo!()
@@ -1240,6 +1239,13 @@ impl fmt::Debug for Label {
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.tag)
+    }
+}
+impl From<&str> for Label {
+    fn from(s: &str) -> Self {
+        Self {
+            tag: String::from(s),
+        }
     }
 }
 

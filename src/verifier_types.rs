@@ -193,7 +193,10 @@ impl MemoryValueU8 {
         &self,
         SubSlice { offset, len }: &SubSlice,
     ) -> Result<MemoryValue, MemoryValueU8GetError> {
-        let end = offset.clone().add(&MemoryValueU64::from(len.clone())).unwrap();
+        let end = offset
+            .clone()
+            .add(&MemoryValueU64::from(len.clone()))
+            .unwrap();
         let value_size = size(&Type::U8);
         match end.lte(&value_size) {
             false => Err(MemoryValueU8GetError::Outside(end)),
@@ -751,9 +754,10 @@ impl Add for MemoryValue {
             }
             (Ptr(MemoryPtr(Some(mut a))), I8(b)) => {
                 let c = MemoryValueI64::from(b);
-                a.offset =
-                    MemoryValueU64::try_from(MemoryValueI64::try_from(a.offset).unwrap().sub(&c).unwrap())
-                        .unwrap();
+                a.offset = MemoryValueU64::try_from(
+                    MemoryValueI64::try_from(a.offset).unwrap().sub(&c).unwrap(),
+                )
+                .unwrap();
                 Ptr(MemoryPtr(Some(a)))
             }
             (U32(a), U8(b)) => U32(a.add(&MemoryValueU32::from(b)).unwrap()),
@@ -764,7 +768,7 @@ impl Add for MemoryValue {
                 a.offset = MemoryValueU64::try_from(c.add(&b).unwrap()).unwrap();
                 MemoryValue::Ptr(MemoryPtr(Some(a)))
             }
-            (I64(a),I64(b)) => I64(a.add(&b).unwrap()),
+            (I64(a), I64(b)) => I64(a.add(&b).unwrap()),
             x => todo!("{x:?}"),
         }
     }
@@ -799,7 +803,10 @@ impl MemoryValue {
                         // Gets some bytes within this item.
                         RangeOrdering::Within => {
                             return item.get(&SubSlice {
-                                offset: (offset.clone().sub(&MemoryValueU64::from(previous)).unwrap()),
+                                offset: (offset
+                                    .clone()
+                                    .sub(&MemoryValueU64::from(previous))
+                                    .unwrap()),
                                 len: len.clone(),
                             });
                         }

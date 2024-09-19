@@ -14,7 +14,7 @@ _start:
     # paths are not otherwise explored (since there are an infinite number
     # of list and union type combinations). In essence `#$` = "this is" while
     # later checks are "if this is".
-    #$ value global _ 
+    #$ value global _
     la t0, value
 
     # Set to 0

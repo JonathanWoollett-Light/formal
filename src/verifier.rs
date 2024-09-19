@@ -1,21 +1,17 @@
 use crate::ast::*;
 use crate::verifier_types::*;
 use std::alloc::Layout;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::iter::once;
 use std::ops::Range;
 use std::ptr;
 use std::rc::Rc;
-use std::{
-    alloc::alloc,
-    collections::VecDeque,
-    ptr::NonNull,
-};
+use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
 use tracing::error;
 use tracing::trace;
-use std::cell::RefCell;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -95,6 +91,9 @@ impl Explorerer {
         // we record all the AST instructions that get touched.
         let touched = BTreeSet::<NonNull<AstNode>>::new();
 
+        // To remove uneeded branches we track the branches that actually jump.
+        let jumped = BTreeSet::new();
+
         let queue = this_ref
             .roots
             .iter()
@@ -133,6 +132,7 @@ impl Explorerer {
             configuration,
             touched,
             queue,
+            jumped,
         }
     }
 
@@ -193,9 +193,11 @@ pub struct ExplorererPath {
     pub explorerer: Rc<RefCell<Explorerer>>,
 
     pub configuration: ProgramConfiguration,
-
+    // All the nodes that are touched.
     pub touched: BTreeSet<NonNull<AstNode>>,
     pub queue: VecDeque<NonNull<VerifierNode>>,
+    // All the branch nodes that jump.
+    pub jumped: BTreeSet<NonNull<AstNode>>,
 }
 
 /// Attempts to modify initial types to include a new variable, if it cannot add it,
@@ -266,10 +268,7 @@ fn load_label(
 }
 
 pub enum ExplorePathResult {
-    Valid {
-        configuration: ProgramConfiguration,
-        touched: BTreeSet<NonNull<AstNode>>,
-    },
+    Valid(ValidPathResult),
     Invalid {
         complete: bool,
         path: String,
@@ -277,10 +276,23 @@ pub enum ExplorePathResult {
     },
     Continue(ExplorererPath),
 }
+pub struct ValidPathResult {
+    pub configuration: ProgramConfiguration,
+    // All the nodes that are touched.
+    pub touched: BTreeSet<NonNull<AstNode>>,
+    // All the branch nodes that jump.
+    pub jumped: BTreeSet<NonNull<AstNode>>,
+}
 impl ExplorePathResult {
     pub fn continued(self) -> Option<ExplorererPath> {
         match self {
             Self::Continue(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn valid(self) -> Option<ValidPathResult> {
+        match self {
+            Self::Valid(c) => Some(c),
             _ => None,
         }
     }
@@ -295,6 +307,7 @@ impl ExplorererPath {
             mut configuration,
             mut touched,
             mut queue,
+            mut jumped,
         }: Self,
     ) -> ExplorePathResult {
         trace!("excluded: {:?}", explorerer.borrow().excluded);
@@ -326,10 +339,11 @@ impl ExplorererPath {
         );
 
         let Some(branch_ptr) = queue.pop_front() else {
-            return ExplorePathResult::Valid {
+            return ExplorePathResult::Valid(ValidPathResult {
                 configuration,
                 touched,
-            };
+                jumped,
+            });
         };
 
         // If a variable is used that has not yet been defined, add the cheapest
@@ -536,13 +550,14 @@ impl ExplorererPath {
             }
             x => todo!("{x:?}"),
         }
-        queue_up(branch_ptr, &mut queue, &configuration);
+        queue_up(branch_ptr, &mut queue, &configuration, &mut jumped);
 
         return ExplorePathResult::Continue(Self {
             explorerer,
             configuration,
             touched,
             queue,
+            jumped,
         });
     }
 }
@@ -570,8 +585,12 @@ unsafe fn check_store(
             let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueU64::from(type_size)
-                .add(from_offset).unwrap()
-                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
+                .add(from_offset)
+                .unwrap()
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.value.value).unwrap(),
+                ))
+                .unwrap();
             let size = size(ttype);
 
             match full_offset.lte(&size) {
@@ -622,8 +641,12 @@ unsafe fn check_load(
 
             // If attempting to access outside the memory space for the label.
             let full_offset = MemoryValueU64::from(type_size)
-                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap()
-                .add(from_offset).unwrap();
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.value.value).unwrap(),
+                ))
+                .unwrap()
+                .add(from_offset)
+                .unwrap();
             let size = size(ttype);
             match full_offset.lte(&size) {
                 false => {
@@ -762,6 +785,7 @@ unsafe fn queue_up(
     prev: NonNull<VerifierNode>,
     queue: &mut VecDeque<NonNull<VerifierNode>>,
     configuration: &ProgramConfiguration,
+    jumped: &mut BTreeSet<NonNull<AstNode>>,
 ) {
     let (record, root, harts, first_step) = get_backpath_harts(prev);
     // TOOD We duplicate so much work doing `find_state` in a bunch of places and
@@ -838,6 +862,7 @@ unsafe fn queue_up(
             }
             // See note on `wfi`.
             Instruction::Wfi(_) => Some(Ok((hart, node))),
+            Instruction::Unreachable(_) => None,
             x => todo!("{x:?}"),
         }
     };
@@ -857,20 +882,16 @@ unsafe fn queue_up(
                 Instruction::Blt(Blt { rhs, lhs, label }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    let lhs = state.registers[hart as usize].get(lhs);
-                    let rhs = state.registers[hart as usize].get(rhs);
-                    match (lhs, rhs) {
-                        (Some(l), Some(r)) => {
-                            if let Some(ord) = l.compare(r) {
-                                if ord == RangeOrdering::Less {
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    followup(node_ref.next.unwrap(), hart)
-                                }
-                            } else {
-                                todo!()
-                            }
+                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                    match lhs.compare(rhs) {
+                        Some(RangeOrdering::Less) => {
+                            jumped.insert(node);
+                            let label_node = find_label(node, label).unwrap();
+                            followup(label_node, hart)
+                        }
+                        Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
+                            followup(node_ref.next.unwrap(), hart)
                         }
                         _ => todo!(),
                     }
@@ -878,82 +899,79 @@ unsafe fn queue_up(
                 Instruction::Beq(Beq { rhs, lhs, out }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    // error!("state.memory: {:?}",state.memory);
-                    // error!("state.registers: {:?}",state.registers);
-
-                    let lhs = state.registers[hart as usize].get(lhs);
-                    let rhs = state.registers[hart as usize].get(rhs);
-                    match (lhs, rhs) {
-                        (Some(l), Some(r)) => {
-                            if let Some(ord) = l.compare(r) {
-                                if ord == RangeOrdering::Equal {
-                                    let label_node = find_label(node, out).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    followup(node_ref.next.unwrap(), hart)
-                                }
-                            } else {
-                                todo!()
-                            }
+                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                    match lhs.compare(rhs) {
+                        Some(RangeOrdering::Equal) => {
+                            jumped.insert(node);
+                            let label_node = find_label(node, out).unwrap();
+                            followup(label_node, hart)
                         }
-                        x => todo!("{x:?}"),
+                        Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                            followup(node_ref.next.unwrap(), hart)
+                        }
+                        _ => todo!(),
                     }
                 }
                 Instruction::Bne(Bne { rhs, lhs, out }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    // error!("state.memory: {:?}",state.memory);
-                    // error!("state.registers: {:?}",state.registers);
-
-                    let lhs = state.registers[hart as usize].get(lhs);
-                    let rhs = state.registers[hart as usize].get(rhs);
-                    match (lhs, rhs) {
-                        (Some(l), Some(r)) => {
-                            if let Some(ord) = l.compare(r) {
-                                if ord == RangeOrdering::Equal {
-                                    followup(node_ref.next.unwrap(), hart)
-                                } else {
-                                    let label_node = find_label(node, out).unwrap();
-                                    followup(label_node, hart)
-                                }
-                            } else {
-                                todo!()
-                            }
+                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                    match lhs.compare(rhs) {
+                        Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                            jumped.insert(node);
+                            let label_node = find_label(node, out).unwrap();
+                            followup(label_node, hart)
                         }
-                        x => todo!("{x:?}"),
+                        Some(RangeOrdering::Equal) => followup(node_ref.next.unwrap(), hart),
+                        _ => todo!(),
                     }
                 }
                 Instruction::Bnez(Bnez { src, dest }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    let src = state.registers[hart as usize].get(src);
+                    let src = state.registers[hart as usize].get(src).unwrap();
 
                     // In the case the path is determinate, we either queue up the label
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(MemoryValue::I8(imm)) => {
-                            if imm.eq(&0) {
-                                followup(node_ref.next.unwrap(), hart)
-                            } else {
+                        MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                            RangeScalarOrdering::Within => {
+                                if imm.eq(&0) {
+                                    followup(node_ref.next.unwrap(), hart)
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                jumped.insert(node);
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
                             }
-                        }
-                        Some(MemoryValue::U8(imm)) => {
-                            if imm.eq(&0) {
-                                followup(node_ref.next.unwrap(), hart)
-                            } else {
+                        },
+                        MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                            RangeScalarOrdering::Within => {
+                                if imm.eq(&0) {
+                                    followup(node_ref.next.unwrap(), hart)
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                jumped.insert(node);
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
                             }
-                        }
-                        Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
-                            if hart != 0 {
+                        },
+                        MemoryValue::Csr(CsrValue::Mhartid) => {
+                            if hart == 0 {
+                                followup(node_ref.next.unwrap(), hart)
+                            } else {
+                                jumped.insert(node);
                                 let label_node = find_label(node, dest).unwrap();
                                 followup(label_node, hart)
-                            } else {
-                                followup(node_ref.next.unwrap(), hart)
                             }
                         }
                         x => todo!("{x:?}"),
@@ -962,30 +980,43 @@ unsafe fn queue_up(
                 Instruction::Beqz(Beqz { register, label }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    let src = state.registers[hart as usize].get(register);
+                    let src = state.registers[hart as usize].get(register).unwrap();
 
                     // In the case the path is determinate, we either queue up the label
                     // or the next ast node and don't need to actually visit/evaluate
                     // the branch at runtime.
                     match src {
-                        Some(MemoryValue::U8(imm)) => {
-                            if imm.eq(&0) {
-                                let label_node = find_label(node, label).unwrap();
-                                followup(label_node, hart)
-                            } else {
+                        MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                            RangeScalarOrdering::Within => {
+                                if imm.eq(&0) {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, label).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
                                 followup(node_ref.next.unwrap(), hart)
                             }
-                        }
-                        Some(MemoryValue::I8(imm)) => {
-                            if imm.eq(&0) {
-                                let label_node = find_label(node, label).unwrap();
-                                followup(label_node, hart)
-                            } else {
+                        },
+                        MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                            RangeScalarOrdering::Within => {
+                                if imm.eq(&0) {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, label).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    todo!()
+                                }
+                            }
+                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
                                 followup(node_ref.next.unwrap(), hart)
                             }
-                        }
-                        Some(MemoryValue::Csr(CsrValue::Mhartid)) => {
+                        },
+                        MemoryValue::Csr(CsrValue::Mhartid) => {
                             if hart == 0 {
+                                jumped.insert(node);
                                 let label_node = find_label(node, label).unwrap();
                                 followup(label_node, hart)
                             } else {
@@ -998,25 +1029,15 @@ unsafe fn queue_up(
                 Instruction::Bge(Bge { lhs, rhs, out }) => {
                     let state = find_state(&record, root, harts, first_step, configuration);
 
-                    let lhs = state.registers[hart as usize].get(lhs);
-                    let rhs = state.registers[hart as usize].get(rhs);
-                    match (lhs, rhs) {
-                        (Some(l), Some(r)) => {
-                            // Since in this case the path is determinate, we either queue up the label or the next ast node and
-                            // don't need to actually visit/evaluate the branch at runtime.
-                            if let Some(cmp) = l.compare(r) {
-                                match cmp {
-                                    RangeOrdering::Greater => {
-                                        let label_node = find_label(node, out).unwrap();
-                                        followup(label_node, hart)
-                                    }
-                                    RangeOrdering::Less => followup(node_ref.next.unwrap(), hart),
-                                    _ => todo!(),
-                                }
-                            } else {
-                                todo!()
-                            }
+                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                    match lhs.compare(rhs) {
+                        Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
+                            jumped.insert(node);
+                            let label_node = find_label(node, out).unwrap();
+                            followup(label_node, hart)
                         }
+                        Some(RangeOrdering::Less) => followup(node_ref.next.unwrap(), hart),
                         _ => todo!(),
                     }
                 }
@@ -1292,14 +1313,22 @@ fn find_state_store(
             // We should have already checked the type is large enough for the store.
             let sizeof = size(to_type);
             let final_offset = MemoryValueU64::from(len)
-                .add(to_offset).unwrap()
-                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
+                .add(to_offset)
+                .unwrap()
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.value.value).unwrap(),
+                ))
+                .unwrap();
             debug_assert!(final_offset.lte(&sizeof));
             debug_assert_eq!(locality, <&Locality>::from(to_label));
             let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                 tag: to_label.clone(),
-                offset: to_offset.clone()
-                    .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap(),
+                offset: to_offset
+                    .clone()
+                    .add(&MemoryValueU64::from(
+                        u64::try_from(offset.value.value).unwrap(),
+                    ))
+                    .unwrap(),
             }));
             state.memory.set(&memloc, &len, from_value.clone()).unwrap();
         }
@@ -1327,15 +1356,24 @@ fn find_state_load(
             // We should have already checked the type is large enough for the load.
             let sizeof = size(from_type);
             let final_offset = MemoryValueU64::from(len)
-                .add(from_offset).unwrap()
-                .add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap();
+                .add(from_offset)
+                .unwrap()
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.value.value).unwrap(),
+                ))
+                .unwrap();
 
             debug_assert!(final_offset.lte(&sizeof));
             debug_assert_eq!(locality, <&Locality>::from(from_label));
 
             let memloc = Slice {
                 base: from_label.clone(),
-                offset: from_offset.clone().add(&MemoryValueU64::from(u64::try_from(offset.value.value).unwrap())).unwrap(),
+                offset: from_offset
+                    .clone()
+                    .add(&MemoryValueU64::from(
+                        u64::try_from(offset.value.value).unwrap(),
+                    ))
+                    .unwrap(),
                 len,
             };
             let value = state.memory.get(&memloc).unwrap();

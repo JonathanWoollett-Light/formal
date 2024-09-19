@@ -1,5 +1,15 @@
 # language
 
+## optimizing output
+
+1. Remove untouched code.
+2. Remove branches that never jump.
+3. Remove writes to registers that are never read.
+   Initially we should assume on syscalls all registers are read.
+   Further optimization will require a mechanism to specify if a syscall read/writes certain reigsters.
+4. Remove memory writes that are never read.
+   This will require documenting volatile memory for mmio.
+
 ## assembly reference
 
 keyword|assembly symbol

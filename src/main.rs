@@ -1,4 +1,4 @@
-use std::alloc::{alloc, Layout};
+use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
 
 mod ast;
@@ -50,10 +50,11 @@ fn main() {
                 ExplorePathResult::Invalid {
                     complete: false, ..
                 } => Explorerer::new_path(explorerer.clone()),
-                ExplorePathResult::Valid {
+                ExplorePathResult::Valid(ValidPathResult {
                     configuration,
                     touched,
-                } => break Some((configuration, touched)),
+                    jumped,
+                }) => break Some((configuration, touched)),
             }
         };
     }
@@ -97,20 +98,32 @@ fn compress(root: &mut Option<NonNull<AstNode>>) {
 }
 
 // Prints the AST nodes.
-fn print_ast(root: Option<NonNull<AstNode>>) {
-    let now = std::time::Instant::now();
+fn print_ast(root: Option<NonNull<AstNode>>) -> String {
     let mut next_opt = root;
+    let mut string = String::new();
     while let Some(next) = next_opt {
         let as_ref = unsafe { next.as_ref() };
-        println!("{}", as_ref.this);
+        string.push_str(&format!("{}\n", as_ref.this));
         next_opt = as_ref.next;
     }
-    println!();
-    println!("{:?}", now.elapsed());
+    string
+}
+
+unsafe fn remove_ast_node(node: NonNull<AstNode>) {
+    let node_ref = node.as_ref();
+    if let Some(mut prev) = node_ref.prev {
+        prev.as_mut().next = node_ref.next;
+    }
+    if let Some(mut next) = node_ref.next {
+        next.as_mut().prev = node_ref.prev;
+    }
+    dealloc(node.as_ptr().cast(), Layout::new::<AstNode>());
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::*;
 
     // use opentelemetry::global;
@@ -120,8 +133,390 @@ mod tests {
 
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
+    use verifier_types::{LabelLocality, ProgramConfiguration};
 
     // const LOKI_URL: &str = "http://localhost/3100";
+
+    #[test]
+    fn five() {
+        let now = std::time::Instant::now();
+
+        // Create file.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open("five_foo.txt")
+            .unwrap();
+
+        // Create base subscriber.
+        let registry = tracing_subscriber::fmt::Subscriber::builder()
+            .with_max_level(LevelFilter::TRACE)
+            .with_test_writer()
+            .with_writer(file)
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_level(false)
+            .finish();
+
+        // Create assertion layer.
+        let asserter = tracing_assertions::Layer::default();
+        // asserter.disable(); // TODO Remove this, only here for debugging.
+        let subscriber = registry.with(asserter.clone());
+
+        let guard = tracing::subscriber::set_default(subscriber);
+
+        let path = std::path::PathBuf::from("./assets/five.s");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let chars = source.chars().collect::<Vec<_>>();
+
+        // Parse
+        let mut ast = new_ast(&chars, path);
+
+        let explorerer = Rc::new(RefCell::new(unsafe { Explorerer::new(ast, 1..3) }));
+
+        // Find valid path.
+        let ValidPathResult {
+            configuration,
+            touched,
+            jumped,
+        } = unsafe {
+            let mut path = Explorerer::new_path(explorerer.clone());
+
+            // With each step we check the logs to ensure the state is as expected.
+
+            // At the start of the program there are no found variables so no initial types for variables.
+            let config_is_empty = asserter.matches("configuration: ProgramConfiguration({})");
+            // The initial state of the queue contains the 1st instruction for
+            // the 1st hart for each number of running harts (in this case we
+            // are checking program for systems with 1 hart and with 2 harts).
+            let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/five.s:2:0\" }, { hart: 1/2, instruction: \"./assets/five.s:2:0\" }]");
+            // We start with no types explored so none excluded.
+            let empty_excluded = asserter.matches("excluded: {}");
+            // There are no racy instructions when queueing up the next instructions.
+            let is_not_racy = asserter.matches("racy: false");
+            // The initial conditions.
+            let base_assertions = &(&config_is_empty & &is_not_racy) & &empty_excluded;
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"./assets/five.s:2:0\" }, \
+                { hart: 1/1, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:17:0\" }, \
+                { hart: 2/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let u8_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            let base_assertions = &u8_config & &empty_excluded.repeat() & is_not_racy.repeat();
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"./assets/five.s:17:0\" }, \
+                { hart: 1/1, instruction: \"./assets/five.s:18:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:18:0\" }, \
+                { hart: 2/2, instruction: \"./assets/five.s:18:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"./assets/five.s:18:0\" }, \
+                { hart: 1/1, instruction: \"./assets/five.s:21:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let is_racy = asserter.matches("racy: true");
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:21:0\" }, \
+                { hart: 2/2, instruction: \"./assets/five.s:21:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            u8_config.assert().reset();
+            empty_excluded.assert().reset();
+            is_racy.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 2/2, instruction: \"./assets/five.s:21:0\" }, \
+                { hart: 1/1, instruction: \"./assets/five.s:22:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            // Since we are storing a word in `value` it cannot be u8 as this would store outside of memory.
+            u8_config.reset();
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:22:0\" }, \
+                { hart: 1/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            let u8_excluded = asserter.matches(
+                "excluded: {\
+                ProgramConfiguration({\"value\": (Global, U8)})\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
+            ));
+            u8_config.assert();
+            queue.assert();
+            u8_excluded.assert().reset();
+
+            path = Explorerer::new_path(explorerer.clone());
+
+            // Iterate until excluding value as i8.
+            for _ in 0..8 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let i8_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:22:0\" }, \
+                { hart: 1/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            let excluded = asserter.matches(
+                "excluded: {\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)})\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
+            ));
+            (i8_config & queue & excluded).assert();
+
+            path = Explorerer::new_path(explorerer.clone());
+
+            // Iterate until excluding value as u16.
+            for _ in 0..8 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let u16_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:22:0\" }, \
+                { hart: 1/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            let excluded = asserter.matches(
+                "excluded: {\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)})\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
+            ));
+            (u16_config & queue & excluded).assert();
+
+            path = Explorerer::new_path(explorerer.clone());
+
+            for _ in 0..8 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+
+            let i32_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:22:0\" }, \
+                { hart: 1/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            let excluded = asserter.matches(
+                "excluded: {\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)}), \
+                ProgramConfiguration({\"value\": (Global, I16)})\
+            }",
+            );
+            assert!(matches!(
+                ExplorererPath::next_step(path),
+                ExplorePathResult::Invalid {
+                    complete: false,
+                    ..
+                }
+            ));
+            (i32_config & queue & excluded).assert();
+
+            // The valid path is now entered with `value` as `u32`.
+            path = Explorerer::new_path(explorerer.clone());
+
+            let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/five.s:2:0\" }, { hart: 1/2, instruction: \"./assets/five.s:2:0\" }]");
+            let excluded = asserter.matches(
+                "excluded: {\
+                ProgramConfiguration({\"value\": (Global, U8)}), \
+                ProgramConfiguration({\"value\": (Global, I8)}), \
+                ProgramConfiguration({\"value\": (Global, U16)}), \
+                ProgramConfiguration({\"value\": (Global, I16)})\
+            }",
+            );
+            let base_assertions = (&config_is_empty.repeat() & &excluded) & is_not_racy.repeat();
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/2, instruction: \"./assets/five.s:2:0\" }, \
+                { hart: 1/1, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            let queue = asserter.matches(
+                "queue: [\
+                { hart: 1/1, instruction: \"./assets/five.s:17:0\" }, \
+                { hart: 2/2, instruction: \"./assets/five.s:17:0\" }\
+            ]",
+            );
+            path = ExplorererPath::next_step(path).continued().unwrap();
+            base_assertions.assert().reset();
+            queue.assert();
+
+            for _ in 0..54 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            ExplorererPath::next_step(path).valid().unwrap()
+        };
+
+        // Optimize based on path.
+        println!("configuration: {configuration:?}");
+        assert_eq!(
+            configuration,
+            ProgramConfiguration(
+                vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
+                    .into_iter()
+                    .collect()
+            )
+        );
+
+        // Remove untouched nodes.
+        unsafe {
+            let mut next = ast;
+            let mut first = true;
+            while let Some(current) = next {
+                next = current.as_ref().next;
+                if !touched.contains(&current) {
+                    if first {
+                        ast = next;
+                    }
+                    remove_ast_node(current);
+                } else {
+                    first = false;
+                }
+            }
+
+            let expected = "\
+                _start:\n\
+                #$ value global _\n\
+                la t0, value\n\
+                li t1, 0\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                li t2, 0\n\
+                bne t1, t2, _invalid\n\
+            ";
+            let actual = print_ast(ast);
+            assert_eq!(actual, expected);
+        }
+
+        // Remove branches that never jump.
+        unsafe {
+            use Instruction::*;
+            let mut next = ast;
+            let mut first = true;
+            while let Some(current) = next {
+                next = current.as_ref().next;
+                match current.as_ref().this {
+                    Bne(_) | Blt(_) | Beq(_) | Beqz(_) | Bnez(_) | Bge(_) => {
+                        if !jumped.contains(&current) {
+                            if first {
+                                ast = next;
+                            }
+                            remove_ast_node(current);
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+                first = false;
+            }
+
+            let expected = "\
+                _start:\n\
+                #$ value global _\n\
+                la t0, value\n\
+                li t1, 0\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                li t2, 0\n\
+            ";
+            let actual = print_ast(ast);
+            assert_eq!(actual, expected);
+        }
+
+        compress(&mut ast);
+
+        drop(guard);
+    }
 
     #[test]
     fn two() {
