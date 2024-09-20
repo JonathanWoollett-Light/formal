@@ -70,7 +70,7 @@ fn locality_list() -> Vec<Locality> {
 // `lw` this means there exist some valid usecases that this will report as invalid, and
 // for valid use cases it will be slower as it needs to explore and validate paths it
 // doesn't need to theoritically do.
-
+#[derive(Debug)]
 pub struct Explorerer {
     pub harts_range: Range<u8>,
     pub excluded: BTreeSet<ProgramConfiguration>,
@@ -187,6 +187,7 @@ impl Explorerer {
 }
 
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
+#[derive(Debug)]
 pub struct ExplorererPath {
     // This could be a mutable reference. Its a `Rc<RefCell<_>>` becuase the borrow checker can't
     // figure out its safe and I don't want to rework the code right now to help it.
@@ -267,16 +268,21 @@ fn load_label(
     false
 }
 
+#[derive(Debug)]
 pub enum ExplorePathResult {
     Valid(ValidPathResult),
     Invalid(InvalidPathResult),
     Continue(ExplorererPath),
 }
+
+#[derive(Debug)]
 pub struct InvalidPathResult {
     pub complete: bool,
     pub path: String,
     pub explanation: InvalidExplanation,
 }
+
+#[derive(Debug)]
 pub struct ValidPathResult {
     pub configuration: ProgramConfiguration,
     // All the nodes that are touched.

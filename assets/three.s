@@ -43,7 +43,7 @@ _start:
     # Check list length
     addi t0, t0, 16 # Increment address to point at length
     ld t1, (t0) # Load length
-    li t2, 3 # Load desired length
+    li t2, 2 # Load desired length
     bne t1, t2, _invalid
 
     # Check all values in list are u8
@@ -64,9 +64,9 @@ _no_items:
     # Set string
     la t0, welcome
     li t1, 72 # 'H'
-    sb t1, 1(t0)
+    sb t1, 0(t0)
     li t1, 48 # '0'
-    sb t1, 14(t0)
+    sb t1, 1(t0)
 
     # Output message
     la a0, welcome
