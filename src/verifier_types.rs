@@ -913,6 +913,7 @@ impl MemoryValue {
                                         if let Some(from_bytes) = from.to_bytes() {
                                             let to_bytes = from_bytes[0..*len as usize].try_into().unwrap();
                                             *to = MemoryValueU8::from_bytes(&to_bytes);
+                                            return Ok(());
                                         }
                                         else {
                                             todo!()

@@ -854,23 +854,22 @@ unsafe fn queue_up(
             | Instruction::Lw(Lw { from: register, .. })
             | Instruction::Lb(Lb { from: register, .. }) => {
                 let value = state.registers[hart as usize].get(register).unwrap();
-                if let MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) =
-                    value
-                {
-                    match tag {
-                        // Racy
-                        MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
-                        // Non-racy
-                        MemoryLabel::Thread {
-                            label: _,
-                            hart: thart,
-                        } => {
-                            assert_eq!(*thart, hart);
-                            Some(Err((hart, node)))
+                match value {
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) => {
+                        match tag {
+                            // Racy
+                            MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
+                            // Non-racy
+                            MemoryLabel::Thread {
+                                label: _,
+                                hart: thart,
+                            } => {
+                                assert_eq!(*thart, hart);
+                                Some(Err((hart, node)))
+                            }
                         }
                     }
-                } else {
-                    todo!()
+                    x => todo!("{x:?}"),
                 }
             }
             // See note on `wfi`.
