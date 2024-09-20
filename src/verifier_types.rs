@@ -1,4 +1,5 @@
 use crate::ast::*;
+use num::traits::ToBytes;
 use num::CheckedAdd;
 use num::CheckedSub;
 use std::alloc::Layout;
@@ -34,20 +35,6 @@ impl From<i8> for MemoryValueI8 {
 
 impl MemoryValueI8 {
     const ZERO: Self = Self { start: 0, stop: 0 };
-    fn get_i8(&self, i: usize) -> Option<MemoryValueI8> {
-        if i > 0 {
-            return None;
-        }
-        Some(self.clone())
-    }
-    fn set_i8(&mut self, i: usize, n: i8) {
-        assert!(i > 0);
-        self.start = n;
-        self.stop = n;
-    }
-    fn exact(&self) -> Option<i8> {
-        (self.start == self.stop).then_some(self.start)
-    }
 }
 impl RangeType for MemoryValueI8 {
     type Base = i8;
@@ -78,20 +65,6 @@ impl From<u16> for MemoryValueU16 {
 
 impl MemoryValueU16 {
     const ZERO: Self = Self { start: 0, stop: 0 };
-    fn get_i8(&self, i: usize) -> Option<MemoryValueU16> {
-        if i > 0 {
-            return None;
-        }
-        Some(self.clone())
-    }
-    fn set_i8(&mut self, i: usize, n: u16) {
-        assert!(i > 0);
-        self.start = n;
-        self.stop = n;
-    }
-    fn exact(&self) -> Option<u16> {
-        (self.start == self.stop).then_some(self.start)
-    }
 }
 impl RangeType for MemoryValueU16 {
     type Base = u16;
@@ -122,20 +95,6 @@ impl From<i16> for MemoryValueI16 {
 
 impl MemoryValueI16 {
     const ZERO: Self = Self { start: 0, stop: 0 };
-    fn get_i8(&self, i: usize) -> Option<MemoryValueI16> {
-        if i > 0 {
-            return None;
-        }
-        Some(self.clone())
-    }
-    fn set_i8(&mut self, i: usize, n: i16) {
-        assert!(i > 0);
-        self.start = n;
-        self.stop = n;
-    }
-    fn exact(&self) -> Option<i16> {
-        (self.start == self.stop).then_some(self.start)
-    }
 }
 impl RangeType for MemoryValueI16 {
     type Base = i16;
@@ -208,10 +167,6 @@ impl MemoryValueU8 {
             },
         }
     }
-
-    fn exact(&self) -> Option<u8> {
-        (self.start == self.stop).then_some(self.start)
-    }
 }
 impl MemoryValueU32 {
     fn get(
@@ -238,10 +193,6 @@ impl MemoryValueU32 {
                 x => todo!("{x:?}"),
             },
         }
-    }
-
-    fn exact(&self) -> Option<u32> {
-        (self.start == self.stop).then_some(self.start)
     }
 }
 
@@ -278,7 +229,7 @@ impl RangeType for MemoryValueI64 {
 }
 
 pub trait RangeType {
-    type Base: Eq + PartialEq + Ord + PartialOrd + num::CheckedAdd + num::CheckedSub;
+    type Base: Eq + Copy+PartialEq + Ord + PartialOrd + num::CheckedAdd + num::CheckedSub + num::traits::ToBytes + num::traits::FromBytes;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
     /// Returns if the given scalar is greater than, less than or within `self`.
@@ -306,6 +257,12 @@ pub trait RangeType {
             (Ordering::Equal, Ordering::Equal) => true,
             _ => false,
         }
+    }
+    fn new_exact(exact: Self::Base) -> Self
+    where
+        Self: Sized,
+    {
+        Self::new(exact,exact).unwrap()
     }
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self>
     where
@@ -349,6 +306,16 @@ pub trait RangeType {
             (Ordering::Equal, Ordering::Less) => RangeOrdering::Within,
             (Ordering::Greater, Ordering::Equal) => RangeOrdering::Within,
         }
+    }
+    fn exact(&self) -> Option<Self::Base> {
+        (self.start() == self.stop()).then_some(self.start())
+    }
+    fn to_bytes(&self) -> Option<<Self::Base as num::traits::ToBytes>::Bytes> {
+        self.exact().map(|e|e.to_ne_bytes())
+    }
+    fn from_bytes(bytes: &<Self::Base as num::traits::FromBytes>::Bytes) -> Self where
+        Self: Sized, {
+        Self::new_exact(<Self::Base as num::traits::FromBytes>::from_ne_bytes(&bytes))
     }
 }
 
@@ -430,9 +397,6 @@ impl MemoryValueI64 {
                 x => todo!("{x:?}"),
             },
         }
-    }
-    fn exact(&self) -> Option<i64> {
-        (self.start == self.stop).then_some(self.start)
     }
 }
 
@@ -553,9 +517,6 @@ impl MemoryValueU64 {
                 x => todo!("{x:?}"),
             },
         }
-    }
-    fn exact(&self) -> Option<u64> {
-        (self.start == self.stop).then_some(self.start)
     }
 }
 
@@ -702,6 +663,7 @@ impl From<&MemoryValue> for Type {
             MemoryValue::U64(_) => Type::U64,
             MemoryValue::Ptr(_) => Type::U64,
             MemoryValue::List(x) => Type::List(x.iter().map(Type::from).collect()),
+            MemoryValue::I64(_) => Type::I64,
             x @ _ => todo!("{x:?}"),
         }
     }
@@ -920,7 +882,7 @@ impl MemoryValue {
             // Setting bytes from the offset not reaching the end of the type.
             RangeScalarOrdering::Less => match self {
                 MemoryValue::List(list) => {
-                    let memrange = memory_range(offset, &size(&Type::from(value.clone())));
+                    let memrange = memory_range(offset, &len);
                     let mut previous = 0;
                     let mut covers = Vec::new();
                     let mut iter = list.iter_mut().enumerate();
@@ -928,7 +890,8 @@ impl MemoryValue {
                     // Iterate items before.
                     loop {
                         let Some((i, item)) = iter.next() else { break };
-                        let next = previous + size(&Type::from(item.clone()));
+                        let size_of_item = size(&Type::from(item.clone()));
+                        let next = previous + size_of_item;
                         let current = MemoryValueU64 {
                             start: previous,
                             stop: next,
@@ -936,8 +899,28 @@ impl MemoryValue {
                         match memrange.compare(&current) {
                             // Sets all bytes of this item.
                             RangeOrdering::Matches => {
-                                *item = value;
-                                return Ok(());
+                                use MemoryValue::*;
+                                debug_assert_eq!(*len,size_of_item);
+                                let size_of_value = size(&Type::from(&value));
+
+                                match (&value, item) {
+                                    (_,to) if size_of_value == *len => {
+                                        debug_assert_eq!(size_of_value, size_of_item);
+                                        *to = value;
+                                        return Ok(());
+                                    }
+                                    (I64(from),U8(to)) => {
+                                        if let Some(from_bytes) = from.to_bytes() {
+                                            let to_bytes = from_bytes[0..*len as usize].try_into().unwrap();
+                                            *to = MemoryValueU8::from_bytes(&to_bytes);
+                                        }
+                                        else {
+                                            todo!()
+                                        }
+                                    },
+                                    _ => todo!()
+                                }
+                                
                             }
                             // This case is likely to be a pain since the sub-type might itself be a list, so we need some
                             // stack based recursion.
@@ -977,6 +960,11 @@ impl MemoryValue {
                     }
 
                     // Use `covers` to apply the change.
+                    println!("size_of_existing: {size_of_existing:?}");
+                    println!("offset: {offset:?}");
+                    println!("diff: {diff:?}");
+                    println!("memrange: {memrange:?}");
+                    println!("len: {len:?}");
                     Err(MemoryValueSetError::ListMultiple)
                 }
                 _ => todo!(),

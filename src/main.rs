@@ -606,11 +606,11 @@ mod tests {
             }
             u32_config.assert();
 
-            for _ in 0..6274 {
+            for _ in 0..19000 {
                 path = ExplorererPath::next_step(path).continued().unwrap();
             }
             let res = ExplorererPath::next_step(path);
-            println!("res: {res:?}");
+            // println!("res: {res:?}");
             match res {
                 ExplorePathResult::Invalid(InvalidPathResult { complete, path, explanation }) => {
                     println!("path:\n{path}");
