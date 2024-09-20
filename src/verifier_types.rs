@@ -10,7 +10,6 @@ use std::iter::once;
 use std::iter::Peekable;
 use std::ops::Add;
 use std::ops::Range;
-use std::ops::Sub;
 use std::ptr;
 use std::rc::Rc;
 use std::{
@@ -207,7 +206,6 @@ impl MemoryValueU8 {
                 }
                 x => todo!("{x:?}"),
             },
-            x => todo!("{x:?}"),
         }
     }
 
@@ -239,7 +237,6 @@ impl MemoryValueU32 {
                 }
                 x => todo!("{x:?}"),
             },
-            _ => todo!(),
         }
     }
 
@@ -432,7 +429,6 @@ impl MemoryValueI64 {
                 }
                 x => todo!("{x:?}"),
             },
-            _ => todo!(),
         }
     }
     fn exact(&self) -> Option<i64> {
@@ -1082,7 +1078,6 @@ impl MemoryPtr {
                 }
                 x => todo!("{x:?}"),
             },
-            _ => todo!(),
         }
     }
 }

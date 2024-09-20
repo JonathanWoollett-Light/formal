@@ -12,6 +12,9 @@ mod verifier_types;
 
 mod draw;
 
+mod optimizer;
+use optimizer::*;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -45,11 +48,11 @@ fn main() {
             path = match ExplorererPath::next_step(path) {
                 ExplorePathResult::Continue(p) => p,
                 // The path was invalid and there is no other valid path.
-                ExplorePathResult::Invalid { complete: true, .. } => break None,
+                ExplorePathResult::Invalid(InvalidPathResult { complete: true, .. }) => break None,
                 // The path was invalid but there may be another valid path.
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false, ..
-                } => Explorerer::new_path(explorerer.clone()),
+                }) => Explorerer::new_path(explorerer.clone()),
                 ExplorePathResult::Valid(ValidPathResult {
                     configuration,
                     touched,
@@ -109,17 +112,6 @@ fn print_ast(root: Option<NonNull<AstNode>>) -> String {
     string
 }
 
-unsafe fn remove_ast_node(node: NonNull<AstNode>) {
-    let node_ref = node.as_ref();
-    if let Some(mut prev) = node_ref.prev {
-        prev.as_mut().next = node_ref.next;
-    }
-    if let Some(mut next) = node_ref.next {
-        next.as_mut().prev = node_ref.prev;
-    }
-    dealloc(node.as_ptr().cast(), Layout::new::<AstNode>());
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -131,22 +123,32 @@ mod tests {
     // use tracing_subscriber::fmt::format::FmtSpan;
     // use tracing_subscriber::util::SubscriberInitExt;
 
-    use tracing::level_filters::LevelFilter;
+    use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard};
     use tracing_subscriber::layer::SubscriberExt;
     use verifier_types::{LabelLocality, ProgramConfiguration};
 
     // const LOKI_URL: &str = "http://localhost/3100";
+    
+    use std::path::PathBuf;
+    use std::sync::LazyLock;
+    static LOCAL_TMP: LazyLock<PathBuf> = LazyLock::new(|| {
+        const LOCAL_STR: &str = "./tmp";
+        if std::fs::exists(LOCAL_STR).unwrap() {
+            PathBuf::from(LOCAL_STR)
+        }
+        else {
+            std::fs::create_dir(LOCAL_STR).unwrap();
+            PathBuf::from(LOCAL_STR)
+        }
+    });
 
-    #[test]
-    fn five() {
-        let now = std::time::Instant::now();
-
+    fn setup_test(asm: &str) -> (DefaultGuard, Option<NonNull<AstNode>>, tracing_assertions::Layer){
         // Create file.
         let file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open("five_foo.txt")
+            .open(format!("{}/{asm}.txt",LOCAL_TMP.display()))
             .unwrap();
 
         // Create base subscriber.
@@ -167,12 +169,21 @@ mod tests {
 
         let guard = tracing::subscriber::set_default(subscriber);
 
-        let path = std::path::PathBuf::from("./assets/five.s");
+        let path = std::path::PathBuf::from(format!("./assets/{asm}.s"));
         let source = std::fs::read_to_string(&path).unwrap();
         let chars = source.chars().collect::<Vec<_>>();
 
         // Parse
         let mut ast = new_ast(&chars, path);
+
+        compress(&mut ast);
+
+        (guard,ast,asserter)
+    }
+
+    #[test]
+    fn five() {
+        let (guard, mut ast, asserter) = setup_test("five");
 
         let explorerer = Rc::new(RefCell::new(unsafe { Explorerer::new(ast, 1..3) }));
 
@@ -293,10 +304,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
-                }
+                })
             ));
             u8_config.assert();
             queue.assert();
@@ -325,10 +336,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
-                }
+                })
             ));
             (i8_config & queue & excluded).assert();
 
@@ -356,10 +367,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult{
                     complete: false,
                     ..
-                }
+                })
             ));
             (u16_config & queue & excluded).assert();
 
@@ -387,10 +398,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
-                }
+                })
             ));
             (i32_config & queue & excluded).assert();
 
@@ -438,7 +449,6 @@ mod tests {
         };
 
         // Optimize based on path.
-        println!("configuration: {configuration:?}");
         assert_eq!(
             configuration,
             ProgramConfiguration(
@@ -450,21 +460,9 @@ mod tests {
 
         // Remove untouched nodes.
         unsafe {
-            let mut next = ast;
-            let mut first = true;
-            while let Some(current) = next {
-                next = current.as_ref().next;
-                if !touched.contains(&current) {
-                    if first {
-                        ast = next;
-                    }
-                    remove_ast_node(current);
-                } else {
-                    first = false;
-                }
-            }
-
-            let expected = "\
+            remove_untouched(&mut ast, &touched);
+        }
+        let expected = "\
                 _start:\n\
                 #$ value global _\n\
                 la t0, value\n\
@@ -474,33 +472,14 @@ mod tests {
                 li t2, 0\n\
                 bne t1, t2, _invalid\n\
             ";
-            let actual = print_ast(ast);
-            assert_eq!(actual, expected);
-        }
+        let actual = print_ast(ast);
+        assert_eq!(actual, expected);
 
         // Remove branches that never jump.
         unsafe {
-            use Instruction::*;
-            let mut next = ast;
-            let mut first = true;
-            while let Some(current) = next {
-                next = current.as_ref().next;
-                match current.as_ref().this {
-                    Bne(_) | Blt(_) | Beq(_) | Beqz(_) | Bnez(_) | Bge(_) => {
-                        if !jumped.contains(&current) {
-                            if first {
-                                ast = next;
-                            }
-                            remove_ast_node(current);
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-                first = false;
-            }
-
-            let expected = "\
+            remove_branches(&mut ast, &jumped);
+        }
+        let expected = "\
                 _start:\n\
                 #$ value global _\n\
                 la t0, value\n\
@@ -509,11 +488,93 @@ mod tests {
                 lw t1, (t0)\n\
                 li t2, 0\n\
             ";
-            let actual = print_ast(ast);
-            assert_eq!(actual, expected);
-        }
+        let actual = print_ast(ast);
+        assert_eq!(actual, expected);
 
-        compress(&mut ast);
+        drop(guard);
+    }
+
+    #[test]
+    fn four() {
+        let (guard, mut ast, asserter) = setup_test("four");
+
+        let explorerer = Rc::new(RefCell::new(unsafe { Explorerer::new(ast, 1..3) }));
+
+        let ValidPathResult {
+            configuration,
+            touched,
+            jumped,
+        } = unsafe {
+            let mut path = Explorerer::new_path(explorerer.clone());
+            let u32_config = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
+            
+            // Iterate until reaching `u32` for `value`.
+            for _ in 0..4 {
+                for _ in 0..8 {
+                    path = ExplorererPath::next_step(path).continued().unwrap();
+                }
+                ExplorererPath::next_step(path).invalid().unwrap();
+                path = Explorerer::new_path(explorerer.clone());
+            }
+            for _ in 0..4 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            u32_config.assert();
+
+            for _ in 0..574 {
+                path = ExplorererPath::next_step(path).continued().unwrap();
+            }
+            ExplorererPath::next_step(path).valid().unwrap()
+        };
+
+        // Optimize based on path.
+        assert_eq!(
+            configuration,
+            ProgramConfiguration(
+                vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
+                    .into_iter()
+                    .collect()
+            )
+        );
+
+        // Remove untouched nodes.
+        unsafe {
+            remove_untouched(&mut ast, &touched);
+        }
+        let expected = "\
+                _start:\n\
+                #$ value global _\n\
+                la t0, value\n\
+                li t1, 0\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                addi t1, t1, 1\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                li t2, 4\n\
+                bge t1, t2, _invalid\n\
+            ";
+        let actual = print_ast(ast);
+        assert_eq!(actual, expected);
+
+        // Remove branches that never jump.
+        unsafe {
+            remove_branches(&mut ast, &jumped);
+        }
+        let expected = "\
+                _start:\n\
+                #$ value global _\n\
+                la t0, value\n\
+                li t1, 0\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                addi t1, t1, 1\n\
+                sw t1, (t0)\n\
+                lw t1, (t0)\n\
+                li t2, 4\n\
+            ";
+        let actual = print_ast(ast);
+        assert_eq!(actual, expected);
 
         drop(guard);
     }
@@ -700,10 +761,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
-                }
+                })
             ));
             u8_config.assert();
             queue.assert();
@@ -732,10 +793,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult{
                     complete: false,
                     ..
-                }
+                })
             ));
             (i8_config & queue & excluded).assert();
 
@@ -763,10 +824,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
-                }
+                })
             ));
             (u16_config & queue & excluded).assert();
 
@@ -794,10 +855,10 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid {
+                ExplorePathResult::Invalid(InvalidPathResult{
                     complete: false,
                     ..
-                }
+                })
             ));
             (i32_config & queue & excluded).assert();
 

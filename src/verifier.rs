@@ -269,12 +269,13 @@ fn load_label(
 
 pub enum ExplorePathResult {
     Valid(ValidPathResult),
-    Invalid {
-        complete: bool,
-        path: String,
-        explanation: InvalidExplanation,
-    },
+    Invalid(InvalidPathResult),
     Continue(ExplorererPath),
+}
+pub struct InvalidPathResult {
+    pub complete: bool,
+    pub path: String,
+    pub explanation: InvalidExplanation,
 }
 pub struct ValidPathResult {
     pub configuration: ProgramConfiguration,
@@ -293,6 +294,12 @@ impl ExplorePathResult {
     pub fn valid(self) -> Option<ValidPathResult> {
         match self {
             Self::Valid(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn invalid(self) -> Option<InvalidPathResult> {
+        match self {
+            Self::Invalid(c) => Some(c),
             _ => None,
         }
     }
@@ -738,11 +745,11 @@ unsafe fn invalid_path(
     // This case only occurs when all types are excluded thus it continually breaks out
     // of the exploration loop with empty `initial_types`. This case means there is no
     // valid type combination and thus no valid path.
-    ExplorePathResult::Invalid {
+    ExplorePathResult::Invalid(InvalidPathResult {
         complete: configuration.0.is_empty(),
         path,
         explanation,
-    }
+    })
 }
 
 // Get the number of harts of this sub-tree and record the path.
