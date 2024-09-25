@@ -28,36 +28,46 @@ fn type_list() -> Vec<Type> {
 }
 
 use std::alloc::dealloc;
-pub struct VerifierHarts {
+
+/// Contains the configuration of the system 
+pub struct VerifierConfiguration {
     pub harts: u8,
     pub next: NextVerifierNode,
 }
 
-type NextVerifierNode = Vec<NonNull<VerifierNode>>;
+type NextVerifierNode = Vec<NonNull<InnerNextVerifierNode>>;
 
-#[derive(Debug, Clone, Copy)]
-enum VerifierPrevNode {
-    Branch(NonNull<VerifierNode>),
-    Root(NonNull<VerifierHarts>),
+enum PrevVerifierNode {
+    Root(VerifierConfiguration),
+    Branch(VerifierNode)
 }
-
-impl VerifierPrevNode {
-    unsafe fn next(&mut self) -> &mut NextVerifierNode {
-        match self {
-            VerifierPrevNode::Branch(branch) => &mut branch.as_mut().next,
-            VerifierPrevNode::Root(root) => &mut root.as_mut().next,
-        }
-    }
+enum InnerNextVerifierNode {
+    Branch(VerifierNode),
+    Leaf(OuterVerifierNode)
 }
 
 /// We use a tree to trace the execution of the program,
 /// then when conditions are required it can resolve them
 /// by looking back at the trace.
 pub struct VerifierNode {
-    pub prev: VerifierPrevNode,
+    pub prev: NonNull<PrevVerifierNode>,
+    pub root: NonNull<VerifierConfiguration>,
+    // Current hart.
     pub hart: u8,
     pub node: NonNull<AstNode>,
     pub next: NextVerifierNode,
+}
+
+enum OuterVerifierNode {
+    Leaf(VerifierLeafNode),
+    Branch(VerifierNode)
+}
+struct VerifierLeafNode {
+    pub prev: NonNull<VerifierNode>,
+    // The most recent state calculated along this path and the node up to which it was calculated.
+    pub cached_state: Option<(State, NonNull<VerifierNode>)>,
+    // The nodes where variables where first encountered.
+    pub variable_encounters: BTreeSet<NonNull<VerifierNode>>,
 }
 
 /// Localites in order of best to worst
@@ -76,7 +86,7 @@ pub struct Explorerer {
     pub excluded: BTreeSet<ProgramConfiguration>,
     /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
     pub second_ptr: NonNull<AstNode>,
-    pub roots: Vec<NonNull<VerifierHarts>>,
+    pub roots: Vec<NonNull<VerifierConfiguration>>,
 }
 
 impl Explorerer {
@@ -165,10 +175,10 @@ impl Explorerer {
         let roots = harts_range
             .clone()
             .map(|harts| {
-                let ptr = alloc(Layout::new::<VerifierHarts>()).cast();
+                let ptr = alloc(Layout::new::<VerifierConfiguration>()).cast();
                 ptr::write(
                     ptr,
-                    VerifierHarts {
+                    VerifierConfiguration {
                         harts,
                         next: Vec::new(),
                     },
@@ -187,18 +197,38 @@ impl Explorerer {
 }
 
 /// Represents a set of assumptions that lead to a given execution path (e.g. intial types of variables before they are explictly cast).
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct ExplorererPath {
     // This could be a mutable reference. Its a `Rc<RefCell<_>>` becuase the borrow checker can't
     // figure out its safe and I don't want to rework the code right now to help it.
     pub explorerer: Rc<RefCell<Explorerer>>,
-
+    // The program configuration (e.g. variable types).
     pub configuration: ProgramConfiguration,
+    // The queue of unexplored leaf nodes.
+    pub queue: VecDeque<NonNull<VerifierLeafNode>>,
     // All the nodes that are touched.
     pub touched: BTreeSet<NonNull<AstNode>>,
-    pub queue: VecDeque<NonNull<VerifierNode>>,
     // All the branch nodes that jump.
     pub jumped: BTreeSet<NonNull<AstNode>>,
+    // When a variable is 1st encountered in a path it is added here with an iterator over all the
+    // possible types, then a type is set in the configuration by calling `.next` on this iterator.
+    //
+    // When an invalid path is found, all branches are backtraced to the 1st encounter of the most recently
+    // encountered variable, then the next type is pulled from the iterator and tested. If `.next`
+    // returns `None` then the iterator is removed and all branches are backtraced to the 1st encoutner
+    // of the 2nd most recently encountered variable. If the types list is emptied a program with no valid
+    // configuration has been found.
+    //
+    // Variables may be encountered in different orders in different paths e.g.
+    // ```
+    // if x = 2
+    //   y = 1
+    // z = 1
+    // ```
+    // The ordering does not matter, we must simply iterate through exploring combinations
+    // and the most recently encountered (in any of the possible paths) is just the easies
+    // way that will be naively efficient.
+    pub types: Vec<(Label, Box<dyn Iterator<Item=(Locality,Type)>>)>
 }
 
 /// Attempts to modify initial types to include a new variable, if it cannot add it,
@@ -290,6 +320,7 @@ pub struct ValidPathResult {
     // All the branch nodes that jump.
     pub jumped: BTreeSet<NonNull<AstNode>>,
 }
+
 impl ExplorePathResult {
     pub fn continued(self) -> Option<ExplorererPath> {
         match self {
@@ -313,7 +344,9 @@ impl ExplorePathResult {
 
 use itertools::intersperse;
 use tracing::debug;
+
 impl ExplorererPath {
+    // Verify node before front leaf node, then queue new nodes.
     pub unsafe fn next_step(
         Self {
             explorerer,
@@ -326,32 +359,7 @@ impl ExplorererPath {
         trace!("excluded: {:?}", explorerer.borrow().excluded);
         debug!("configuration: {configuration:?}");
 
-        debug!(
-            "queue: [{}]",
-            intersperse(
-                queue.iter().map(|item| {
-                    let mut current = item.as_ref().prev;
-                    while let VerifierPrevNode::Branch(prev) = current {
-                        current = prev.as_ref().prev;
-                    }
-                    let VerifierPrevNode::Root(root) = current else {
-                        unreachable!()
-                    };
-
-                    let item_ref = item.as_ref();
-                    format!(
-                        "{{ hart: {}/{}, instruction: \"{}\" }}",
-                        item_ref.hart + 1,
-                        root.as_ref().harts,
-                        item_ref.node.as_ref().span
-                    )
-                }),
-                String::from(", ")
-            )
-            .collect::<String>()
-        );
-
-        let Some(branch_ptr) = queue.pop_front() else {
+        let Some(leaf_ptr) = queue.pop_front() else {
             return ExplorePathResult::Valid(ValidPathResult {
                 configuration,
                 touched,
@@ -365,23 +373,18 @@ impl ExplorererPath {
         // type map is added to `excluded`, we then check all values in `excluded`
         // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
         // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
-        let branch = branch_ptr.as_ref();
+        let leaf = leaf_ptr.as_ref();
+        let branch = leaf.prev.as_ref();
         let ast = branch.node;
         let hart = branch.hart;
+        let root = branch.root.as_ref();
+        let harts = root.harts;
 
-        let mut current = branch_ptr.as_ref().prev;
-        while let VerifierPrevNode::Branch(prev) = current {
-            current = prev.as_ref().prev;
-        }
-        let VerifierPrevNode::Root(root) = current else {
-            unreachable!()
-        };
-        let harts = root.as_ref().harts;
         debug!(
             "current: {{ hart: {}/{}, instruction: \"{}\" }}",
             hart + 1,
             harts,
-            branch_ptr.as_ref().node.as_ref().span
+            branch.node.as_ref().span
         );
 
         // Record all the AST node that are reachable.
@@ -466,7 +469,7 @@ impl ExplorererPath {
             }) => {
                 if let Some(res) = check_store(
                     explorerer.clone(),
-                    branch_ptr,
+                    leaf_ptr,
                     branch,
                     &configuration,
                     to,
@@ -484,7 +487,7 @@ impl ExplorererPath {
             }) => {
                 if let Some(res) = check_store(
                     explorerer.clone(),
-                    branch_ptr,
+                    leaf_ptr,
                     branch,
                     &configuration,
                     to,
@@ -504,7 +507,7 @@ impl ExplorererPath {
             }) => {
                 if let Some(res) = check_load(
                     explorerer.clone(),
-                    branch_ptr,
+                    leaf_ptr,
                     branch,
                     &configuration,
                     from,
@@ -522,7 +525,7 @@ impl ExplorererPath {
             }) => {
                 if let Some(res) = check_load(
                     explorerer.clone(),
-                    branch_ptr,
+                    leaf_ptr,
                     branch,
                     &configuration,
                     from,
@@ -540,7 +543,7 @@ impl ExplorererPath {
             }) => {
                 let opt = check_load(
                     explorerer.clone(),
-                    branch_ptr,
+                    leaf_ptr,
                     branch,
                     &configuration,
                     from,
@@ -563,7 +566,7 @@ impl ExplorererPath {
             }
             x => todo!("{x:?}"),
         }
-        queue_up(branch_ptr, &mut queue, &configuration, &mut jumped);
+        queue_up(leaf_ptr, &mut queue, &configuration, &mut jumped);
 
         return ExplorePathResult::Continue(Self {
             explorerer,
@@ -577,7 +580,7 @@ impl ExplorererPath {
 
 unsafe fn check_store(
     explorerer: Rc<RefCell<Explorerer>>,
-    branch_ptr: NonNull<VerifierNode>,
+    leaf_ptr: NonNull<VerifierNode>,
     branch: &VerifierNode,
     configuration: &ProgramConfiguration,
     to: &Register,
@@ -586,7 +589,7 @@ unsafe fn check_store(
     invalid: InvalidExplanation,
 ) -> Option<ExplorePathResult> {
     // Collect the state.
-    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+    let (record, root, harts, first_step) = get_backpath_harts(leaf_ptr);
     let state = find_state(&record, root, harts, first_step, &configuration);
 
     // Check the destination is valid.
@@ -632,7 +635,7 @@ unsafe fn check_store(
 /// Verifies a load is valid for a given configuration.
 unsafe fn check_load(
     explorerer: Rc<RefCell<Explorerer>>,
-    branch_ptr: NonNull<VerifierNode>,
+    leaf_ptr: NonNull<VerifierNode>,
     branch: &VerifierNode,
     configuration: &ProgramConfiguration,
     from: &Register,
@@ -641,7 +644,7 @@ unsafe fn check_load(
     invalid: InvalidExplanation,
 ) -> Option<ExplorePathResult> {
     // Collect the state.
-    let (record, root, harts, first_step) = get_backpath_harts(branch_ptr);
+    let (record, root, harts, first_step) = get_backpath_harts(leaf_ptr);
     let state = find_state(&record, root, harts, first_step, &configuration);
 
     // Check the destination is valid.
@@ -761,7 +764,7 @@ unsafe fn invalid_path(
 // Get the number of harts of this sub-tree and record the path.
 unsafe fn get_backpath_harts(
     prev: NonNull<VerifierNode>,
-) -> (Vec<usize>, NonNull<VerifierHarts>, u8, usize) {
+) -> (Vec<usize>, NonNull<VerifierConfiguration>, u8, usize) {
     let mut current = prev;
     let mut record = Vec::new();
     while let VerifierPrevNode::Branch(branch) = current.as_ref().prev {
@@ -1167,7 +1170,7 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 
 unsafe fn find_state(
     record: &[usize], // The record of which children to follow from the root to reach the current position.
-    root: NonNull<VerifierHarts>, // The root of the verification tree.
+    root: NonNull<VerifierConfiguration>, // The root of the verification tree.
     harts: u8,        // The number of hardware threads in the current path.
     first_step: usize, // The child node of the root which forms the current path (will correlate with `harts`).
     configuration: &ProgramConfiguration,

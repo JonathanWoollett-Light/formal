@@ -8,7 +8,7 @@ One area of this work is that as soon as an invalid configuration is found the e
 
 Instead when an invalid configuration is encountered, all leaves should backtrace to the first occurence of the variable type we want to change. This way we can avoid re-treading the same path many times. This degree of optimization is so signficant it may even reduce the o'notation.
 
-To accomplish this effectively each leaf node should contain a map of values to the verifiers nodes where the the values where first encountered along this path. We then iterate through leaves, to the first occurences and deallocating all child nodes, any leaf nodes deallocated here should be added to a skip list so the next iteration can skip the leaf node if its already been deallocated.
+To accomplish this effectively each leaf node should contain a map of values to the verifiers nodes where the values where first encountered along this path. We then iterate through leaves, to the first occurences and deallocating all child nodes, any leaf nodes deallocated here should be added to a skip list so the next iteration can skip the leaf node if its already been deallocated.
 The new leaves will then need to be enqued again.
 
 In future it might be worth using a custom version of `NonNull` that counts the number of dereferences so this can be tracked as a performance metric.
