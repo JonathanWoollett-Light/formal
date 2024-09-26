@@ -229,7 +229,15 @@ impl RangeType for MemoryValueI64 {
 }
 
 pub trait RangeType {
-    type Base: Eq + Copy+PartialEq + Ord + PartialOrd + num::CheckedAdd + num::CheckedSub + num::traits::ToBytes + num::traits::FromBytes;
+    type Base: Eq
+        + Copy
+        + PartialEq
+        + Ord
+        + PartialOrd
+        + num::CheckedAdd
+        + num::CheckedSub
+        + num::traits::ToBytes
+        + num::traits::FromBytes;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
     /// Returns if the given scalar is greater than, less than or within `self`.
@@ -262,7 +270,7 @@ pub trait RangeType {
     where
         Self: Sized,
     {
-        Self::new(exact,exact).unwrap()
+        Self::new(exact, exact).unwrap()
     }
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self>
     where
@@ -311,11 +319,15 @@ pub trait RangeType {
         (self.start() == self.stop()).then_some(self.start())
     }
     fn to_bytes(&self) -> Option<<Self::Base as num::traits::ToBytes>::Bytes> {
-        self.exact().map(|e|e.to_ne_bytes())
+        self.exact().map(|e| e.to_ne_bytes())
     }
-    fn from_bytes(bytes: &<Self::Base as num::traits::FromBytes>::Bytes) -> Self where
-        Self: Sized, {
-        Self::new_exact(<Self::Base as num::traits::FromBytes>::from_ne_bytes(&bytes))
+    fn from_bytes(bytes: &<Self::Base as num::traits::FromBytes>::Bytes) -> Self
+    where
+        Self: Sized,
+    {
+        Self::new_exact(<Self::Base as num::traits::FromBytes>::from_ne_bytes(
+            &bytes,
+        ))
     }
 }
 
@@ -900,28 +912,27 @@ impl MemoryValue {
                             // Sets all bytes of this item.
                             RangeOrdering::Matches => {
                                 use MemoryValue::*;
-                                debug_assert_eq!(*len,size_of_item);
+                                debug_assert_eq!(*len, size_of_item);
                                 let size_of_value = size(&Type::from(&value));
 
                                 match (&value, item) {
-                                    (_,to) if size_of_value == *len => {
+                                    (_, to) if size_of_value == *len => {
                                         debug_assert_eq!(size_of_value, size_of_item);
                                         *to = value;
                                         return Ok(());
                                     }
-                                    (I64(from),U8(to)) => {
+                                    (I64(from), U8(to)) => {
                                         if let Some(from_bytes) = from.to_bytes() {
-                                            let to_bytes = from_bytes[0..*len as usize].try_into().unwrap();
+                                            let to_bytes =
+                                                from_bytes[0..*len as usize].try_into().unwrap();
                                             *to = MemoryValueU8::from_bytes(&to_bytes);
                                             return Ok(());
-                                        }
-                                        else {
+                                        } else {
                                             todo!()
                                         }
-                                    },
-                                    _ => todo!()
+                                    }
+                                    _ => todo!(),
                                 }
-                                
                             }
                             // This case is likely to be a pain since the sub-type might itself be a list, so we need some
                             // stack based recursion.
@@ -1249,7 +1260,7 @@ pub struct SubSlice {
     pub len: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct State {
     // Each hart has its own registers.
     pub registers: Vec<RegisterValues>,
@@ -1356,6 +1367,9 @@ impl ProgramConfiguration {
                 }
             }
         }
+    }
+    pub fn remove(&mut self, key: &Label) -> Option<(LabelLocality, Type)> {
+        self.0.remove(key)
     }
     pub fn insert(&mut self, key: Label, hart: u8, (locality, ttype): (Locality, Type)) {
         match locality {

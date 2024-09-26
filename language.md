@@ -1,5 +1,33 @@
 # language
 
+## onotation
+
+`O(n * h^r * 2^b * 8^v)`
+
+- `n`: Number of instructions.
+- `h`: Number of harts.
+- `r`: Number of racy instructions.
+- `b`: Number of indeterminate branches.
+- `v`: Number of unspecified variables.
+
+This is the worst case and most program will be massively under it.
+
+In a program with 10,000 instructions, 3 harts, 100 racy instructions, 100 indeterminte branches and 0 unpsecified variables we reach 6.5*10^81. This is impossible.
+
+In a program with 10,000 instructions, 3 harts, 10 racy instructions, 10 indeterminate branches and 0 unspecified variables we reach 6.0*10^11. This is possible. The 10 racy instructions may be atomics to manage shared state.
+
+## making it work in larger projects
+
+To make it viable in larger projects there should be some configuration arguments:
+
+- `seqeuntial`: Only explores 1 ordering of instructions, removing `h^r` from the onotation.
+- `typed`: Requires all variables have types which can be immedately inferred, removing `8^v` from the onotation. For example `define x local u32` `y=x` works becuase `x` is fully defined and `y` is identical to `x`.
+- `partial`: Allows partial exploration, doesn't remove untouched code, any `fail`s become like Zig exceptions returning unique error codes.
+
+## borrow checking
+
+Borrow checking just allows invalidating bad paths faster. This could be done by using a reference countered pointer then requiring on the reference count.
+
 ## updated run
 
 There is a lot of work that is duplicated.

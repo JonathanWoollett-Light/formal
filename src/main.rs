@@ -128,27 +128,32 @@ mod tests {
     use verifier_types::{LabelLocality, ProgramConfiguration};
 
     // const LOKI_URL: &str = "http://localhost/3100";
-    
+
     use std::path::PathBuf;
     use std::sync::LazyLock;
     static LOCAL_TMP: LazyLock<PathBuf> = LazyLock::new(|| {
         const LOCAL_STR: &str = "./tmp";
         if std::fs::exists(LOCAL_STR).unwrap() {
             PathBuf::from(LOCAL_STR)
-        }
-        else {
+        } else {
             std::fs::create_dir(LOCAL_STR).unwrap();
             PathBuf::from(LOCAL_STR)
         }
     });
 
-    fn setup_test(asm: &str) -> (DefaultGuard, Option<NonNull<AstNode>>, tracing_assertions::Layer){
+    fn setup_test(
+        asm: &str,
+    ) -> (
+        DefaultGuard,
+        Option<NonNull<AstNode>>,
+        tracing_assertions::Layer,
+    ) {
         // Create file.
         let file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(format!("{}/{asm}.txt",LOCAL_TMP.display()))
+            .open(format!("{}/{asm}.txt", LOCAL_TMP.display()))
             .unwrap();
 
         // Create base subscriber.
@@ -178,7 +183,7 @@ mod tests {
 
         compress(&mut ast);
 
-        (guard,ast,asserter)
+        (guard, ast, asserter)
     }
 
     #[test]
@@ -367,7 +372,7 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(InvalidPathResult{
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
                 })
@@ -506,8 +511,9 @@ mod tests {
             jumped,
         } = unsafe {
             let mut path = Explorerer::new_path(explorerer.clone());
-            let u32_config = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
-            
+            let u32_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
+
             // Iterate until reaching `u32` for `value`.
             for _ in 0..4 {
                 for _ in 0..8 {
@@ -591,8 +597,9 @@ mod tests {
             jumped,
         } = unsafe {
             let mut path = Explorerer::new_path(explorerer.clone());
-            let u32_config = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
-            
+            let u32_config =
+                asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
+
             // Iterate until reaching `u32` for `value`.
             for _ in 0..4 {
                 for _ in 0..8 {
@@ -612,10 +619,14 @@ mod tests {
             let res = ExplorererPath::next_step(path);
             // println!("res: {res:?}");
             match res {
-                ExplorePathResult::Invalid(InvalidPathResult { complete, path, explanation }) => {
+                ExplorePathResult::Invalid(InvalidPathResult {
+                    complete,
+                    path,
+                    explanation,
+                }) => {
                     println!("path:\n{path}");
                 }
-                _ => todo!()
+                _ => todo!(),
             }
             todo!();
         };
@@ -845,7 +856,7 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(InvalidPathResult{
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
                 })
@@ -907,7 +918,7 @@ mod tests {
             );
             assert!(matches!(
                 ExplorererPath::next_step(path),
-                ExplorePathResult::Invalid(InvalidPathResult{
+                ExplorePathResult::Invalid(InvalidPathResult {
                     complete: false,
                     ..
                 })

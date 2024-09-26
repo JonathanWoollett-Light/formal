@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::verifier_types::*;
+use itertools::intersperse;
 use std::alloc::Layout;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -10,10 +11,9 @@ use std::ptr;
 use std::rc::Rc;
 use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
+use tracing::debug;
 use tracing::error;
 use tracing::trace;
-use itertools::intersperse;
-use tracing::debug;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -31,58 +31,79 @@ fn type_list() -> Vec<Type> {
 
 use std::alloc::dealloc;
 
-/// Contains the configuration of the system 
+/// Contains the configuration of the system
 pub struct VerifierConfiguration {
     pub harts: u8,
-    pub next: NextVerifierNode,
+    pub next: NonNull<VerifierNode>,
 }
-
-type NextVerifierNode = Vec<InnerNextVerifierNode>;
 
 enum PrevVerifierNode {
     Root(NonNull<VerifierConfiguration>),
-    Branch(NonNull<VerifierNode>)
+    Branch(NonNull<VerifierNode>),
 }
 impl PrevVerifierNode {
-    unsafe fn next(&mut self) -> &mut NextVerifierNode {
+    fn branch(&self) -> Option<&NonNull<VerifierNode>> {
         match self {
-            Self::Root(config) => &mut config.as_mut().next,
-            Self::Branch(branch) => &mut branch.as_mut().next,
+            Self::Branch(branch) => Some(branch),
+            Self::Root(_) => None,
         }
     }
 }
 
 enum InnerNextVerifierNode {
-    Branch(NonNull<VerifierNode>),
-    Leaf(NonNull<OuterVerifierNode>)
+    Branch(Vec<NonNull<VerifierNode>>),
+    Leaf(NonNull<VerifierLeafNode>),
 }
 
 /// We use a tree to trace the execution of the program,
 /// then when conditions are required it can resolve them
 /// by looking back at the trace.
 pub struct VerifierNode {
+    // The previous node in global execution.
     pub prev: PrevVerifierNode,
     pub root: NonNull<VerifierConfiguration>,
     // Current hart.
     pub hart: u8,
     pub node: NonNull<AstNode>,
-    pub next: NextVerifierNode,
+    pub next: InnerNextVerifierNode,
 }
 
 enum OuterVerifierNode {
     Leaf(VerifierLeafNode),
-    Branch(VerifierNode)
+    Branch(VerifierNode),
 }
+
+impl Drop for Explorerer {
+    fn drop(&mut self) {
+        unsafe {
+            let mut stack = Vec::new();
+            for root in &self.roots {
+                stack.push(root.as_ref().next);
+                dealloc(root.as_ptr().cast(), Layout::new::<VerifierConfiguration>());
+            }
+            while let Some(current) = stack.pop() {
+                match &current.as_ref().next {
+                    InnerNextVerifierNode::Branch(branch) => stack.extend_from_slice(&branch),
+                    InnerNextVerifierNode::Leaf(leaf) => {
+                        dealloc(leaf.as_ptr().cast(), Layout::new::<VerifierLeafNode>());
+                    }
+                }
+                dealloc(current.as_ptr().cast(), Layout::new::<VerifierNode>());
+            }
+        }
+    }
+}
+use std::sync::Arc;
 
 struct VerifierLeafNode {
     // The previous node.
     pub prev: NonNull<VerifierNode>,
     // The most recent state calculated along this path and the node up to which it was calculated.
-    pub cached_state: Option<(State, NonNull<VerifierNode>)>,
+    pub cached_state: Option<Arc<(State, NonNull<VerifierNode>)>>,
     // The nodes where variables where first encountered.
     pub variable_encounters: BTreeMap<Label, NonNull<VerifierNode>>,
     // The most recent node for each hart.
-    pub hart_fronts: BTreeMap<u8, NonNull<VerifierNode>>
+    pub hart_fronts: BTreeMap<u8, NonNull<VerifierNode>>,
 }
 
 /// Localites in order of best to worst
@@ -129,8 +150,8 @@ pub struct Explorerer {
     // The ordering does not matter, we must simply iterate through exploring combinations
     // and the most recently encountered (in any of the possible paths) is just the easies
     // way that will be naively efficient.
-    pub types: BTreeMap<Label, Box<dyn Iterator<Item=(Locality,Type)>>>,
-    pub encountered: Vec<Label>
+    pub types: BTreeMap<Label, Box<dyn Iterator<Item = (Locality, Type)>>>,
+    pub encountered: Vec<Label>,
 }
 
 impl Explorerer {
@@ -201,11 +222,12 @@ impl Explorerer {
                         hart,
                         node: second_ptr,
                         next: Vec::new(),
-                    }))).unwrap();
+                    })))
+                    .unwrap();
 
                     prev.next().push(InnerNextVerifierNode::Branch(nonull));
                     prev = PrevVerifierNode::Branch(nonull);
-                    hart_fronts.insert(hart,nonull);
+                    hart_fronts.insert(hart, nonull);
                 }
                 let PrevVerifierNode::Branch(branch) = prev else {
                     unreachable!()
@@ -214,8 +236,9 @@ impl Explorerer {
                     prev: branch,
                     cached_state: None,
                     variable_encounters: BTreeMap::new(),
-                    hart_fronts
-                }))).unwrap();
+                    hart_fronts,
+                })))
+                .unwrap();
 
                 leaf
             })
@@ -230,13 +253,11 @@ impl Explorerer {
             touched,
             queue,
             jumped,
-            types: Vec::new()
+            types: Vec::new(),
         }
     }
     // Verify node before front leaf node, then queue new nodes.
-    pub unsafe fn next_step(
-        self,
-    ) -> ExplorePathResult {
+    pub unsafe fn next_step(self) -> ExplorePathResult {
         let Self {
             mut excluded,
             mut configuration,
@@ -249,7 +270,7 @@ impl Explorerer {
         trace!("excluded: {excluded:?}");
         debug!("configuration: {configuration:?}");
 
-        let Some(leaf_ptr) = queue.pop_front() else {
+        let Some(leaf_ptr) = queue.front() else {
             return ExplorePathResult::Valid(ValidPathResult {
                 configuration,
                 touched,
@@ -301,34 +322,17 @@ impl Explorerer {
                 locality,
                 cast,
             }) => {
-                if !self.load_label(
-                    label,
-                    cast,
-                    locality,
-                    hart,
-                ) {
-                    return self.invalid_path(branch);
+                if !self.load_label(label, cast, locality, hart) {
+                    return self.invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
-                if !self.load_label(
-                    label,
-                    None,
-                    None,
-                    hart,
-                ) {
-                    return self.invalid_path(branch);
+                if !self.load_label(label, None, None, hart) {
+                    return self.invalid_path(leaf_ptr);
                 }
             }
             Instruction::La(La { register: _, label }) => {
-                if !load_label(
-                    label,
-                    &mut configuration,
-                    &mut excluded,
-                    None,
-                    None,
-                    hart,
-                ) {
+                if !load_label(label, &mut configuration, &mut excluded, None, None, hart) {
                     return invalid_path(
                         explorerer.clone(),
                         configuration,
@@ -444,53 +448,120 @@ impl Explorerer {
         }
         queue_up(leaf_ptr, &mut queue, &configuration, &mut jumped);
 
-        return ExplorePathResult::Continue(Self {
-            explorerer,
-            configuration,
-            touched,
-            queue,
-            jumped,
-        });
+        return ExplorePathResult::Continue(self);
     }
-    
-    pub unsafe fn invalid_path(
-        self,
-        node: &VerifierNode
-    ) -> ExplorePathResult {
-        let Self { excluded,configuration, roots, .. } = self;
-        // We need to track covered ground so we don't retread it.
-        excluded.insert(configuration.clone());
-    
-        trace!("excluded: {excluded:?}");
-        let harts_root = node.root;
-        let [InnerNextVerifierNode::Branch(hart_root)] = harts_root.as_ref().next.as_slice() else {
-            unreachable!()
-        };
-        let path = crate::draw::draw_tree(*hart_root, 2, |n| {
-            let r = n.as_ref();
-            format!("{}, {}", r.hart + 1, r.node.as_ref().this)
-        });
-    
-        // Dealloc the current tree so we can restart.
-        for mut root in explorer_ref.roots.iter().copied() {
-            let stack = &mut root.as_mut().next;
-            while let Some(next) = stack.pop() {
-                stack.extend(next.as_ref().next.iter());
-                dealloc(next.as_ptr().cast(), Layout::new::<VerifierNode>());
+
+    pub unsafe fn outer_invalid_path(mut self) -> ExplorePathResult {
+        // Deallocate node up to the 1st occurence of the most recently encountered variable.
+        // If there is an invalid path without any variables defined, then there is no possible
+        // valid path.
+        // If the most recently encountered variable has exhausted all possible types, then move
+        // on the the 2nd most recently encountered variable.
+        while let Some(recent) = self.encountered.pop() {
+            // Backtrace most recent variable encountered.
+            self.invalid_path(&recent);
+
+            // Are there any other possible types for this variable?
+            let iter = self.types.get(&recent).unwrap();
+            debug_assert_eq!(iter.size_hint().0, iter.size_hint().1.unwrap());
+            if iter.size_hint().0 == 0 {
+                self.types.remove(&recent);
+                continue;
             }
+            // If there are more possible types, push the variables back to encountered.
+            self.encountered.push(recent);
+            return ExplorePathResult::Continue(self);
         }
-    
-        // TODO Make this path better and doublecheck if this is actually correct behaviour.
-        // This case only occurs when all types are excluded thus it continually breaks out
-        // of the exploration loop with empty `initial_types`. This case means there is no
-        // valid type combination and thus no valid path.
-        ExplorePathResult::Invalid(InvalidPathResult {
-            complete: configuration.0.is_empty(),
-            path,
-            explanation,
-        })
+        // Everything is deallocated when `self` is dropped.
+        return ExplorePathResult::Invalid;
     }
-    
+
+    pub unsafe fn invalid_path(&mut self, recent: &Label) {
+        // We need to track covered ground so we don't retread it.
+        self.excluded.insert(self.configuration.clone());
+        trace!("excluded: {:?}", self.excluded);
+
+        // Remove from current type configuration.
+        self.configuration.remove(recent);
+
+        // Deallocate up to 1st occurence.
+        let mut skip = BTreeSet::new();
+        let mut new_queue = VecDeque::new();
+        for leaf in &self.queue {
+            if skip.contains(&leaf) {
+                continue;
+            }
+            let Some(encounter) = leaf.as_ref().variable_encounters.get(&recent) else {
+                continue;
+            };
+            let mut encounter_prev = *encounter.as_ref().prev.branch().unwrap();
+            let mut variable_encounters = leaf.as_ref().variable_encounters.clone();
+            let mut cached_state = leaf.as_ref().cached_state.clone();
+
+            // Deallocate all nodes including and after the encounter.
+            let mut stack = vec![*encounter];
+            while let Some(current) = stack.pop() {
+                match &current.as_ref().next {
+                    InnerNextVerifierNode::Branch(branches) => {
+                        for b in branches {
+                            stack.push(*b);
+                        }
+                    }
+                    InnerNextVerifierNode::Leaf(l) => {
+                        skip.insert(l);
+                        debug_assert_eq!(
+                            l.as_ref().variable_encounters.get(&recent).unwrap(),
+                            encounter
+                        );
+                        dealloc(leaf.as_ptr().cast(), Layout::new::<VerifierLeafNode>());
+                    }
+                }
+                // If a variable is present in this instruction.
+                if let Some(var) = current.as_ref().node.as_ref().this.variable() {
+                    // If this node is the 1st where the variable is encountered.
+                    if current == *variable_encounters.get(var).unwrap() {
+                        variable_encounters.remove(var);
+                    }
+                }
+                // If the cached state belongs to any of the nodes being deallocated it must be discarded.
+                if let Some(cs) = &cached_state {
+                    if cs.1 == current {
+                        cached_state = None;
+                    }
+                }
+                dealloc(current.as_ptr().cast(), Layout::new::<VerifierNode>());
+            }
+
+            // Set the new leaf node.
+            //
+            // We could do this more efficiently by storing `hart_prev` on `VerifierNode` to indicate the last node on
+            // the same hart. Unfortunately since we will have a large number of `VerifierNode`s this will add a massive
+            // amount to memory usage for (what I estimate to be) a relatively insignficant runtime improvement.
+            // TODO produce a comparison using the `hart_prev` approach.
+            let mut hart_fronts = BTreeMap::new();
+            let mut start = encounter_prev;
+            while hart_fronts.len() < leaf.as_ref().hart_fronts.len() {
+                if !hart_fronts.contains_key(&start.as_ref().hart) {
+                    hart_fronts.insert(start.as_ref().hart, start);
+                }
+                start = *start.as_ref().prev.branch().unwrap();
+            }
+            
+            // Set the new leaf.
+            let new_leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
+                prev: encounter_prev,
+                cached_state,
+                variable_encounters,
+                hart_fronts,
+            })))
+            .unwrap();
+            encounter_prev.as_mut().next = InnerNextVerifierNode::Leaf(new_leaf);
+            new_queue.push_back(new_leaf);
+        }
+        // Set new queue.
+        self.queue = new_queue;
+    }
+
     /// Attempts to modify initial types to include a new variable, if it cannot add it,
     /// existing is added to excluded, then returns true.
     ///
@@ -498,9 +569,10 @@ impl Explorerer {
     ///
     /// - `true` the path is valid.
     /// - `false` the path is invalid.
-    fn load_label(&mut self,
+    fn load_label(
+        &mut self,
         label: &Label,
-        ttype: impl Borrow<Option<Type>>,        // The type to use for the variable if `Some(_)`.
+        ttype: impl Borrow<Option<Type>>, // The type to use for the variable if `Some(_)`.
         locality: impl Borrow<Option<Locality>>, // The locality to use for the variable if `Some(_)`.
         hart: u8,
     ) -> bool {
@@ -532,6 +604,7 @@ impl Explorerer {
 
         // Get the iterator yielding the next type for `label` or if this is the 1st encounter adds the new iterator for types.
         let iter = self.types.entry(label.clone()).or_insert_with(|| {
+            debug_assert!(self.encountered.iter().find(|l|*l==label).is_none());
             self.encountered.push(label.clone());
             Box::new(locality_list().into_iter().cartesian_product(type_list()))
         });
@@ -543,7 +616,7 @@ impl Explorerer {
         //   define y _ i8
         // ```
         while let Some((possible_locality, possible_type)) = iter.next() {
-            // Check doesn't disagree with define statement.
+            // Check the possible type doesn't disagree with the define statement.
             if let Some(given_locality) = locality.borrow() {
                 if possible_locality != *given_locality {
                     continue;
@@ -562,7 +635,7 @@ impl Explorerer {
             if self.excluded.contains(&config) {
                 continue;
             }
-            
+
             // Found valid typing.
             self.configuration = config;
             return true;
@@ -574,12 +647,17 @@ impl Explorerer {
 use itertools::Itertools;
 use std::borrow::Borrow;
 
-
 #[derive(Debug)]
 pub enum ExplorePathResult {
     Valid(ValidPathResult),
-    Invalid(InvalidPathResult),
+    Invalid,
     Continue(Explorerer),
+}
+use std::fmt;
+impl fmt::Debug for Explorerer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Explorerer").finish()
+    }
 }
 
 #[derive(Debug)]

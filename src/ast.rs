@@ -157,6 +157,17 @@ pub enum Instruction {
     Beq(Beq),
 }
 
+impl Instruction {
+    /// Returns all the variables found within this instruction.
+    pub fn variable(&self) -> Option<&Label> {
+        use Instruction as Instr;
+        match self {
+            Instr::Ascii(Ascii { label, .. }) | Instr::La(La { label, .. }) => Some(label),
+            _ => None,
+        }
+    }
+}
+
 fn new_instruction(src: &[char]) -> Instruction {
     match src {
         ['.', 'g', 'l', 'o', 'b', 'a', 'l', ' ', rem @ ..] => Instruction::Global(new_global(rem)),
@@ -899,12 +910,18 @@ impl fmt::Display for Data {
 
 #[derive(Clone)]
 pub struct Ascii {
+    label: Label,
     string: Vec<u8>,
 }
 
 impl fmt::Display for Ascii {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, ".ascii {:?}", std::str::from_utf8(&self.string))
+        write!(
+            f,
+            ".ascii {}, {:?}",
+            self.label,
+            std::str::from_utf8(&self.string)
+        )
     }
 }
 
@@ -920,11 +937,12 @@ impl fmt::Debug for Ascii {
 }
 
 fn new_ascii(src: &[char]) -> Ascii {
-    assert_eq!(src[0], '"');
-    assert_eq!(src[src.len() - 1], '"');
-    Ascii {
-        string: src[1..src.len() - 1].iter().map(|c| *c as u8).collect(),
-    }
+    todo!()
+    // assert_eq!(src[0], '"');
+    // assert_eq!(src[src.len() - 1], '"');
+    // Ascii {
+    //     string: src[1..src.len() - 1].iter().map(|c| *c as u8).collect(),
+    // }
 }
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
