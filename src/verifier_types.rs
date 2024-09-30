@@ -1104,9 +1104,9 @@ pub enum SetMemoryMapError {
     #[error("Failed to set the value: {0}")]
     Value(MemoryValueSetError),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryMap {
-    pub map: HashMap<MemoryLabel, MemoryValue>,
+    pub map: BTreeMap<MemoryLabel, MemoryValue>,
 }
 impl MemoryMap {
     pub fn get(
@@ -1270,7 +1270,7 @@ pub struct State {
 impl State {
     pub fn new(harts: u8, configuration: &ProgramConfiguration) -> Self {
         let mut memory = MemoryMap {
-            map: HashMap::new(),
+            map: Default::default(),
         };
 
         // Initialize bss
@@ -1298,15 +1298,15 @@ impl State {
         }
 
         Self {
-            registers: (0..harts).map(|_| RegisterValues(HashMap::new())).collect(),
+            registers: (0..harts).map(|_| RegisterValues::default()).collect(),
             memory,
             configuration: configuration.clone(),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct RegisterValues(HashMap<Register, MemoryValue>);
+#[derive(Debug, Clone, Default)]
+pub struct RegisterValues(BTreeMap<Register, MemoryValue>);
 impl RegisterValues {
     pub fn insert(&mut self, key: Register, value: MemoryValue) -> Result<Option<MemoryValue>, ()> {
         // Attempting to store a list that is larger than 64 bits into a 64 bit register will fail.
@@ -1315,10 +1315,11 @@ impl RegisterValues {
         }
         Ok(self.0.insert(key, value))
     }
-    pub fn get(&self, key: &Register) -> Option<&MemoryValue> {
-        self.0.get(key)
+    pub fn get(&self, key: impl Borrow<Register>) -> Option<&MemoryValue> {
+        self.0.get(key.borrow())
     }
 }
+use std::borrow::Borrow;
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]

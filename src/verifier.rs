@@ -50,7 +50,7 @@ impl PrevVerifierNode {
     }
 }
 
-enum InnerNextVerifierNode {
+pub enum InnerNextVerifierNode {
     Branch(Vec<NonNull<VerifierNode>>),
     Leaf(NonNull<VerifierLeafNode>),
 }
@@ -95,11 +95,10 @@ impl Drop for Explorerer {
 }
 use std::sync::Arc;
 
+// TODO Support some amount of state caching so it doesn't need to re-traverse the whole tree each step to find state.
 struct VerifierLeafNode {
     // The previous node.
     pub prev: NonNull<VerifierNode>,
-    // The most recent state calculated along this path and the node up to which it was calculated.
-    pub cached_state: Option<Arc<(State, NonNull<VerifierNode>)>>,
     // The nodes where variables where first encountered.
     pub variable_encounters: BTreeMap<Label, NonNull<VerifierNode>>,
     // The most recent node for each hart.
@@ -234,7 +233,6 @@ impl Explorerer {
                 };
                 let leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
                     prev: branch,
-                    cached_state: None,
                     variable_encounters: BTreeMap::new(),
                     hart_fronts,
                 })))
@@ -253,28 +251,20 @@ impl Explorerer {
             touched,
             queue,
             jumped,
-            types: Vec::new(),
+            types: Default::default(),
+            encountered: Default::default(),
         }
     }
     // Verify node before front leaf node, then queue new nodes.
-    pub unsafe fn next_step(self) -> ExplorePathResult {
-        let Self {
-            mut excluded,
-            mut configuration,
-            mut touched,
-            mut queue,
-            mut jumped,
-            ..
-        } = self;
+    pub unsafe fn next_step(mut self) -> ExplorePathResult {
+        trace!("excluded: {:?}", self.excluded);
+        debug!("configuration: {:?}", self.configuration);
 
-        trace!("excluded: {excluded:?}");
-        debug!("configuration: {configuration:?}");
-
-        let Some(leaf_ptr) = queue.front() else {
+        let Some(leaf_ptr) = self.queue.front().copied() else {
             return ExplorePathResult::Valid(ValidPathResult {
-                configuration,
-                touched,
-                jumped,
+                configuration: self.configuration.clone(),
+                touched: self.touched.clone(),
+                jumped: self.jumped.clone(),
             });
         };
 
@@ -299,7 +289,7 @@ impl Explorerer {
         );
 
         // Record all the AST node that are reachable.
-        touched.insert(ast);
+        self.touched.insert(ast);
 
         // Check the instruction is valid and make typing decisions.
         match &branch.node.as_ref().this {
@@ -323,22 +313,17 @@ impl Explorerer {
                 cast,
             }) => {
                 if !self.load_label(label, cast, locality, hart) {
-                    return self.invalid_path();
+                    return self.outer_invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
                 if !self.load_label(label, None, None, hart) {
-                    return self.invalid_path(leaf_ptr);
+                    return self.outer_invalid_path();
                 }
             }
             Instruction::La(La { register: _, label }) => {
-                if !load_label(label, &mut configuration, &mut excluded, None, None, hart) {
-                    return invalid_path(
-                        explorerer.clone(),
-                        configuration,
-                        harts,
-                        InvalidExplanation::La(label.clone()),
-                    );
+                if !self.load_label(label, None, None, hart) {
+                    return self.outer_invalid_path();
                 }
             }
             // For any store we need to validate the destination is valid.
@@ -347,36 +332,20 @@ impl Explorerer {
                 from: _,
                 offset,
             }) => {
-                if let Some(res) = check_store(
-                    explorerer.clone(),
-                    leaf_ptr,
-                    branch,
-                    &configuration,
-                    to,
-                    offset,
-                    4,
-                    InvalidExplanation::Sw,
-                ) {
-                    return res;
-                }
+                self = match self.check_store(leaf_ptr, branch, to, offset, 4) {
+                    Ok(x) => x,
+                    Err(err) => return err,
+                };
             }
             Instruction::Sb(Sb {
                 to,
                 from: _,
                 offset,
             }) => {
-                if let Some(res) = check_store(
-                    explorerer.clone(),
-                    leaf_ptr,
-                    branch,
-                    &configuration,
-                    to,
-                    offset,
-                    1,
-                    InvalidExplanation::Sb,
-                ) {
-                    return res;
-                }
+                self = match self.check_store(leaf_ptr, branch, to, offset, 1) {
+                    Ok(x) => x,
+                    Err(err) => return err,
+                };
             }
             // TODO A lot of the checking loads code is duplicated, reduce this duplication.
             // For any load we need to validate the destination is valid.
@@ -385,68 +354,38 @@ impl Explorerer {
                 from,
                 offset,
             }) => {
-                if let Some(res) = check_load(
-                    explorerer.clone(),
-                    leaf_ptr,
-                    branch,
-                    &configuration,
-                    from,
-                    offset,
-                    8,
-                    InvalidExplanation::Ld,
-                ) {
-                    return res;
-                }
+                self = match self.check_load(leaf_ptr, branch, from, offset, 8) {
+                    Ok(x) => x,
+                    Err(err) => return err,
+                };
             }
             Instruction::Lw(Lw {
                 to: _,
                 from,
                 offset,
             }) => {
-                if let Some(res) = check_load(
-                    explorerer.clone(),
-                    leaf_ptr,
-                    branch,
-                    &configuration,
-                    from,
-                    offset,
-                    4,
-                    InvalidExplanation::Lw,
-                ) {
-                    return res;
-                }
+                self = match self.check_load(leaf_ptr, branch, from, offset, 4) {
+                    Ok(x) => x,
+                    Err(err) => return err,
+                };
             }
             Instruction::Lb(Lb {
                 to: _,
                 from,
                 offset,
             }) => {
-                let opt = check_load(
-                    explorerer.clone(),
-                    leaf_ptr,
-                    branch,
-                    &configuration,
-                    from,
-                    offset,
-                    1,
-                    InvalidExplanation::Lb,
-                );
-                if let Some(res) = opt {
-                    return res;
-                }
+                self = match self.check_load(leaf_ptr, branch, from, offset, 1) {
+                    Ok(x) => x,
+                    Err(err) => return err,
+                };
             }
             // If any fail is encountered then the path is invalid.
             Instruction::Fail(_) => {
-                return invalid_path(
-                    explorerer.clone(),
-                    configuration,
-                    harts,
-                    InvalidExplanation::Fail,
-                )
+                return self.outer_invalid_path();
             }
             x => todo!("{x:?}"),
         }
-        queue_up(leaf_ptr, &mut queue, &configuration, &mut jumped);
+        self.queue_up(leaf_ptr);
 
         return ExplorePathResult::Continue(self);
     }
@@ -496,7 +435,6 @@ impl Explorerer {
             };
             let mut encounter_prev = *encounter.as_ref().prev.branch().unwrap();
             let mut variable_encounters = leaf.as_ref().variable_encounters.clone();
-            let mut cached_state = leaf.as_ref().cached_state.clone();
 
             // Deallocate all nodes including and after the encounter.
             let mut stack = vec![*encounter];
@@ -546,11 +484,10 @@ impl Explorerer {
                 }
                 start = *start.as_ref().prev.branch().unwrap();
             }
-            
+
             // Set the new leaf.
             let new_leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
                 prev: encounter_prev,
-                cached_state,
                 variable_encounters,
                 hart_fronts,
             })))
@@ -604,7 +541,7 @@ impl Explorerer {
 
         // Get the iterator yielding the next type for `label` or if this is the 1st encounter adds the new iterator for types.
         let iter = self.types.entry(label.clone()).or_insert_with(|| {
-            debug_assert!(self.encountered.iter().find(|l|*l==label).is_none());
+            debug_assert!(self.encountered.iter().find(|l| *l == label).is_none());
             self.encountered.push(label.clone());
             Box::new(locality_list().into_iter().cartesian_product(type_list()))
         });
@@ -642,6 +579,439 @@ impl Explorerer {
         }
         return false;
     }
+
+    unsafe fn check_store(
+        mut self,
+        leaf_ptr: NonNull<VerifierLeafNode>,
+        branch: &VerifierNode,
+        to: &Register,
+        offset: &crate::ast::Offset,
+        type_size: u64,
+    ) -> Result<Self, ExplorePathResult> {
+        // Collect the state.
+        let state = find_state(leaf_ptr, &self.configuration);
+
+        // Check the destination is valid.
+        match state.registers[branch.hart as usize].get(to) {
+            Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                tag: from_label,
+                offset: from_offset,
+            })))) => {
+                let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+                // If attempting to access outside the memory space for the label.
+                let full_offset = MemoryValueU64::from(type_size)
+                    .add(from_offset)
+                    .unwrap()
+                    .add(&MemoryValueU64::from(
+                        u64::try_from(offset.value.value).unwrap(),
+                    ))
+                    .unwrap();
+                let size = size(ttype);
+
+                match full_offset.lte(&size) {
+                    false => {
+                        // The path is invalid, so we add the current types to the
+                        // excluded list and restart exploration.
+                        return Err(self.outer_invalid_path());
+                    }
+                    true => {
+                        // Else we found the label and we can validate that the loading
+                        // of a word with the given offset is within the address space.
+                        // So we continue exploration.
+                        Ok(self)
+                    }
+                }
+            }
+            x => todo!("{x:?}"),
+        }
+    }
+
+    /// Verifies a load is valid for a given configuration.
+    unsafe fn check_load(
+        mut self,
+        leaf_ptr: NonNull<VerifierLeafNode>,
+        branch: &VerifierNode,
+        from: &Register,
+        offset: &crate::ast::Offset,
+        type_size: u64,
+    ) -> Result<Self, ExplorePathResult> {
+        // Collect the state.
+        let state = find_state(leaf_ptr, &self.configuration);
+
+        // Check the destination is valid.
+        match state.registers[branch.hart as usize].get(from) {
+            Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                tag: from_label,
+                offset: from_offset,
+            })))) => {
+                let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+
+                // If attempting to access outside the memory space for the label.
+                let full_offset = MemoryValueU64::from(type_size)
+                    .add(&MemoryValueU64::from(
+                        u64::try_from(offset.value.value).unwrap(),
+                    ))
+                    .unwrap()
+                    .add(from_offset)
+                    .unwrap();
+                let size = size(ttype);
+                match full_offset.lte(&size) {
+                    false => {
+                        // The path is invalid, so we add the current types to the
+                        // excluded list and restart exploration.
+                        return Err(self.outer_invalid_path());
+                    }
+                    true => {
+                        // Else, we found the label and we can validate that the loading
+                        // of a word with the given offset is within the address space.
+                        // So we continue exploration.
+                        Ok(self)
+                    }
+                }
+            }
+            x => todo!("{x:?}"),
+        }
+    }
+
+    /// Queues up the next node to evaluate.
+    ///
+    /// We look at the next node for the 1st hart and queue this up if its not racy,
+    /// if its racy, we look at the 2nd hart and queue it up if its not racy,
+    /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
+    /// up all racy instructions (since we need to evaluate all the possible ordering of them).
+    unsafe fn queue_up(&mut self, mut leaf_ptr: NonNull<VerifierLeafNode>) {
+        let queue = &mut self.queue;
+        let configuration = &mut self.configuration;
+        let jumped = &mut self.jumped;
+        // TOOD We duplicate so much work doing `find_state` in a bunch of places and
+        // multiple times when the state hasn't change, we should avoid doing this call
+        // here (and remove the it in other places).
+        let state = find_state(leaf_ptr, configuration);
+        let leaf = leaf_ptr.as_mut();
+
+        // Search the verifier tree for the fronts of all harts.
+        let mut fronts = BTreeMap::new();
+        let mut current = leaf.prev.as_ref();
+        let harts = current.root.as_ref().harts;
+        fronts.insert(current.hart, current.node);
+        while fronts.len() < harts as usize {
+            let PrevVerifierNode::Branch(branch) = current.prev else {
+                unreachable!()
+            };
+            current = branch.as_ref();
+            fronts.entry(current.hart).or_insert(current.node);
+        }
+
+        trace!(
+            "fronts: {:?}",
+            fronts
+                .iter()
+                .map(|(hart, ast)| (hart, ast.as_ref().this.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        );
+
+        let followup = |node: NonNull<AstNode>,
+                        hart: u8|
+         -> Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>> {
+            match &node.as_ref().this {
+                // Non-racy.
+                Instruction::Label(_)
+                | Instruction::La(_)
+                | Instruction::Lat(_)
+                | Instruction::Li(_)
+                | Instruction::Addi(_)
+                | Instruction::Csrr(_)
+                | Instruction::Define(_)
+                | Instruction::Blt(_)
+                | Instruction::Bne(_)
+                | Instruction::Bnez(_)
+                | Instruction::Beqz(_)
+                | Instruction::Bge(_)
+                | Instruction::Fail(_)
+                | Instruction::Branch(_)
+                | Instruction::Beq(_) => Some(Err((hart, node))),
+                // Possibly racy.
+                // If the label is thread local its not racy.
+                Instruction::Sb(Sb { to: register, .. })
+                | Instruction::Sw(Sw { to: register, .. })
+                | Instruction::Ld(Ld { from: register, .. })
+                | Instruction::Lw(Lw { from: register, .. })
+                | Instruction::Lb(Lb { from: register, .. }) => {
+                    let value = state.registers[hart as usize].get(register).unwrap();
+                    match value {
+                        MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) => {
+                            match tag {
+                                // Racy
+                                MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
+                                // Non-racy
+                                MemoryLabel::Thread {
+                                    label: _,
+                                    hart: thart,
+                                } => {
+                                    assert_eq!(*thart, hart);
+                                    Some(Err((hart, node)))
+                                }
+                            }
+                        }
+                        x => todo!("{x:?}"),
+                    }
+                }
+                // See note on `wfi`.
+                Instruction::Wfi(_) => Some(Ok((hart, node))),
+                Instruction::Unreachable(_) => None,
+                x => todo!("{x:?}"),
+            }
+        };
+
+        // The lowest hart non-racy node is enqueued.
+        // (or possibly multiples nodes in the case of a conditional jump where
+        // we cannot deteremine the condition).
+
+        let next_nodes = fronts
+            .iter()
+            // TODO Document why reverse order is important here.
+            .rev()
+            .filter_map(|(&hart, &node)| {
+                let node_ref = node.as_ref();
+                match &node_ref.this {
+                    // Conditional.
+                    Instruction::Blt(Blt { rhs, lhs, label }) => {
+                        let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                        let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Less) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, label).unwrap();
+                                followup(label_node, hart)
+                            }
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
+                                followup(node_ref.next.unwrap(), hart)
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    Instruction::Beq(Beq { rhs, lhs, out }) => {
+                        let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                        let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Equal) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out).unwrap();
+                                followup(label_node, hart)
+                            }
+                            Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                                followup(node_ref.next.unwrap(), hart)
+                            }
+                            _ => todo!(),
+                        }
+                    }
+                    Instruction::Bne(Bne { rhs, lhs, out }) => {
+                        let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                        let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out).unwrap();
+                                followup(label_node, hart)
+                            }
+                            Some(RangeOrdering::Equal) => followup(node_ref.next.unwrap(), hart),
+                            _ => todo!(),
+                        }
+                    }
+                    Instruction::Bnez(Bnez { src, dest }) => {
+                        let src = state.registers[hart as usize].get(src).unwrap();
+
+                        // In the case the path is determinate, we either queue up the label
+                        // or the next ast node and don't need to actually visit/evaluate
+                        // the branch at runtime.
+                        match src {
+                            MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if imm.eq(&0) {
+                                        followup(node_ref.next.unwrap(), hart)
+                                    } else {
+                                        todo!()
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest).unwrap();
+                                    followup(label_node, hart)
+                                }
+                            },
+                            MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if imm.eq(&0) {
+                                        followup(node_ref.next.unwrap(), hart)
+                                    } else {
+                                        todo!()
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest).unwrap();
+                                    followup(label_node, hart)
+                                }
+                            },
+                            MemoryValue::Csr(CsrValue::Mhartid) => {
+                                if hart == 0 {
+                                    followup(node_ref.next.unwrap(), hart)
+                                } else {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest).unwrap();
+                                    followup(label_node, hart)
+                                }
+                            }
+                            x => todo!("{x:?}"),
+                        }
+                    }
+                    Instruction::Beqz(Beqz { register, label }) => {
+                        let src = state.registers[hart as usize].get(register).unwrap();
+
+                        // In the case the path is determinate, we either queue up the label
+                        // or the next ast node and don't need to actually visit/evaluate
+                        // the branch at runtime.
+                        match src {
+                            MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if imm.eq(&0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        todo!()
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            },
+                            MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if imm.eq(&0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label).unwrap();
+                                        followup(label_node, hart)
+                                    } else {
+                                        todo!()
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            },
+                            MemoryValue::Csr(CsrValue::Mhartid) => {
+                                if hart == 0 {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, label).unwrap();
+                                    followup(label_node, hart)
+                                } else {
+                                    followup(node_ref.next.unwrap(), hart)
+                                }
+                            }
+                            x => todo!("{x:?}"),
+                        }
+                    }
+                    Instruction::Bge(Bge { lhs, rhs, out }) => {
+                        let lhs = state.registers[hart as usize].get(lhs).unwrap();
+                        let rhs = state.registers[hart as usize].get(rhs).unwrap();
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out).unwrap();
+                                followup(label_node, hart)
+                            }
+                            Some(RangeOrdering::Less) => followup(node_ref.next.unwrap(), hart),
+                            _ => todo!(),
+                        }
+                    }
+                    // Non-conditional
+                    Instruction::Label(_)
+                    | Instruction::La(_)
+                    | Instruction::Lat(_)
+                    | Instruction::Li(_)
+                    | Instruction::Addi(_)
+                    | Instruction::Csrr(_)
+                    | Instruction::Define(_)
+                    | Instruction::Sw(_)
+                    | Instruction::Sb(_)
+                    | Instruction::Ld(_)
+                    | Instruction::Lw(_)
+                    | Instruction::Lb(_)
+                    | Instruction::Fail(_) => followup(node_ref.next.unwrap(), hart),
+                    Instruction::Branch(Branch { out }) => {
+                        let label_node = find_label(node, out).unwrap();
+                        followup(label_node, hart)
+                    }
+                    // See note on `wfi`.
+                    Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
+                    // Blocking.
+                    Instruction::Unreachable(_) => None,
+                    x => todo!("{x:?}"),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>();
+
+        debug!("racy: {}", next_nodes.is_ok());
+
+        debug!(
+            "next: {:?}",
+            next_nodes
+                .as_ref()
+                .map(|racy| racy
+                    .iter()
+                    .map(|(h, n)| format!(
+                        "{{ hart: {h}, instruction: {} }}",
+                        n.as_ref().this.to_string()
+                    ))
+                    .collect::<Vec<_>>())
+                .map_err(|(h, n)| format!(
+                    "{{ hart: {h}, instruction: {} }}",
+                    n.as_ref().this.to_string()
+                ))
+        );
+        match next_nodes {
+            // If there was a non-racy node, enqueue this single node.
+            Err((hart, non_racy_next)) => {
+                let mut branch_ptr = leaf.prev;
+                let branch = branch_ptr.as_mut();
+                let new_branch = NonNull::new(Box::into_raw(Box::new(VerifierNode {
+                    prev: PrevVerifierNode::Branch(branch_ptr),
+                    root: branch.root,
+                    hart,
+                    node: non_racy_next,
+                    next: InnerNextVerifierNode::Leaf(leaf_ptr)
+                }))).unwrap();
+                leaf.prev = new_branch;
+                branch.next = InnerNextVerifierNode::Branch(vec![new_branch]);
+
+                queue.push_back(leaf_ptr);
+            }
+            // If all nodes where racy, enqueue these nodes.
+            Ok(racy_nodes) => {
+                let mut branch_ptr = leaf.prev;
+                let branch = branch_ptr.as_mut();
+
+                let new_branches = racy_nodes.iter().copied().map(|(hart, node)| {
+                    
+                    let new_branch = NonNull::new(Box::into_raw(Box::new(VerifierNode {
+                        prev: PrevVerifierNode::Branch(branch_ptr),
+                        root: branch.root,
+                        hart,
+                        node,
+                        next: InnerNextVerifierNode::Leaf(NonNull::new_unchecked(std::ptr::null_mut()))
+                    }))).unwrap();
+                    let new_leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
+                        prev: new_branch,
+                    })));
+
+                    new_branch
+                }).collect();
+                
+                branch.next = InnerNextVerifierNode::Branch(new_branches)
+            }
+        }
+    }
 }
 
 use itertools::Itertools;
@@ -653,6 +1023,27 @@ pub enum ExplorePathResult {
     Invalid,
     Continue(Explorerer),
 }
+impl ExplorePathResult {
+    pub fn continued(self) -> Option<Explorerer> {
+        match self {
+            Self::Continue(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn valid(self) -> Option<ValidPathResult> {
+        match self {
+            Self::Valid(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn invalid(self) -> Option<()> {
+        match self {
+            Self::Invalid => Some(()),
+            _ => None,
+        }
+    }
+}
+
 use std::fmt;
 impl fmt::Debug for Explorerer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -674,136 +1065,6 @@ pub struct ValidPathResult {
     pub touched: BTreeSet<NonNull<AstNode>>,
     // All the branch nodes that jump.
     pub jumped: BTreeSet<NonNull<AstNode>>,
-}
-
-impl ExplorePathResult {
-    pub fn continued(self) -> Option<ExplorererPath> {
-        match self {
-            Self::Continue(c) => Some(c),
-            _ => None,
-        }
-    }
-    pub fn valid(self) -> Option<ValidPathResult> {
-        match self {
-            Self::Valid(c) => Some(c),
-            _ => None,
-        }
-    }
-    pub fn invalid(self) -> Option<InvalidPathResult> {
-        match self {
-            Self::Invalid(c) => Some(c),
-            _ => None,
-        }
-    }
-}
-
-unsafe fn check_store(
-    explorerer: Rc<RefCell<Explorerer>>,
-    leaf_ptr: NonNull<VerifierNode>,
-    branch: &VerifierNode,
-    configuration: &ProgramConfiguration,
-    to: &Register,
-    offset: &crate::ast::Offset,
-    type_size: u64,
-    invalid: InvalidExplanation,
-) -> Option<ExplorePathResult> {
-    // Collect the state.
-    let (record, root, harts, first_step) = get_backpath_harts(leaf_ptr);
-    let state = find_state(&record, root, harts, first_step, &configuration);
-
-    // Check the destination is valid.
-    match state.registers[branch.hart as usize].get(to) {
-        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-            tag: from_label,
-            offset: from_offset,
-        })))) => {
-            let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
-            // If attempting to access outside the memory space for the label.
-            let full_offset = MemoryValueU64::from(type_size)
-                .add(from_offset)
-                .unwrap()
-                .add(&MemoryValueU64::from(
-                    u64::try_from(offset.value.value).unwrap(),
-                ))
-                .unwrap();
-            let size = size(ttype);
-
-            match full_offset.lte(&size) {
-                false => {
-                    // The path is invalid, so we add the current types to the
-                    // excluded list and restart exploration.
-                    return Some(invalid_path(
-                        explorerer.clone(),
-                        configuration.clone(),
-                        harts,
-                        invalid,
-                    ));
-                }
-                true => {
-                    // Else we found the label and we can validate that the loading
-                    // of a word with the given offset is within the address space.
-                    // So we continue exploration.
-                    None
-                }
-            }
-        }
-        x => todo!("{x:?}"),
-    }
-}
-
-/// Verifies a load is valid for a given configuration.
-unsafe fn check_load(
-    explorerer: Rc<RefCell<Explorerer>>,
-    leaf_ptr: NonNull<VerifierNode>,
-    branch: &VerifierNode,
-    configuration: &ProgramConfiguration,
-    from: &Register,
-    offset: &crate::ast::Offset,
-    type_size: u64,
-    invalid: InvalidExplanation,
-) -> Option<ExplorePathResult> {
-    // Collect the state.
-    let (record, root, harts, first_step) = get_backpath_harts(leaf_ptr);
-    let state = find_state(&record, root, harts, first_step, &configuration);
-
-    // Check the destination is valid.
-    match state.registers[branch.hart as usize].get(from) {
-        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-            tag: from_label,
-            offset: from_offset,
-        })))) => {
-            let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
-
-            // If attempting to access outside the memory space for the label.
-            let full_offset = MemoryValueU64::from(type_size)
-                .add(&MemoryValueU64::from(
-                    u64::try_from(offset.value.value).unwrap(),
-                ))
-                .unwrap()
-                .add(from_offset)
-                .unwrap();
-            let size = size(ttype);
-            match full_offset.lte(&size) {
-                false => {
-                    // The path is invalid, so we add the current types to the
-                    // excluded list and restart exploration.
-                    return Some(invalid_path(
-                        explorerer.clone(),
-                        configuration.clone(),
-                        harts,
-                        invalid,
-                    ));
-                }
-                true => {
-                    // Else, we found the label and we can validate that the loading
-                    // of a word with the given offset is within the address space.
-                    // So we continue exploration.
-                    None
-                }
-            }
-        }
-        x => todo!("{x:?}"),
-    }
 }
 
 impl From<&LabelLocality> for Locality {
@@ -835,374 +1096,44 @@ pub enum InvalidExplanation {
     Fail,
 }
 
-unsafe fn invalid_path(
-    explorerer: Rc<RefCell<Explorerer>>,
-    configuration: ProgramConfiguration,
-    harts: u8,
-    explanation: InvalidExplanation,
-) -> ExplorePathResult {
-    todo!()
-}
-
 // Get the number of harts of this sub-tree and record the path.
-unsafe fn get_backpath_harts(
-    prev: NonNull<VerifierNode>,
-) -> (Vec<usize>, NonNull<VerifierConfiguration>, u8, usize) {
-    let mut current = prev;
+unsafe fn get_backpath_harts(prev: NonNull<VerifierLeafNode>) -> Vec<usize> {
+    let mut current = prev.as_ref().prev;
     let mut record = Vec::new();
     while let PrevVerifierNode::Branch(branch) = current.as_ref().prev {
-        let r = branch
-            .as_ref()
-            .next
-            .iter()
-            .position(|&x| x == current)
-            .unwrap();
+        let r = match &branch.as_ref().next {
+            InnerNextVerifierNode::Branch(branches) => {
+                branches.iter().position(|&x| x == current).unwrap()
+            }
+            InnerNextVerifierNode::Leaf(_) => unreachable!(),
+        };
         record.push(r);
         current = branch
     }
     let PrevVerifierNode::Root(root) = current.as_ref().prev else {
         unreachable!()
     };
-    let harts = root.as_ref().harts;
-    let first_step = root
-        .as_ref()
-        .next
-        .iter()
-        .position(|&x| x == current)
-        .unwrap();
-    (record, root, harts, first_step)
+    record
 }
 
-/// Queues up the next node to evaluate.
-///
-/// We look at the next node for the 1st hart and queue this up if its not racy,
-/// if its racy, we look at the 2nd hart and queue it up if its not racy,
-/// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
-/// up all racy instructions (since we need to evaluate all the possible ordering of them).
-
-unsafe fn queue_up(
-    prev: NonNull<VerifierNode>,
-    queue: &mut VecDeque<NonNull<VerifierNode>>,
-    configuration: &ProgramConfiguration,
-    jumped: &mut BTreeSet<NonNull<AstNode>>,
-) {
-    let (record, root, harts, first_step) = get_backpath_harts(prev);
-    // TOOD We duplicate so much work doing `find_state` in a bunch of places and
-    // multiple times when the state hasn't change, we should avoid doing this call
-    // here (and remove the it in other places).
-    let state = find_state(&record, root, harts, first_step, configuration);
-
-    // Search the verifier tree for the fronts of all harts.
-    let mut fronts = BTreeMap::new();
-    let mut current = prev.as_ref();
-    fronts.insert(current.hart, current.node);
-    while fronts.len() < harts as usize {
-        let PrevVerifierNode::Branch(branch) = current.prev else {
-            unreachable!()
-        };
-        current = branch.as_ref();
-        fronts.entry(current.hart).or_insert(current.node);
-    }
-
-    trace!(
-        "fronts: {:?}",
-        fronts
-            .iter()
-            .map(|(hart, ast)| (hart, ast.as_ref().this.to_string()))
-            .collect::<BTreeMap<_, _>>()
-    );
-
-    let followup = |node: NonNull<AstNode>,
-                    hart: u8|
-     -> Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>> {
-        match &node.as_ref().this {
-            // Non-racy.
-            Instruction::Label(_)
-            | Instruction::La(_)
-            | Instruction::Lat(_)
-            | Instruction::Li(_)
-            | Instruction::Addi(_)
-            | Instruction::Csrr(_)
-            | Instruction::Define(_)
-            | Instruction::Blt(_)
-            | Instruction::Bne(_)
-            | Instruction::Bnez(_)
-            | Instruction::Beqz(_)
-            | Instruction::Bge(_)
-            | Instruction::Fail(_)
-            | Instruction::Branch(_)
-            | Instruction::Beq(_) => Some(Err((hart, node))),
-            // Possibly racy.
-            // If the label is thread local its not racy.
-            Instruction::Sb(Sb { to: register, .. })
-            | Instruction::Sw(Sw { to: register, .. })
-            | Instruction::Ld(Ld { from: register, .. })
-            | Instruction::Lw(Lw { from: register, .. })
-            | Instruction::Lb(Lb { from: register, .. }) => {
-                let value = state.registers[hart as usize].get(register).unwrap();
-                match value {
-                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) => {
-                        match tag {
-                            // Racy
-                            MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
-                            // Non-racy
-                            MemoryLabel::Thread {
-                                label: _,
-                                hart: thart,
-                            } => {
-                                assert_eq!(*thart, hart);
-                                Some(Err((hart, node)))
-                            }
-                        }
-                    }
-                    x => todo!("{x:?}"),
-                }
-            }
-            // See note on `wfi`.
-            Instruction::Wfi(_) => Some(Ok((hart, node))),
-            Instruction::Unreachable(_) => None,
-            x => todo!("{x:?}"),
-        }
-    };
-
-    // The lowest hart non-racy node is enqueued.
-    // (or possibly multiples nodes in the case of a conditional jump where
-    // we cannot deteremine the condition).
-
-    let next_nodes = fronts
-        .iter()
-        // TODO Document why reverse order is important here.
-        .rev()
-        .filter_map(|(&hart, &node)| {
-            let node_ref = node.as_ref();
-            match &node_ref.this {
-                // Conditional.
-                Instruction::Blt(Blt { rhs, lhs, label }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
-                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
-                    match lhs.compare(rhs) {
-                        Some(RangeOrdering::Less) => {
-                            jumped.insert(node);
-                            let label_node = find_label(node, label).unwrap();
-                            followup(label_node, hart)
-                        }
-                        Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
-                            followup(node_ref.next.unwrap(), hart)
-                        }
-                        _ => todo!(),
-                    }
-                }
-                Instruction::Beq(Beq { rhs, lhs, out }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
-                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
-                    match lhs.compare(rhs) {
-                        Some(RangeOrdering::Equal) => {
-                            jumped.insert(node);
-                            let label_node = find_label(node, out).unwrap();
-                            followup(label_node, hart)
-                        }
-                        Some(RangeOrdering::Greater | RangeOrdering::Less) => {
-                            followup(node_ref.next.unwrap(), hart)
-                        }
-                        _ => todo!(),
-                    }
-                }
-                Instruction::Bne(Bne { rhs, lhs, out }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
-                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
-                    match lhs.compare(rhs) {
-                        Some(RangeOrdering::Greater | RangeOrdering::Less) => {
-                            jumped.insert(node);
-                            let label_node = find_label(node, out).unwrap();
-                            followup(label_node, hart)
-                        }
-                        Some(RangeOrdering::Equal) => followup(node_ref.next.unwrap(), hart),
-                        _ => todo!(),
-                    }
-                }
-                Instruction::Bnez(Bnez { src, dest }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let src = state.registers[hart as usize].get(src).unwrap();
-
-                    // In the case the path is determinate, we either queue up the label
-                    // or the next ast node and don't need to actually visit/evaluate
-                    // the branch at runtime.
-                    match src {
-                        MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
-                            RangeScalarOrdering::Within => {
-                                if imm.eq(&0) {
-                                    followup(node_ref.next.unwrap(), hart)
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
-                                jumped.insert(node);
-                                let label_node = find_label(node, dest).unwrap();
-                                followup(label_node, hart)
-                            }
-                        },
-                        MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
-                            RangeScalarOrdering::Within => {
-                                if imm.eq(&0) {
-                                    followup(node_ref.next.unwrap(), hart)
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
-                                jumped.insert(node);
-                                let label_node = find_label(node, dest).unwrap();
-                                followup(label_node, hart)
-                            }
-                        },
-                        MemoryValue::Csr(CsrValue::Mhartid) => {
-                            if hart == 0 {
-                                followup(node_ref.next.unwrap(), hart)
-                            } else {
-                                jumped.insert(node);
-                                let label_node = find_label(node, dest).unwrap();
-                                followup(label_node, hart)
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                Instruction::Beqz(Beqz { register, label }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let src = state.registers[hart as usize].get(register).unwrap();
-
-                    // In the case the path is determinate, we either queue up the label
-                    // or the next ast node and don't need to actually visit/evaluate
-                    // the branch at runtime.
-                    match src {
-                        MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
-                            RangeScalarOrdering::Within => {
-                                if imm.eq(&0) {
-                                    jumped.insert(node);
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
-                                followup(node_ref.next.unwrap(), hart)
-                            }
-                        },
-                        MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
-                            RangeScalarOrdering::Within => {
-                                if imm.eq(&0) {
-                                    jumped.insert(node);
-                                    let label_node = find_label(node, label).unwrap();
-                                    followup(label_node, hart)
-                                } else {
-                                    todo!()
-                                }
-                            }
-                            RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
-                                followup(node_ref.next.unwrap(), hart)
-                            }
-                        },
-                        MemoryValue::Csr(CsrValue::Mhartid) => {
-                            if hart == 0 {
-                                jumped.insert(node);
-                                let label_node = find_label(node, label).unwrap();
-                                followup(label_node, hart)
-                            } else {
-                                followup(node_ref.next.unwrap(), hart)
-                            }
-                        }
-                        x => todo!("{x:?}"),
-                    }
-                }
-                Instruction::Bge(Bge { lhs, rhs, out }) => {
-                    let state = find_state(&record, root, harts, first_step, configuration);
-
-                    let lhs = state.registers[hart as usize].get(lhs).unwrap();
-                    let rhs = state.registers[hart as usize].get(rhs).unwrap();
-                    match lhs.compare(rhs) {
-                        Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
-                            jumped.insert(node);
-                            let label_node = find_label(node, out).unwrap();
-                            followup(label_node, hart)
-                        }
-                        Some(RangeOrdering::Less) => followup(node_ref.next.unwrap(), hart),
-                        _ => todo!(),
-                    }
-                }
-                // Non-conditional
-                Instruction::Label(_)
-                | Instruction::La(_)
-                | Instruction::Lat(_)
-                | Instruction::Li(_)
-                | Instruction::Addi(_)
-                | Instruction::Csrr(_)
-                | Instruction::Define(_)
-                | Instruction::Sw(_)
-                | Instruction::Sb(_)
-                | Instruction::Ld(_)
-                | Instruction::Lw(_)
-                | Instruction::Lb(_)
-                | Instruction::Fail(_) => followup(node_ref.next.unwrap(), hart),
-                Instruction::Branch(Branch { out }) => {
-                    let label_node = find_label(node, out).unwrap();
-                    followup(label_node, hart)
-                }
-                // See note on `wfi`.
-                Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
-                // Blocking.
-                Instruction::Unreachable(_) => None,
-                x => todo!("{x:?}"),
-            }
-        })
-        .collect::<Result<Vec<_>, _>>();
-
-    debug!("racy: {}", next_nodes.is_ok());
-
-    debug!(
-        "next: {:?}",
-        next_nodes
-            .as_ref()
-            .map(|racy| racy
-                .iter()
-                .map(|(h, n)| format!(
-                    "{{ hart: {h}, instruction: {} }}",
-                    n.as_ref().this.to_string()
-                ))
-                .collect::<Vec<_>>())
-            .map_err(|(h, n)| format!(
-                "{{ hart: {h}, instruction: {} }}",
-                n.as_ref().this.to_string()
-            ))
-    );
-    match next_nodes {
-        // If there was a non-racy node, enqueue this single node.
-        Err((hart, non_racy_next)) => {
-            queue.push_back(simple_nonnull(prev, non_racy_next, hart));
-        }
-        // If all nodes where racy, enqueue these nodes.
-        Ok(racy_nodes) => {
-            for (hart, node) in racy_nodes {
-                queue.push_back(simple_nonnull(prev, node, hart));
-            }
-        }
-    }
-}
-
+/// Creates a new verifier node from an AST node at the edge of a branch.
 unsafe fn simple_nonnull(
-    mut prev: NonNull<VerifierNode>,
+    mut leaf: NonNull<VerifierLeafNode>,
     node: NonNull<AstNode>,
     hart: u8,
 ) -> NonNull<VerifierNode> {
+    let mut leaf_ref = leaf.as_ref();
+    let mut branch_ref = leaf_ref.prev.as_ref();
+    let new = NonNull::new(Box::into_raw(Box::new(VerifierNode {
+        prev: PrevVerifierNode::Branch(leaf_ref.prev),
+        root: branch_ref.root,
+        hart,
+        node,
+        next: InnerNextVerifierNode::Leaf(leaf)
+    }))).unwrap();
+    leaf_ref.prev = new;
+    branch_ref.next = InnerNextVerifierNode::Branch(vec![new]);
+    
     let ptr = alloc(Layout::new::<VerifierNode>()).cast();
     ptr::write(
         ptr,
@@ -1252,12 +1183,13 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 }
 
 unsafe fn find_state(
-    record: &[usize], // The record of which children to follow from the root to reach the current position.
-    root: NonNull<VerifierConfiguration>, // The root of the verification tree.
-    harts: u8,        // The number of hardware threads in the current path.
-    first_step: usize, // The child node of the root which forms the current path (will correlate with `harts`).
+    leaf: NonNull<VerifierLeafNode>, // The record of which children to follow from the root to reach the current position.
     configuration: &ProgramConfiguration,
 ) -> State {
+    let record = get_backpath_harts(leaf);
+    let root = leaf.as_ref().prev.as_ref().root;
+    let harts = root.as_ref().harts;
+
     // Iterator to generate unique labels.
     const N: u8 = b'z' - b'a';
     let mut tag_iter = (0..)
@@ -1271,7 +1203,7 @@ unsafe fn find_state(
 
     // Iterate forward to find the values.
     let mut state = State::new(harts, configuration);
-    let mut current = root.as_ref().next[first_step];
+    let mut current = root.as_ref().next;
     for next in record.iter().rev() {
         let vnode = current.as_ref();
         let hart = vnode.hart;
@@ -1383,7 +1315,10 @@ unsafe fn find_state(
             Instruction::Unreachable(_) => {}
             x => todo!("{x:?}"),
         }
-        current = current.as_ref().next[*next];
+        current = match &current.as_ref().next {
+            InnerNextVerifierNode::Branch(b) => b[*next],
+            InnerNextVerifierNode::Leaf(_) => unreachable!(),
+        };
     }
     state
 }

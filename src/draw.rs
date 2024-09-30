@@ -58,7 +58,9 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
         );
 
         // Add new nodes to stack.
-        stack.extend(next.as_ref().next.iter().copied().map(|n| (depth + 1, n)));
+        if let crate::verifier::InnerNextVerifierNode::Branch(branch) = &next.as_ref().next {
+            stack.extend(branch.iter().copied().map(|n| (depth + 1, n)));
+        }
     }
 
     let mut output = String::new();
