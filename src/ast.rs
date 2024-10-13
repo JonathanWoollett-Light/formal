@@ -936,7 +936,7 @@ impl fmt::Debug for Ascii {
     }
 }
 
-fn new_ascii(src: &[char]) -> Ascii {
+fn new_ascii(_src: &[char]) -> Ascii {
     todo!()
     // assert_eq!(src[0], '"');
     // assert_eq!(src[src.len() - 1], '"');

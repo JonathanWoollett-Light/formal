@@ -1393,8 +1393,8 @@ impl ProgramConfiguration {
             }
         }
     }
-    pub fn get(&self, key: &Label) -> Option<(&Locality, &Type)> {
-        self.0.get(key).map(|(l, t)| (l.into(), t))
+    pub fn get(&self, key: impl Borrow<Label>) -> Option<(&Locality, &Type)> {
+        self.0.get(key.borrow()).map(|(l, t)| (l.into(), t))
     }
     pub fn new() -> Self {
         Self(BTreeMap::new())

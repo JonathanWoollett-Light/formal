@@ -26,7 +26,7 @@ impl PartialOrd for Coordinate {
     }
 }
 
-type Type = NonNull<VerifierNode>;
+pub type Type = *mut VerifierNode;
 
 /// Draws a tree.
 pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String) -> String {
@@ -58,7 +58,7 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
         );
 
         // Add new nodes to stack.
-        if let crate::verifier::InnerNextVerifierNode::Branch(branch) = &next.as_ref().next {
+        if let crate::verifier::InnerNextVerifierNode::Branch(branch) = &next.as_ref().unwrap().next {
             stack.extend(branch.iter().copied().map(|n| (depth + 1, n)));
         }
     }

@@ -1,19 +1,20 @@
 use crate::ast::*;
 use crate::verifier_types::*;
-use itertools::intersperse;
+use std::alloc::dealloc;
 use std::alloc::Layout;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::iter::once;
 use std::ops::Range;
 use std::ptr;
-use std::rc::Rc;
 use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
+use itertools::Itertools;
+use std::borrow::Borrow;
+use std::ptr::null_mut;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -29,20 +30,19 @@ fn type_list() -> Vec<Type> {
     ]
 }
 
-use std::alloc::dealloc;
-
 /// Contains the configuration of the system
 pub struct VerifierConfiguration {
     pub harts: u8,
-    pub next: NonNull<VerifierNode>,
+    pub next: *mut VerifierNode,
 }
 
-enum PrevVerifierNode {
-    Root(NonNull<VerifierConfiguration>),
-    Branch(NonNull<VerifierNode>),
+#[derive(Debug, Clone, Copy)]
+pub enum PrevVerifierNode {
+    Root(*mut VerifierConfiguration),
+    Branch(*mut VerifierNode),
 }
 impl PrevVerifierNode {
-    fn branch(&self) -> Option<&NonNull<VerifierNode>> {
+    fn branch(&self) -> Option<&*mut VerifierNode> {
         match self {
             Self::Branch(branch) => Some(branch),
             Self::Root(_) => None,
@@ -51,8 +51,8 @@ impl PrevVerifierNode {
 }
 
 pub enum InnerNextVerifierNode {
-    Branch(Vec<NonNull<VerifierNode>>),
-    Leaf(NonNull<VerifierLeafNode>),
+    Branch(Vec<*mut VerifierNode>),
+    Leaf(*mut VerifierLeafNode),
 }
 
 /// We use a tree to trace the execution of the program,
@@ -61,48 +61,28 @@ pub enum InnerNextVerifierNode {
 pub struct VerifierNode {
     // The previous node in global execution.
     pub prev: PrevVerifierNode,
-    pub root: NonNull<VerifierConfiguration>,
+    pub root: *mut VerifierConfiguration,
     // Current hart.
     pub hart: u8,
     pub node: NonNull<AstNode>,
     pub next: InnerNextVerifierNode,
 }
 
-enum OuterVerifierNode {
+pub enum OuterVerifierNode {
     Leaf(VerifierLeafNode),
     Branch(VerifierNode),
 }
 
-impl Drop for Explorerer {
-    fn drop(&mut self) {
-        unsafe {
-            let mut stack = Vec::new();
-            for root in &self.roots {
-                stack.push(root.as_ref().next);
-                dealloc(root.as_ptr().cast(), Layout::new::<VerifierConfiguration>());
-            }
-            while let Some(current) = stack.pop() {
-                match &current.as_ref().next {
-                    InnerNextVerifierNode::Branch(branch) => stack.extend_from_slice(&branch),
-                    InnerNextVerifierNode::Leaf(leaf) => {
-                        dealloc(leaf.as_ptr().cast(), Layout::new::<VerifierLeafNode>());
-                    }
-                }
-                dealloc(current.as_ptr().cast(), Layout::new::<VerifierNode>());
-            }
-        }
-    }
-}
-use std::sync::Arc;
+
 
 // TODO Support some amount of state caching so it doesn't need to re-traverse the whole tree each step to find state.
-struct VerifierLeafNode {
+pub struct VerifierLeafNode {
     // The previous node.
-    pub prev: NonNull<VerifierNode>,
-    // The nodes where variables where first encountered.
-    pub variable_encounters: BTreeMap<Label, NonNull<VerifierNode>>,
+    pub prev: *mut VerifierNode,
+    // The nodes where variables where first encountered on this path.
+    pub variable_encounters: BTreeMap<Label, *mut VerifierNode>,
     // The most recent node for each hart.
-    pub hart_fronts: BTreeMap<u8, NonNull<VerifierNode>>,
+    pub hart_fronts: BTreeMap<u8, *mut VerifierNode>,
 }
 
 /// Localites in order of best to worst
@@ -122,11 +102,11 @@ pub struct Explorerer {
     /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
     pub second_ptr: NonNull<AstNode>,
     /// The different systems configurations to verify.
-    pub roots: Vec<NonNull<VerifierConfiguration>>,
+    pub roots: Vec<*mut VerifierConfiguration>,
     // The current program configuration (e.g. variable types).
     pub configuration: ProgramConfiguration,
     // The queue of unexplored leaf nodes.
-    pub queue: VecDeque<NonNull<VerifierLeafNode>>,
+    pub queue: VecDeque<*mut VerifierLeafNode>,
     // All the nodes that are touched.
     pub touched: BTreeSet<NonNull<AstNode>>,
     // All the branch nodes that jump.
@@ -183,15 +163,10 @@ impl Explorerer {
         let roots = harts_range
             .clone()
             .map(|harts| {
-                let ptr = alloc(Layout::new::<VerifierConfiguration>()).cast();
-                ptr::write(
-                    ptr,
-                    VerifierConfiguration {
-                        harts,
-                        next: Vec::new(),
-                    },
-                );
-                NonNull::new(ptr).unwrap()
+                Box::into_raw(Box::new(VerifierConfiguration {
+                    harts,
+                    next: null_mut(),
+                }))
             })
             .collect::<Vec<_>>();
 
@@ -215,28 +190,33 @@ impl Explorerer {
                 let mut prev = PrevVerifierNode::Root(*root);
                 let mut hart_fronts = BTreeMap::new();
                 for hart in (0..=harts as u8).rev() {
-                    let nonull = NonNull::new(Box::into_raw(Box::new(VerifierNode {
+                    let nonull = Box::into_raw(Box::new(VerifierNode {
                         prev,
                         root: *root,
                         hart,
                         node: second_ptr,
-                        next: Vec::new(),
-                    })))
-                    .unwrap();
+                        next: InnerNextVerifierNode::Leaf(null_mut()),
+                    }));
 
-                    prev.next().push(InnerNextVerifierNode::Branch(nonull));
+                    match &prev {
+                        PrevVerifierNode::Root(mut root) => {
+                            debug_assert!(root.as_ref().unwrap().next.is_null());
+                            root.as_mut().unwrap().next = nonull;
+                        },
+                        PrevVerifierNode::Branch(mut branch) => {
+                            debug_assert!(matches!(branch.as_ref().unwrap().next,InnerNextVerifierNode::Leaf(leaf) if leaf.is_null()));
+                            branch.as_mut().unwrap().next = InnerNextVerifierNode::Branch(vec![nonull]);
+                        }
+                    }
                     prev = PrevVerifierNode::Branch(nonull);
                     hart_fronts.insert(hart, nonull);
                 }
-                let PrevVerifierNode::Branch(branch) = prev else {
-                    unreachable!()
-                };
-                let leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
-                    prev: branch,
+                debug_assert!(matches!(prev,PrevVerifierNode::Branch(_)));
+                let leaf = Box::into_raw(Box::new(VerifierLeafNode {
+                    prev: null_mut(),
                     variable_encounters: BTreeMap::new(),
                     hart_fronts,
-                })))
-                .unwrap();
+                }));
 
                 leaf
             })
@@ -274,11 +254,11 @@ impl Explorerer {
         // type map is added to `excluded`, we then check all values in `excluded`
         // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
         // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
-        let leaf = leaf_ptr.as_ref();
-        let branch = leaf.prev.as_ref();
+        let leaf = leaf_ptr.as_mut().unwrap();
+        let branch = leaf.prev.as_ref().unwrap();
         let ast = branch.node;
         let hart = branch.hart;
-        let root = branch.root.as_ref();
+        let root = branch.root.as_ref().unwrap();
         let harts = root.harts;
 
         debug!(
@@ -312,17 +292,17 @@ impl Explorerer {
                 locality,
                 cast,
             }) => {
-                if !self.load_label(label, cast, locality, hart) {
+                if !self.load_label(leaf, label, cast, locality, hart) {
                     return self.outer_invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
-                if !self.load_label(label, None, None, hart) {
+                if !self.load_label(leaf, label, None, None, hart) {
                     return self.outer_invalid_path();
                 }
             }
             Instruction::La(La { register: _, label }) => {
-                if !self.load_label(label, None, None, hart) {
+                if !self.load_label(leaf, label, None, None, hart) {
                     return self.outer_invalid_path();
                 }
             }
@@ -426,48 +406,43 @@ impl Explorerer {
         // Deallocate up to 1st occurence.
         let mut skip = BTreeSet::new();
         let mut new_queue = VecDeque::new();
-        for leaf in &self.queue {
-            if skip.contains(&leaf) {
+        for leaf_ptr in self.queue.iter().copied() {
+            let leaf = leaf_ptr.as_ref().unwrap();
+
+            if skip.contains(&leaf_ptr) {
                 continue;
             }
-            let Some(encounter) = leaf.as_ref().variable_encounters.get(&recent) else {
+            let Some(encounter) = leaf.variable_encounters.get(&recent) else {
                 continue;
             };
-            let mut encounter_prev = *encounter.as_ref().prev.branch().unwrap();
-            let mut variable_encounters = leaf.as_ref().variable_encounters.clone();
+            let encounter_prev = *encounter.as_ref().unwrap().prev.branch().unwrap();
+            let mut variable_encounters = leaf.variable_encounters.clone();
 
             // Deallocate all nodes including and after the encounter.
             let mut stack = vec![*encounter];
-            while let Some(current) = stack.pop() {
-                match &current.as_ref().next {
+            while let Some(current_ptr) = stack.pop() {
+                let current = current_ptr.as_ref().unwrap();
+                match &current.next {
                     InnerNextVerifierNode::Branch(branches) => {
-                        for b in branches {
-                            stack.push(*b);
-                        }
+                        stack.extend(branches.iter().copied());
                     }
                     InnerNextVerifierNode::Leaf(l) => {
                         skip.insert(l);
                         debug_assert_eq!(
-                            l.as_ref().variable_encounters.get(&recent).unwrap(),
+                            l.as_ref().unwrap().variable_encounters.get(&recent).unwrap(),
                             encounter
                         );
-                        dealloc(leaf.as_ptr().cast(), Layout::new::<VerifierLeafNode>());
+                        dealloc(leaf_ptr.cast(), Layout::new::<VerifierLeafNode>());
                     }
                 }
                 // If a variable is present in this instruction.
-                if let Some(var) = current.as_ref().node.as_ref().this.variable() {
+                if let Some(var) = current.node.as_ref().this.variable() {
                     // If this node is the 1st where the variable is encountered.
-                    if current == *variable_encounters.get(var).unwrap() {
+                    if current_ptr == *variable_encounters.get(var).unwrap() {
                         variable_encounters.remove(var);
                     }
                 }
-                // If the cached state belongs to any of the nodes being deallocated it must be discarded.
-                if let Some(cs) = &cached_state {
-                    if cs.1 == current {
-                        cached_state = None;
-                    }
-                }
-                dealloc(current.as_ptr().cast(), Layout::new::<VerifierNode>());
+                dealloc(current_ptr.cast(), Layout::new::<VerifierNode>());
             }
 
             // Set the new leaf node.
@@ -477,22 +452,22 @@ impl Explorerer {
             // amount to memory usage for (what I estimate to be) a relatively insignficant runtime improvement.
             // TODO produce a comparison using the `hart_prev` approach.
             let mut hart_fronts = BTreeMap::new();
-            let mut start = encounter_prev;
-            while hart_fronts.len() < leaf.as_ref().hart_fronts.len() {
-                if !hart_fronts.contains_key(&start.as_ref().hart) {
-                    hart_fronts.insert(start.as_ref().hart, start);
+            let mut start_ptr = encounter_prev;
+            let start = start_ptr.as_ref().unwrap();
+            while hart_fronts.len() < leaf.hart_fronts.len() {
+                if !hart_fronts.contains_key(&start.hart) {
+                    hart_fronts.insert(start.hart, start_ptr);
                 }
-                start = *start.as_ref().prev.branch().unwrap();
+                start_ptr = *start.prev.branch().unwrap();
             }
 
             // Set the new leaf.
-            let new_leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
+            let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
                 prev: encounter_prev,
                 variable_encounters,
                 hart_fronts,
-            })))
-            .unwrap();
-            encounter_prev.as_mut().next = InnerNextVerifierNode::Leaf(new_leaf);
+            }));
+            encounter_prev.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
             new_queue.push_back(new_leaf);
         }
         // Set new queue.
@@ -508,6 +483,7 @@ impl Explorerer {
     /// - `false` the path is invalid.
     fn load_label(
         &mut self,
+        leaf: &mut VerifierLeafNode,
         label: &Label,
         ttype: impl Borrow<Option<Type>>, // The type to use for the variable if `Some(_)`.
         locality: impl Borrow<Option<Locality>>, // The locality to use for the variable if `Some(_)`.
@@ -545,6 +521,11 @@ impl Explorerer {
             self.encountered.push(label.clone());
             Box::new(locality_list().into_iter().cartesian_product(type_list()))
         });
+        // Update variables encounters along this path.
+        leaf.variable_encounters
+            .entry(label.clone())
+            .or_insert(leaf.prev);
+
         // This looks how it does since the example code is valid (assuming x is known at compile-time) and it needs to support this:
         // ```
         // if typeof x = u8
@@ -581,29 +562,29 @@ impl Explorerer {
     }
 
     unsafe fn check_store(
-        mut self,
-        leaf_ptr: NonNull<VerifierLeafNode>,
-        branch: &VerifierNode,
-        to: &Register,
-        offset: &crate::ast::Offset,
+        self,
+        leaf_ptr: *mut VerifierLeafNode,
+        branch: impl Borrow<VerifierNode>,
+        to: impl Borrow<Register>,
+        offset: impl Borrow<crate::ast::Offset>,
         type_size: u64,
     ) -> Result<Self, ExplorePathResult> {
         // Collect the state.
         let state = find_state(leaf_ptr, &self.configuration);
 
         // Check the destination is valid.
-        match state.registers[branch.hart as usize].get(to) {
+        match state.registers[branch.borrow().hart as usize].get(to) {
             Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                 tag: from_label,
                 offset: from_offset,
             })))) => {
-                let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+                let (_locality, ttype) = state.configuration.get(<&Label>::from(from_label)).unwrap();
                 // If attempting to access outside the memory space for the label.
                 let full_offset = MemoryValueU64::from(type_size)
                     .add(from_offset)
                     .unwrap()
                     .add(&MemoryValueU64::from(
-                        u64::try_from(offset.value.value).unwrap(),
+                        u64::try_from(offset.borrow().value.value).unwrap(),
                     ))
                     .unwrap();
                 let size = size(ttype);
@@ -628,28 +609,28 @@ impl Explorerer {
 
     /// Verifies a load is valid for a given configuration.
     unsafe fn check_load(
-        mut self,
-        leaf_ptr: NonNull<VerifierLeafNode>,
-        branch: &VerifierNode,
-        from: &Register,
-        offset: &crate::ast::Offset,
+        self,
+        leaf_ptr: *mut VerifierLeafNode,
+        branch: impl Borrow<VerifierNode>,
+        from: impl Borrow<Register>,
+        offset: impl Borrow<crate::ast::Offset>,
         type_size: u64,
     ) -> Result<Self, ExplorePathResult> {
         // Collect the state.
         let state = find_state(leaf_ptr, &self.configuration);
 
         // Check the destination is valid.
-        match state.registers[branch.hart as usize].get(from) {
+        match state.registers[branch.borrow().hart as usize].get(from) {
             Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                 tag: from_label,
                 offset: from_offset,
             })))) => {
-                let (_locality, ttype) = state.configuration.get(from_label.into()).unwrap();
+                let (_locality, ttype) = state.configuration.get(<&Label>::from(from_label)).unwrap();
 
                 // If attempting to access outside the memory space for the label.
                 let full_offset = MemoryValueU64::from(type_size)
                     .add(&MemoryValueU64::from(
-                        u64::try_from(offset.value.value).unwrap(),
+                        u64::try_from(offset.borrow().value.value).unwrap(),
                     ))
                     .unwrap()
                     .add(from_offset)
@@ -679,7 +660,7 @@ impl Explorerer {
     /// if its racy, we look at the 2nd hart and queue it up if its not racy,
     /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
     /// up all racy instructions (since we need to evaluate all the possible ordering of them).
-    unsafe fn queue_up(&mut self, mut leaf_ptr: NonNull<VerifierLeafNode>) {
+    unsafe fn queue_up(&mut self, leaf_ptr: *mut VerifierLeafNode) {
         let queue = &mut self.queue;
         let configuration = &mut self.configuration;
         let jumped = &mut self.jumped;
@@ -687,18 +668,18 @@ impl Explorerer {
         // multiple times when the state hasn't change, we should avoid doing this call
         // here (and remove the it in other places).
         let state = find_state(leaf_ptr, configuration);
-        let leaf = leaf_ptr.as_mut();
+        let leaf = leaf_ptr.as_mut().unwrap();
 
         // Search the verifier tree for the fronts of all harts.
         let mut fronts = BTreeMap::new();
-        let mut current = leaf.prev.as_ref();
-        let harts = current.root.as_ref().harts;
+        let mut current = leaf.prev.as_ref().unwrap();
+        let harts = current.root.as_ref().unwrap().harts;
         fronts.insert(current.hart, current.node);
         while fronts.len() < harts as usize {
             let PrevVerifierNode::Branch(branch) = current.prev else {
                 unreachable!()
             };
-            current = branch.as_ref();
+            current = branch.as_ref().unwrap();
             fronts.entry(current.hart).or_insert(current.node);
         }
 
@@ -970,18 +951,23 @@ impl Explorerer {
                     n.as_ref().this.to_string()
                 ))
         );
+
+        // TODO Currently these does breadth first search by pushing to the back of the queue. It would be more
+        // efficient to do depth first search (since this is more likely to hit invalid paths earlier). I remember
+        // there was a reason this needed to push to back and be breadth first (but can't remember specifics), try
+        // making this depth first.
         match next_nodes {
             // If there was a non-racy node, enqueue this single node.
             Err((hart, non_racy_next)) => {
-                let mut branch_ptr = leaf.prev;
-                let branch = branch_ptr.as_mut();
-                let new_branch = NonNull::new(Box::into_raw(Box::new(VerifierNode {
+                let branch_ptr = leaf.prev;
+                let branch = branch_ptr.as_mut().unwrap();
+                let new_branch = Box::into_raw(Box::new(VerifierNode {
                     prev: PrevVerifierNode::Branch(branch_ptr),
                     root: branch.root,
                     hart,
                     node: non_racy_next,
-                    next: InnerNextVerifierNode::Leaf(leaf_ptr)
-                }))).unwrap();
+                    next: InnerNextVerifierNode::Leaf(leaf_ptr),
+                }));
                 leaf.prev = new_branch;
                 branch.next = InnerNextVerifierNode::Branch(vec![new_branch]);
 
@@ -989,33 +975,59 @@ impl Explorerer {
             }
             // If all nodes where racy, enqueue these nodes.
             Ok(racy_nodes) => {
-                let mut branch_ptr = leaf.prev;
-                let branch = branch_ptr.as_mut();
+                let branch_ptr = leaf.prev;
+                let branch = branch_ptr.as_mut().unwrap();
 
-                let new_branches = racy_nodes.iter().copied().map(|(hart, node)| {
-                    
-                    let new_branch = NonNull::new(Box::into_raw(Box::new(VerifierNode {
-                        prev: PrevVerifierNode::Branch(branch_ptr),
-                        root: branch.root,
-                        hart,
-                        node,
-                        next: InnerNextVerifierNode::Leaf(NonNull::new_unchecked(std::ptr::null_mut()))
-                    }))).unwrap();
-                    let new_leaf = NonNull::new(Box::into_raw(Box::new(VerifierLeafNode {
-                        prev: new_branch,
-                    })));
+                let (new_branches, new_leaves) = racy_nodes
+                    .iter()
+                    .copied()
+                    .map(|(hart, node)| {
+                        let new_branch = Box::into_raw(Box::new(VerifierNode {
+                            prev: PrevVerifierNode::Branch(branch_ptr),
+                            root: branch.root,
+                            hart,
+                            node,
+                            next: InnerNextVerifierNode::Leaf(null_mut()),
+                        }));
+                        let mut hart_fronts = leaf.hart_fronts.clone();
+                        hart_fronts.insert(hart, new_branch);
+                        let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
+                            prev: new_branch,
+                            variable_encounters: leaf.variable_encounters.clone(),
+                            hart_fronts,
+                        }));
 
-                    new_branch
-                }).collect();
-                
-                branch.next = InnerNextVerifierNode::Branch(new_branches)
+                        (new_branch, new_leaf)
+                    })
+                    .unzip::<_, _, Vec<_>, Vec<_>>();
+
+                branch.next = InnerNextVerifierNode::Branch(new_branches);
+                queue.extend(new_leaves);
             }
         }
     }
 }
 
-use itertools::Itertools;
-use std::borrow::Borrow;
+impl Drop for Explorerer {
+    fn drop(&mut self) {
+        unsafe {
+            let mut stack = Vec::new();
+            for root in self.roots.iter().copied() {
+                stack.push(root.as_ref().unwrap().next);
+                dealloc(root.cast(), Layout::new::<VerifierConfiguration>());
+            }
+            while let Some(current) = stack.pop() {
+                match &current.as_ref().unwrap().next {
+                    InnerNextVerifierNode::Branch(branch) => stack.extend_from_slice(&branch),
+                    InnerNextVerifierNode::Leaf(leaf) => {
+                        dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>());
+                    }
+                }
+                dealloc(current.cast(), Layout::new::<VerifierNode>());
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ExplorePathResult {
@@ -1023,6 +1035,7 @@ pub enum ExplorePathResult {
     Invalid,
     Continue(Explorerer),
 }
+
 impl ExplorePathResult {
     pub fn continued(self) -> Option<Explorerer> {
         match self {
@@ -1097,11 +1110,11 @@ pub enum InvalidExplanation {
 }
 
 // Get the number of harts of this sub-tree and record the path.
-unsafe fn get_backpath_harts(prev: NonNull<VerifierLeafNode>) -> Vec<usize> {
-    let mut current = prev.as_ref().prev;
+unsafe fn get_backpath_harts(prev: *mut VerifierLeafNode) -> Vec<usize> {
+    let mut current = prev.as_ref().unwrap().prev;
     let mut record = Vec::new();
-    while let PrevVerifierNode::Branch(branch) = current.as_ref().prev {
-        let r = match &branch.as_ref().next {
+    while let PrevVerifierNode::Branch(branch) = current.as_ref().unwrap().prev {
+        let r = match &branch.as_ref().unwrap().next {
             InnerNextVerifierNode::Branch(branches) => {
                 branches.iter().position(|&x| x == current).unwrap()
             }
@@ -1110,43 +1123,8 @@ unsafe fn get_backpath_harts(prev: NonNull<VerifierLeafNode>) -> Vec<usize> {
         record.push(r);
         current = branch
     }
-    let PrevVerifierNode::Root(root) = current.as_ref().prev else {
-        unreachable!()
-    };
+    assert!(matches!(current.as_ref().unwrap().prev, PrevVerifierNode::Root(_)));
     record
-}
-
-/// Creates a new verifier node from an AST node at the edge of a branch.
-unsafe fn simple_nonnull(
-    mut leaf: NonNull<VerifierLeafNode>,
-    node: NonNull<AstNode>,
-    hart: u8,
-) -> NonNull<VerifierNode> {
-    let mut leaf_ref = leaf.as_ref();
-    let mut branch_ref = leaf_ref.prev.as_ref();
-    let new = NonNull::new(Box::into_raw(Box::new(VerifierNode {
-        prev: PrevVerifierNode::Branch(leaf_ref.prev),
-        root: branch_ref.root,
-        hart,
-        node,
-        next: InnerNextVerifierNode::Leaf(leaf)
-    }))).unwrap();
-    leaf_ref.prev = new;
-    branch_ref.next = InnerNextVerifierNode::Branch(vec![new]);
-    
-    let ptr = alloc(Layout::new::<VerifierNode>()).cast();
-    ptr::write(
-        ptr,
-        VerifierNode {
-            prev: PrevVerifierNode::Branch(prev),
-            hart,
-            node,
-            next: Vec::new(),
-        },
-    );
-    let nonull = NonNull::new(ptr).unwrap();
-    prev.as_mut().next.push(nonull);
-    nonull
 }
 
 unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<AstNode>> {
@@ -1183,12 +1161,12 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 }
 
 unsafe fn find_state(
-    leaf: NonNull<VerifierLeafNode>, // The record of which children to follow from the root to reach the current position.
+    leaf: *mut VerifierLeafNode, // The record of which children to follow from the root to reach the current position.
     configuration: &ProgramConfiguration,
 ) -> State {
     let record = get_backpath_harts(leaf);
-    let root = leaf.as_ref().prev.as_ref().root;
-    let harts = root.as_ref().harts;
+    let root = leaf.as_ref().unwrap().prev.as_ref().unwrap().root;
+    let harts = root.as_ref().unwrap().harts;
 
     // Iterator to generate unique labels.
     const N: u8 = b'z' - b'a';
@@ -1203,9 +1181,9 @@ unsafe fn find_state(
 
     // Iterate forward to find the values.
     let mut state = State::new(harts, configuration);
-    let mut current = root.as_ref().next;
+    let mut current = root.as_ref().unwrap().next;
     for next in record.iter().rev() {
-        let vnode = current.as_ref();
+        let vnode = current.as_ref().unwrap();
         let hart = vnode.hart;
         let hartu = hart as usize;
         match &vnode.node.as_ref().this {
@@ -1315,7 +1293,7 @@ unsafe fn find_state(
             Instruction::Unreachable(_) => {}
             x => todo!("{x:?}"),
         }
-        current = match &current.as_ref().next {
+        current = match &current.as_ref().unwrap().next {
             InnerNextVerifierNode::Branch(b) => b[*next],
             InnerNextVerifierNode::Leaf(_) => unreachable!(),
         };
@@ -1326,9 +1304,9 @@ unsafe fn find_state(
 fn find_state_store(
     state: &mut State,
     hartu: usize,
-    to: &Register,
-    from: &Register,
-    offset: &Offset,
+    to: impl Borrow<Register>,
+    from: impl Borrow<Register>,
+    offset: impl Borrow<Offset>,
     len: u64,
 ) {
     let Some(to_value) = state.registers[hartu].get(to) else {
@@ -1342,14 +1320,14 @@ fn find_state_store(
             tag: to_label,
             offset: to_offset,
         }))) => {
-            let (locality, to_type) = state.configuration.get(to_label.into()).unwrap();
+            let (locality, to_type) = state.configuration.get(<&Label>::from(to_label)).unwrap();
             // We should have already checked the type is large enough for the store.
             let sizeof = size(to_type);
             let final_offset = MemoryValueU64::from(len)
                 .add(to_offset)
                 .unwrap()
                 .add(&MemoryValueU64::from(
-                    u64::try_from(offset.value.value).unwrap(),
+                    u64::try_from(offset.borrow().value.value).unwrap(),
                 ))
                 .unwrap();
             debug_assert!(final_offset.lte(&sizeof));
@@ -1359,7 +1337,7 @@ fn find_state_store(
                 offset: to_offset
                     .clone()
                     .add(&MemoryValueU64::from(
-                        u64::try_from(offset.value.value).unwrap(),
+                        u64::try_from(offset.borrow().value.value).unwrap(),
                     ))
                     .unwrap(),
             }));
@@ -1372,9 +1350,9 @@ fn find_state_store(
 fn find_state_load(
     state: &mut State,
     hartu: usize,
-    to: &Register,
-    from: &Register,
-    offset: &Offset,
+    to: impl Borrow<Register>,
+    from: impl Borrow<Register>,
+    offset: impl Borrow<Offset>,
     len: u64,
 ) {
     let Some(from_value) = state.registers[hartu].get(from) else {
@@ -1385,14 +1363,14 @@ fn find_state_load(
             tag: from_label,
             offset: from_offset,
         }))) => {
-            let (locality, from_type) = state.configuration.get(from_label.into()).unwrap();
+            let (locality, from_type) = state.configuration.get(<&Label>::from(from_label)).unwrap();
             // We should have already checked the type is large enough for the load.
             let sizeof = size(from_type);
             let final_offset = MemoryValueU64::from(len)
                 .add(from_offset)
                 .unwrap()
                 .add(&MemoryValueU64::from(
-                    u64::try_from(offset.value.value).unwrap(),
+                    u64::try_from(offset.borrow().value.value).unwrap(),
                 ))
                 .unwrap();
 
@@ -1404,13 +1382,13 @@ fn find_state_load(
                 offset: from_offset
                     .clone()
                     .add(&MemoryValueU64::from(
-                        u64::try_from(offset.value.value).unwrap(),
+                        u64::try_from(offset.borrow().value.value).unwrap(),
                     ))
                     .unwrap(),
                 len,
             };
             let value = state.memory.get(&memloc).unwrap();
-            state.registers[hartu].insert(*to, value).unwrap();
+            state.registers[hartu].insert(to.borrow().clone(), value).unwrap();
         }
         x => todo!("{x:?}"),
     }
