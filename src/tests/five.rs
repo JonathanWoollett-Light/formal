@@ -1,5 +1,6 @@
 use crate::verifier_types::*;
 use crate::*;
+use tracing::info;
 
 #[test]
 fn five() {
@@ -30,6 +31,8 @@ fn five() {
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
         queue.assert();
+
+        panic!("didn't get here");
 
         let queue = asserter.matches(
             "queue: [\
