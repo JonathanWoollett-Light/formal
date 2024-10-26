@@ -1,20 +1,20 @@
 use crate::ast::*;
 use crate::verifier_types::*;
+use itertools::Itertools;
 use std::alloc::dealloc;
 use std::alloc::Layout;
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::iter::once;
 use std::ops::Range;
 use std::ptr;
+use std::ptr::null_mut;
 use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
-use itertools::Itertools;
-use std::borrow::Borrow;
-use std::ptr::null_mut;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -73,9 +73,8 @@ pub enum OuterVerifierNode {
     Branch(VerifierNode),
 }
 
-
-
 // TODO Support some amount of state caching so it doesn't need to re-traverse the whole tree each step to find state.
+#[derive(Debug)]
 pub struct VerifierLeafNode {
     // The previous node.
     pub prev: *mut VerifierNode,
@@ -211,9 +210,9 @@ impl Explorerer {
                     prev = PrevVerifierNode::Branch(nonull);
                     hart_fronts.insert(hart, nonull);
                 }
-                debug_assert!(matches!(prev,PrevVerifierNode::Branch(_)));
+                let PrevVerifierNode::Branch(prev) = prev else { unreachable!() };
                 let leaf = Box::into_raw(Box::new(VerifierLeafNode {
-                    prev: null_mut(),
+                    prev,
                     variable_encounters: BTreeMap::new(),
                     hart_fronts,
                 }));
@@ -255,6 +254,7 @@ impl Explorerer {
         // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
         // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
         let leaf = leaf_ptr.as_mut().unwrap();
+        debug!("leaf: {leaf:?}");
         let branch = leaf.prev.as_ref().unwrap();
         let ast = branch.node;
         let hart = branch.hart;
@@ -429,7 +429,11 @@ impl Explorerer {
                     InnerNextVerifierNode::Leaf(l) => {
                         skip.insert(l);
                         debug_assert_eq!(
-                            l.as_ref().unwrap().variable_encounters.get(&recent).unwrap(),
+                            l.as_ref()
+                                .unwrap()
+                                .variable_encounters
+                                .get(&recent)
+                                .unwrap(),
                             encounter
                         );
                         dealloc(leaf_ptr.cast(), Layout::new::<VerifierLeafNode>());
@@ -578,7 +582,8 @@ impl Explorerer {
                 tag: from_label,
                 offset: from_offset,
             })))) => {
-                let (_locality, ttype) = state.configuration.get(<&Label>::from(from_label)).unwrap();
+                let (_locality, ttype) =
+                    state.configuration.get(<&Label>::from(from_label)).unwrap();
                 // If attempting to access outside the memory space for the label.
                 let full_offset = MemoryValueU64::from(type_size)
                     .add(from_offset)
@@ -625,7 +630,8 @@ impl Explorerer {
                 tag: from_label,
                 offset: from_offset,
             })))) => {
-                let (_locality, ttype) = state.configuration.get(<&Label>::from(from_label)).unwrap();
+                let (_locality, ttype) =
+                    state.configuration.get(<&Label>::from(from_label)).unwrap();
 
                 // If attempting to access outside the memory space for the label.
                 let full_offset = MemoryValueU64::from(type_size)
@@ -1123,7 +1129,10 @@ unsafe fn get_backpath_harts(prev: *mut VerifierLeafNode) -> Vec<usize> {
         record.push(r);
         current = branch
     }
-    assert!(matches!(current.as_ref().unwrap().prev, PrevVerifierNode::Root(_)));
+    assert!(matches!(
+        current.as_ref().unwrap().prev,
+        PrevVerifierNode::Root(_)
+    ));
     record
 }
 
@@ -1363,7 +1372,8 @@ fn find_state_load(
             tag: from_label,
             offset: from_offset,
         }))) => {
-            let (locality, from_type) = state.configuration.get(<&Label>::from(from_label)).unwrap();
+            let (locality, from_type) =
+                state.configuration.get(<&Label>::from(from_label)).unwrap();
             // We should have already checked the type is large enough for the load.
             let sizeof = size(from_type);
             let final_offset = MemoryValueU64::from(len)
@@ -1388,7 +1398,9 @@ fn find_state_load(
                 len,
             };
             let value = state.memory.get(&memloc).unwrap();
-            state.registers[hartu].insert(to.borrow().clone(), value).unwrap();
+            state.registers[hartu]
+                .insert(to.borrow().clone(), value)
+                .unwrap();
         }
         x => todo!("{x:?}"),
     }
