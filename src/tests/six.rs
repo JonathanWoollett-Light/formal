@@ -21,7 +21,8 @@ fn six() {
         // The initial state of the queue contains the 1st instruction for
         // the 1st hart for each number of running harts (in this case we
         // are checking program for systems with 1 hart and with 2 harts).
-        let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/six.s:2:0\" }, { hart: 1/2, instruction: \"./assets/six.s:2:0\" }]");
+        // The 1st instruction processed is the 1st hart out of 1 harts looking at the `_start:`.
+        let current = asserter.matches("current: { hart: 1/1, instruction: \"./assets/six.s:2:0\" }");
         // We start with no types explored so none excluded.
         let empty_excluded = asserter.matches("excluded: {}");
         // There are no racy instructions when queueing up the next instructions.
@@ -30,9 +31,7 @@ fn six() {
         let base_assertions = &(&config_is_empty & &is_not_racy) & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
-
-        panic!("didn't get here");
+        current.assert();
 
         let queue = asserter.matches(
             "queue: [\

@@ -15,6 +15,7 @@ use thiserror::Error;
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
+use tracing::info;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -169,6 +170,8 @@ impl Explorerer {
             })
             .collect::<Vec<_>>();
 
+        info!("roots: {roots:?}");
+
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
         // different inputs and often follow different execution paths (effectively having a different AST).
@@ -238,6 +241,7 @@ impl Explorerer {
     pub unsafe fn next_step(mut self) -> ExplorePathResult {
         trace!("excluded: {:?}", self.excluded);
         debug!("configuration: {:?}", self.configuration);
+        debug!("queue: {:?}", self.queue.iter().map(|ptr|ptr.as_ref().unwrap()).collect::<Vec<_>>());
 
         let Some(leaf_ptr) = self.queue.front().copied() else {
             return ExplorePathResult::Valid(ValidPathResult {
