@@ -28,7 +28,7 @@ pub fn setup_test(
 
     // Create base subscriber.
     let registry = tracing_subscriber::fmt::Subscriber::builder()
-        .with_max_level(tracing_subscriber::filter::LevelFilter::TRACE)
+        .with_max_level(tracing_subscriber::filter::LevelFilter::DEBUG)
         .with_test_writer()
         .with_writer(file)
         .with_ansi(false)

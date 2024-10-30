@@ -1,26 +1,64 @@
 use std::alloc::{alloc, Layout};
 use std::fmt;
+use std::fs::read_to_string;
 use std::path::PathBuf;
 use std::ptr::{write, NonNull};
 
 #[derive(Debug)]
 pub struct AstNode {
     pub prev: Option<NonNull<AstNode>>,
-    pub span: Span,
-    pub this: Instruction,
+    pub value: AstValue,
     pub next: Option<NonNull<AstNode>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct AstValue {
+    pub span: Span,
+    pub this: Instruction,
+}
+
+impl AsRef<AstValue> for AstNode {
+    fn as_ref(&self) -> &AstValue {
+        &self.value
+    }
+}
+
+// TODO It should really just be a `Range<usize>` with the starting byte and ending byte, `row` and `column` should then be calculated.
+#[derive(Debug, Clone)]
 pub struct Span {
-    path: PathBuf,
-    row: usize,
-    column: usize,
+    pub path: PathBuf,
+    pub span: std::ops::Range<usize>,
+}
+impl Span {
+    /// Returns starting row.
+    fn row(&self) -> Result<usize, std::io::Error> {
+        Ok(read_to_string(&self.path)?
+            .chars()
+            .take(self.span.start)
+            .filter(|c| *c == '\n')
+            .count()
+            + 1)
+    }
+    /// Returns starting column.
+    fn column(&self) -> Result<usize, std::io::Error> {
+        Ok(read_to_string(&self.path)?
+            .chars()
+            .skip(self.span.start)
+            .take_while(|c| *c != '\n')
+            .count()
+            + 1)
+    }
 }
 
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}:{}", self.path.display(), self.row, self.column)
+        write!(
+            f,
+            "{}:{}:{}",
+            self.path.display(),
+            self.row().unwrap(),
+            self.column().unwrap()
+        )
     }
 }
 
@@ -28,7 +66,6 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
     let mut front_opt = None;
     let mut a = 0;
     let mut b = 0;
-    let mut row = 1;
     while b < src.len() {
         // See https://stackoverflow.com/questions/1761051/difference-between-n-and-r
         #[cfg(target_os = "windows")]
@@ -39,11 +76,9 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
                     &mut front_opt,
                     Span {
                         path: path.clone(),
-                        row,
-                        column: 0,
+                        span: a..b,
                     },
                 );
-                row += 1;
                 a = b + 2;
             }
             _ => {}
@@ -60,20 +95,11 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
                     column: 0,
                 },
             );
-            row += 1;
             a = b + 1;
         }
         b += 1;
     }
-    alloc_node(
-        &src[a..b],
-        &mut front_opt,
-        Span {
-            path,
-            row,
-            column: 0,
-        },
-    );
+    alloc_node(&src[a..b], &mut front_opt, Span { path, span: a..b });
 
     let mut first = None;
     while let Some(current) = front_opt {
@@ -110,8 +136,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
             ptr,
             AstNode {
                 prev: *front_opt,
-                span,
-                this: instr,
+                value: AstValue { span, this: instr },
                 next: None,
             },
         );

@@ -34,7 +34,7 @@ pub unsafe fn remove_branches(
     let mut first = true;
     while let Some(current) = next {
         next = current.as_ref().next;
-        match current.as_ref().this {
+        match current.as_ref().as_ref().this {
             Bne(_) | Blt(_) | Beq(_) | Beqz(_) | Bnez(_) | Bge(_) => {
                 if !jumped.contains(&current) {
                     if first {

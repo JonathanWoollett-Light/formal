@@ -14,8 +14,8 @@ use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
 use tracing::debug;
 use tracing::error;
-use tracing::trace;
 use tracing::info;
+use tracing::trace;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -142,8 +142,8 @@ impl Explorerer {
         let first = ast.unwrap().as_ref();
         let second_ptr = first.next.unwrap();
         let second = second_ptr.as_ref();
-        match &first.this {
-            Instruction::Global(Global { tag: start_tag }) => match &second.this {
+        match &first.as_ref().this {
+            Instruction::Global(Global { tag: start_tag }) => match &second.as_ref().this {
                 Instruction::Label(LabelInstruction { tag }) => {
                     assert_eq!(start_tag, tag);
                 }
@@ -239,9 +239,15 @@ impl Explorerer {
     }
     // Verify node before front leaf node, then queue new nodes.
     pub unsafe fn next_step(mut self) -> ExplorePathResult {
-        trace!("excluded: {:?}", self.excluded);
-        debug!("configuration: {:?}", self.configuration);
-        debug!("queue: {:?}", self.queue.iter().map(|ptr|ptr.as_ref().unwrap()).collect::<Vec<_>>());
+        debug!("excluded: {:?}", self.excluded);
+        debug!("{:?}", self.configuration);
+        trace!(
+            "queue: {:?}",
+            self.queue
+                .iter()
+                .map(|ptr| ptr.as_ref().unwrap())
+                .collect::<Vec<_>>()
+        );
 
         let Some(leaf_ptr) = self.queue.front().copied() else {
             return ExplorePathResult::Valid(ValidPathResult {
@@ -258,25 +264,21 @@ impl Explorerer {
         // and reduce the sets, e.g. (assuming the only data types are u8, u16 and u32)
         // if `[a:u8,b:u8]`, `[a:u8,b:u8]` and `[a:u8,b:u8]` are present in `excluded` then `[a:u8]` is added.
         let leaf = leaf_ptr.as_mut().unwrap();
-        debug!("leaf: {leaf:?}");
+        trace!("leaf: {leaf:?}");
         let branch = leaf.prev.as_ref().unwrap();
         let ast = branch.node;
         let hart = branch.hart;
         let root = branch.root.as_ref().unwrap();
         let harts = root.harts;
 
-        debug!(
-            "current: {{ hart: {}/{}, instruction: \"{}\" }}",
-            hart + 1,
-            harts,
-            branch.node.as_ref().span
-        );
+        debug!("hart: {}/{}", hart + 1, harts);
+        debug!("{:?}", branch.node.as_ref().value);
 
         // Record all the AST node that are reachable.
         self.touched.insert(ast);
 
         // Check the instruction is valid and make typing decisions.
-        match &branch.node.as_ref().this {
+        match &branch.node.as_ref().as_ref().this {
             // Instructions which cannot be invalid and do not affect type exploration.
             Instruction::Unreachable(_)
             | Instruction::Li(_)
@@ -370,12 +372,18 @@ impl Explorerer {
             x => todo!("{x:?}"),
         }
         self.queue_up(leaf_ptr);
+        // The leaf has to maintain it's position at the front of the queue until we queue up new
+        // nodes or we backtrace along an invalid path, when an invalid path is encountered we call
+        // `outer_invalid_path` which calls `invalid_path` which will deallocate the leaf and set
+        // new leaves (and return and never reach this statement).
+        // When we only queue up new leaves, the current leaf remains so we need to pop it off here.
+        self.queue.pop_front();
 
         return ExplorePathResult::Continue(self);
     }
 
     pub unsafe fn outer_invalid_path(mut self) -> ExplorePathResult {
-        // Deallocate node up to the 1st occurence of the most recently encountered variable.
+        // Deallocate nodes up to the 1st occurence of the most recently encountered variable.
         // If there is an invalid path without any variables defined, then there is no possible
         // valid path.
         // If the most recently encountered variable has exhausted all possible types, then move
@@ -444,7 +452,7 @@ impl Explorerer {
                     }
                 }
                 // If a variable is present in this instruction.
-                if let Some(var) = current.node.as_ref().this.variable() {
+                if let Some(var) = current.node.as_ref().as_ref().this.variable() {
                     // If this node is the 1st where the variable is encountered.
                     if current_ptr == *variable_encounters.get(var).unwrap() {
                         variable_encounters.remove(var);
@@ -676,7 +684,7 @@ impl Explorerer {
         let jumped = &mut self.jumped;
         // TOOD We duplicate so much work doing `find_state` in a bunch of places and
         // multiple times when the state hasn't change, we should avoid doing this call
-        // here (and remove the it in other places).
+        // here (and remove it in other places too).
         let state = find_state(leaf_ptr, configuration);
         let leaf = leaf_ptr.as_mut().unwrap();
 
@@ -693,18 +701,18 @@ impl Explorerer {
             fronts.entry(current.hart).or_insert(current.node);
         }
 
-        trace!(
+        debug!(
             "fronts: {:?}",
             fronts
                 .iter()
-                .map(|(hart, ast)| (hart, ast.as_ref().this.to_string()))
+                .map(|(hart, ast)| (hart, ast.as_ref().as_ref().this.to_string()))
                 .collect::<BTreeMap<_, _>>()
         );
 
         let followup = |node: NonNull<AstNode>,
                         hart: u8|
          -> Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>> {
-            match &node.as_ref().this {
+            match &node.as_ref().as_ref().this {
                 // Non-racy.
                 Instruction::Label(_)
                 | Instruction::La(_)
@@ -764,7 +772,7 @@ impl Explorerer {
             .rev()
             .filter_map(|(&hart, &node)| {
                 let node_ref = node.as_ref();
-                match &node_ref.this {
+                match &node_ref.as_ref().this {
                     // Conditional.
                     Instruction::Blt(Blt { rhs, lhs, label }) => {
                         let lhs = state.registers[hart as usize].get(lhs).unwrap();
@@ -945,7 +953,7 @@ impl Explorerer {
 
         debug!("racy: {}", next_nodes.is_ok());
 
-        debug!(
+        trace!(
             "next: {:?}",
             next_nodes
                 .as_ref()
@@ -953,12 +961,12 @@ impl Explorerer {
                     .iter()
                     .map(|(h, n)| format!(
                         "{{ hart: {h}, instruction: {} }}",
-                        n.as_ref().this.to_string()
+                        n.as_ref().as_ref().this.to_string()
                     ))
                     .collect::<Vec<_>>())
                 .map_err(|(h, n)| format!(
                     "{{ hart: {h}, instruction: {} }}",
-                    n.as_ref().this.to_string()
+                    n.as_ref().as_ref().this.to_string()
                 ))
         );
 
@@ -985,13 +993,23 @@ impl Explorerer {
             }
             // If all nodes where racy, enqueue these nodes.
             Ok(racy_nodes) => {
+                debug!(
+                    "racy_nodes: {:?}",
+                    racy_nodes
+                        .iter()
+                        .map(|(hart, node)| (hart, node.as_ref().value.clone()))
+                        .collect::<Vec<_>>()
+                );
+
                 let branch_ptr = leaf.prev;
                 let branch = branch_ptr.as_mut().unwrap();
+                debug!("racy node branch: {:?}", branch.node.as_ref().value);
 
                 let (new_branches, new_leaves) = racy_nodes
                     .iter()
                     .copied()
                     .map(|(hart, node)| {
+                        debug!("racy node new node: {:?}", node.as_ref().value);
                         let new_branch = Box::into_raw(Box::new(VerifierNode {
                             prev: PrevVerifierNode::Branch(branch_ptr),
                             root: branch.root,
@@ -1142,7 +1160,7 @@ unsafe fn get_backpath_harts(prev: *mut VerifierLeafNode) -> Vec<usize> {
 
 unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<AstNode>> {
     // Check start
-    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().this {
+    if let Instruction::Label(LabelInstruction { tag }) = &node.as_ref().as_ref().this {
         if tag == label {
             return Some(node);
         }
@@ -1151,7 +1169,7 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace backwards.
     let mut back = node;
     while let Some(prev) = back.as_ref().prev {
-        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().this {
+        if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().as_ref().this {
             if tag == label {
                 return Some(prev);
             }
@@ -1162,7 +1180,7 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace forward.
     let mut front = node;
     while let Some(next) = front.as_ref().next {
-        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().this {
+        if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().as_ref().this {
             if tag == label {
                 return Some(next);
             }
@@ -1199,7 +1217,7 @@ unsafe fn find_state(
         let vnode = current.as_ref().unwrap();
         let hart = vnode.hart;
         let hartu = hart as usize;
-        match &vnode.node.as_ref().this {
+        match &vnode.node.as_ref().as_ref().this {
             // Instructions with no side affects.
             Instruction::Label(_)
             | Instruction::Blt(_)

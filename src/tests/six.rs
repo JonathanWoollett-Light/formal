@@ -1,3 +1,6 @@
+use std::fs::read_to_string;
+use std::path::PathBuf;
+
 use crate::verifier_types::*;
 use crate::*;
 use tracing::info;
@@ -7,6 +10,9 @@ fn six() {
     let (guard, mut ast, asserter) = super::setup_test("six");
 
     let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
+    let path = PathBuf::from("./assets/six.s");
+    use crate::Instruction;
+    use crate::Locality;
 
     // Find valid path.
     let ValidPathResult {
@@ -17,223 +23,120 @@ fn six() {
         // With each step we check the logs to ensure the state is as expected.
 
         // At the start of the program there are no found variables so no initial types for variables.
-        let config_is_empty = asserter.matches("configuration: ProgramConfiguration({})");
-        // The initial state of the queue contains the 1st instruction for
-        // the 1st hart for each number of running harts (in this case we
-        // are checking program for systems with 1 hart and with 2 harts).
-        // The 1st instruction processed is the 1st hart out of 1 harts looking at the `_start:`.
-        let current = asserter.matches("current: { hart: 1/1, instruction: \"./assets/six.s:2:0\" }");
+        let mut program_configuration = ProgramConfiguration::new();
+        let config_is_empty = asserter.debug(&program_configuration);
         // We start with no types explored so none excluded.
         let empty_excluded = asserter.matches("excluded: {}");
         // There are no racy instructions when queueing up the next instructions.
         let is_not_racy = asserter.matches("racy: false");
         // The initial conditions.
-        let base_assertions = &(&config_is_empty & &is_not_racy) & &empty_excluded;
-        explorerer = explorerer.next_step().continued().unwrap();
-        base_assertions.assert().reset();
-        current.assert();
+        let base_assertions = &config_is_empty & &is_not_racy & &empty_excluded;
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/2, instruction: \"./assets/six.s:2:0\" }, \
-            { hart: 1/1, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
+        // The initial state of the queue contains the 1st instruction for
+        // the 1st hart for each number of running harts (in this case we
+        // are checking program for systems with 1 hart and with 2 harts).
+        // The 1st instruction processed is the 1st hart out of 1 harts looking at the `_start:`.
+        let hart1of1 = asserter.matches("hart: 1/1");
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 16..23,
+            },
+            this: Instruction::Label(LabelInstruction {
+                tag: "_start".into(),
+            }),
+        });
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart1of1.assert().reset();
+        current.assert().reset();
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:17:0\" }, \
-            { hart: 2/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
+        // Since we enque nodes to the back of the queue and pop from the front we perform a breadth
+        // first search that will cover all harts (as in cover system with 1 hart then system with 2
+        // harts) before advancing any.
+        let hart1of2 = asserter.matches("hart: 1/2");
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart1of2.assert().reset();
+        current.assert().reset();
 
-        let u8_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
-        let base_assertions = &u8_config & &empty_excluded.repeat() & is_not_racy.repeat();
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 2/2, instruction: \"./assets/six.s:17:0\" }, \
-            { hart: 1/1, instruction: \"./assets/six.s:18:0\" }\
-        ]",
-        );
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 819..842,
+            },
+            this: Instruction::Define(Define {
+                label: "value".into(),
+                locality: Some(Locality::Global),
+                cast: Some(Type::U32),
+            }),
+        });
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart1of1.assert().reset();
+        current.assert().reset();
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:18:0\" }, \
-            { hart: 2/2, instruction: \"./assets/six.s:18:0\" }\
-        ]",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        base_assertions.assert().reset();
-        queue.assert();
+        // Following the define the configuration should be updated.
+        program_configuration.insert("value".into(), 1, (Locality::Global, Type::U32));
+        let config = asserter.debug(&program_configuration);
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 2/2, instruction: \"./assets/six.s:18:0\" }, \
-            { hart: 1/1, instruction: \"./assets/six.s:21:0\" }\
-        ]",
-        );
+        let hart2of2 = asserter.matches("hart: 2/2");
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 844..860,
+            },
+            this: Instruction::La(La {
+                register: Register::X5,
+                label: "value".into(),
+            }),
+        });
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of1.assert().reset();
+        current.assert().reset();
+
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
 
         let is_racy = asserter.matches("racy: true");
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:21:0\" }, \
-            { hart: 2/2, instruction: \"./assets/six.s:21:0\" }\
-        ]",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        u8_config.assert().reset();
-        empty_excluded.assert().reset();
-        is_racy.assert().reset();
-        queue.assert();
+        let base_assertions = &config & &is_racy & &empty_excluded;
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 2/2, instruction: \"./assets/six.s:21:0\" }, \
-            { hart: 1/1, instruction: \"./assets/six.s:22:0\" }\
-        ]",
-        );
+        // This repition is a symptom of an infinite loop.
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 880..892,
+            },
+            this: Instruction::Li(Li {
+                register: Register::X6,
+                immediate: Immediate { value: 0 },
+            }),
+        });
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart1of1.assert().reset();
+        current.assert().reset();
 
-        // Since we are storing a word in `value` it cannot be u8 as this would store outside of memory.
-        u8_config.reset();
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:22:0\" }, \
-            { hart: 1/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        let u8_excluded = asserter.matches(
-            "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)})\
-        }",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        u8_config.assert();
-        queue.assert();
-        u8_excluded.assert().reset();
-
-        // Iterate until excluding value as i8.
-        for _ in 0..8 {
-            explorerer = explorerer.next_step().continued().unwrap();
-        }
-
-        let i8_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:22:0\" }, \
-            { hart: 1/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        let excluded = asserter.matches(
-            "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)})\
-        }",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        (i8_config & queue & excluded).assert();
-
-        // Iterate until excluding value as u16.
-        for _ in 0..8 {
-            explorerer = explorerer.next_step().continued().unwrap();
-        }
-
-        let u16_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:22:0\" }, \
-            { hart: 1/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        let excluded = asserter.matches(
-            "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)})\
-        }",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        (u16_config & queue & excluded).assert();
-
-        for _ in 0..8 {
-            explorerer = explorerer.next_step().continued().unwrap();
-        }
-
-        let i32_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:22:0\" }, \
-            { hart: 1/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        let excluded = asserter.matches(
-            "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)}), \
-            ProgramConfiguration({\"value\": (Global, I16)})\
-        }",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        (i32_config & queue & excluded).assert();
-
-        // The valid path is now entered with `value` as `u32`.
-
-        let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/six.s:2:0\" }, { hart: 1/2, instruction: \"./assets/six.s:2:0\" }]");
-        let excluded = asserter.matches(
-            "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)}), \
-            ProgramConfiguration({\"value\": (Global, I16)})\
-        }",
-        );
-        let base_assertions = (&config_is_empty.repeat() & &excluded) & is_not_racy.repeat();
+        // Since the system with 2 harts has 1 front at `li x6, 0` where the next hart is `sw` and
+        // 1 front at `_start:` where the next hart is `#$ value global u32` it's not racy since it
+        // can advance a hart without hitting evaluating a racy node
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
-        queue.assert();
+        hart2of2.assert().reset();
+        current.assert().reset();
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/2, instruction: \"./assets/six.s:2:0\" }, \
-            { hart: 1/1, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        base_assertions.assert().reset();
-        queue.assert();
+        todo!();
 
-        let queue = asserter.matches(
-            "queue: [\
-            { hart: 1/1, instruction: \"./assets/six.s:17:0\" }, \
-            { hart: 2/2, instruction: \"./assets/six.s:17:0\" }\
-        ]",
-        );
-        explorerer = explorerer.next_step().continued().unwrap();
-        base_assertions.assert().reset();
-        queue.assert();
-
-        for _ in 0..54 {
-            explorerer = explorerer.next_step().continued().unwrap();
-        }
         explorerer.next_step().valid().unwrap()
     };
 
