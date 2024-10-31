@@ -809,11 +809,16 @@ impl Explorerer {
                         let rhs = state.registers[hart as usize].get(rhs).unwrap();
                         match lhs.compare(rhs) {
                             Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                                
                                 jumped.insert(node);
                                 let label_node = find_label(node, out).unwrap();
+                                info!("bne jumped: {:?}", label_node.as_ref().value);
                                 followup(label_node, hart)
                             }
-                            Some(RangeOrdering::Equal) => followup(node_ref.next.unwrap(), hart),
+                            Some(RangeOrdering::Equal) => {
+                                info!("bne no jump");
+                                followup(node_ref.next.unwrap(), hart)
+                            },
                             _ => todo!(),
                         }
                     }
@@ -953,7 +958,7 @@ impl Explorerer {
 
         debug!("racy: {}", next_nodes.is_ok());
 
-        trace!(
+        debug!(
             "next: {:?}",
             next_nodes
                 .as_ref()
@@ -1030,7 +1035,11 @@ impl Explorerer {
                     .unzip::<_, _, Vec<_>, Vec<_>>();
 
                 branch.next = InnerNextVerifierNode::Branch(new_branches);
+
+                debug!("racy new_leaves: {:?}", new_leaves.iter().map(|leaf|&leaf.as_ref().unwrap().prev.as_ref().unwrap().node.as_ref().value).collect::<Vec<_>>());
+                debug!("queue before racy: {:?}", queue);
                 queue.extend(new_leaves);
+                debug!("queue after racy: {:?}", queue);
             }
         }
     }

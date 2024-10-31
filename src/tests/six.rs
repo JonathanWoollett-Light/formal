@@ -180,6 +180,8 @@ fn six() {
                 },
             }),
         });
+
+        // 1/16
         let current = lw.clone();
         let base_assertions = &config & &is_not_racy & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
@@ -194,7 +196,7 @@ fn six() {
         hart1of2.assert().reset();
         current.assert().reset();
 
-        let current = asserter.debug(AstValue {
+        let li_t2 = asserter.debug(AstValue {
             span: Span {
                 path: path.clone(),
                 span: 1068..1080,
@@ -204,6 +206,7 @@ fn six() {
                 immediate: Immediate { value: 0 },
             }),
         });
+        let current = li_t2.clone();
         let base_assertions = &config & &is_not_racy & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
@@ -218,7 +221,7 @@ fn six() {
         hart1of2.assert().reset();
         current.assert().reset();
 
-        let current = asserter.debug(AstValue {
+        let bne = asserter.debug(AstValue {
             span: Span {
                 path: path.clone(),
                 span: 1082..1106,
@@ -229,6 +232,7 @@ fn six() {
                 out: "_invalid".into(),
             }),
         });
+        let current = bne.clone();
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
         hart1of1.assert().reset();
@@ -249,6 +253,7 @@ fn six() {
         hart1of2.assert().reset();
         current.assert().reset();
 
+        // 2/16
         let current = lw.clone();
         let base_assertions = &config & &is_not_racy & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
@@ -284,11 +289,282 @@ fn six() {
         hart2of2.assert().reset();
         current.assert().reset();
 
+        // 3/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
         explorerer = explorerer.next_step().continued().unwrap();
-        todo!();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 4/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 5/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        // 6/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 7/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = sw.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = sw.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 8/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        // 9/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        // 10/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 11/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        // 12/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // 13/16
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = li_t2.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = bne.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
 
         explorerer.next_step().valid().unwrap()
     };
+
+    info!("configuration: {configuration:?}");
+    info!("touched: {touched:?}");
+    info!("jumped: {jumped:?}");
 
     // Optimize based on path.
     assert_eq!(
