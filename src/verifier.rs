@@ -993,7 +993,7 @@ impl Explorerer {
             }
             // If all nodes where racy, enqueue these nodes.
             Ok(racy_nodes) => {
-                debug!(
+                trace!(
                     "racy_nodes: {:?}",
                     racy_nodes
                         .iter()
@@ -1003,13 +1003,13 @@ impl Explorerer {
 
                 let branch_ptr = leaf.prev;
                 let branch = branch_ptr.as_mut().unwrap();
-                debug!("racy node branch: {:?}", branch.node.as_ref().value);
+                trace!("racy node branch: {:?}", branch.node.as_ref().value);
 
                 let (new_branches, new_leaves) = racy_nodes
                     .iter()
                     .copied()
                     .map(|(hart, node)| {
-                        debug!("racy node new node: {:?}", node.as_ref().value);
+                        trace!("racy node new node: {:?}", node.as_ref().value);
                         let new_branch = Box::into_raw(Box::new(VerifierNode {
                             prev: PrevVerifierNode::Branch(branch_ptr),
                             root: branch.root,

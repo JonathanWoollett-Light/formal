@@ -60,7 +60,7 @@ fn six() {
         hart1of2.assert().reset();
         current.assert().reset();
 
-        let current = asserter.debug(AstValue {
+        let define = asserter.debug(AstValue {
             span: Span {
                 path: path.clone(),
                 span: 819..842,
@@ -71,6 +71,7 @@ fn six() {
                 cast: Some(Type::U32),
             }),
         });
+        let current = define.clone();
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
         hart1of1.assert().reset();
@@ -87,7 +88,7 @@ fn six() {
         hart2of2.assert().reset();
         current.assert().reset();
 
-        let current = asserter.debug(AstValue {
+        let la = asserter.debug(AstValue {
             span: Span {
                 path: path.clone(),
                 span: 844..860,
@@ -97,6 +98,7 @@ fn six() {
                 label: "value".into(),
             }),
         });
+        let current = la.clone();
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
         hart1of1.assert().reset();
@@ -107,11 +109,13 @@ fn six() {
         hart2of2.assert().reset();
         current.assert().reset();
 
+        // With only 1 hart on the system with 1 hart, when it encounters a racy instruction it has
+        // no other option but to immedately evaluate it.
         let is_racy = asserter.matches("racy: true");
         let base_assertions = &config & &is_racy & &empty_excluded;
 
         // This repition is a symptom of an infinite loop.
-        let current = asserter.debug(AstValue {
+        let li_t1 = asserter.debug(AstValue {
             span: Span {
                 path: path.clone(),
                 span: 880..892,
@@ -121,6 +125,7 @@ fn six() {
                 immediate: Immediate { value: 0 },
             }),
         });
+        let current = li_t1.clone();
         explorerer = explorerer.next_step().continued().unwrap();
         base_assertions.assert().reset();
         hart1of1.assert().reset();
@@ -135,6 +140,151 @@ fn six() {
         hart2of2.assert().reset();
         current.assert().reset();
 
+        let sw = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 894..909,
+            },
+            this: Instruction::Sw(Sw {
+                to: Register::X5,
+                from: Register::X6,
+                offset: Offset {
+                    value: Immediate { value: 0 },
+                },
+            }),
+        });
+        let current = sw.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of1.assert().reset();
+        current.assert().reset();
+
+        let current = define.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let lw = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 1051..1066,
+            },
+            this: Instruction::Lw(Lw {
+                to: Register::X6,
+                from: Register::X5,
+                offset: Offset {
+                    value: Immediate { value: 0 },
+                },
+            }),
+        });
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of1.assert().reset();
+        current.assert().reset();
+
+        let current = la.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 1068..1080,
+            },
+            this: Instruction::Li(Li {
+                register: Register::X7,
+                immediate: Immediate { value: 0 },
+            }),
+        });
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of1.assert().reset();
+        current.assert().reset();
+
+        // This is racy becuase both harts are at the `li t1, 0` instruction before the racy `sw`.
+        let current = li_t1.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = asserter.debug(AstValue {
+            span: Span {
+                path: path.clone(),
+                span: 1082..1106,
+            },
+            this: Instruction::Bne(Bne {
+                lhs: Register::X6,
+                rhs: Register::X7,
+                out: "_invalid".into(),
+            }),
+        });
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of1.assert().reset();
+        current.assert().reset();
+
+        // At this point hart 2/2 is at `sw` and has `lw` next which is racy and hart 1/2 is at `li`
+        // and has `sw` next which is also racy, so no harts can be advanced without evaluating racy
+        // instructions thus its racy.
+        let current = sw.clone();
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        let current = sw.clone();
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = lw.clone();
+        let base_assertions = &config & &is_not_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        // The thought might arise, that why would a system with 2 harts evaluate the same
+        // instruction (in this case `sw`) more than 2 times? The answer is that since it needs to
+        // evaluate race conditions it needs to evaluate all the orderings which will result in the
+        // instruction being evaluated many times (in this specific case 4 times).
+        //
+        // Notably the following `lw` instruction will be evaluated 16 times since it needs to be
+        // evaluated by each hart (2) times the possible orderings (2) times the current diverging
+        // paths from previous orderings (4 from the 4 possible ordering of this `sw`) resulting in
+        // 2 * 2 * 4 = 16.
+        //
+        // And if there where another racy instruction after the `lw` it would be evaluated 64 times
+        // (2 * 2 * 16). This is one of the two major sources of the atrocious O'notation of the
+        // compiler. Of course in reality the verifier path might diverge but the paths may not be
+        // equally long so it's the worst case scenario.
+        let current = sw.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart1of2.assert().reset();
+        current.assert().reset();
+
+        let current = sw.clone();
+        let base_assertions = &config & &is_racy & &empty_excluded;
+        explorerer = explorerer.next_step().continued().unwrap();
+        base_assertions.assert().reset();
+        hart2of2.assert().reset();
+        current.assert().reset();
+
+        explorerer = explorerer.next_step().continued().unwrap();
         todo!();
 
         explorerer.next_step().valid().unwrap()

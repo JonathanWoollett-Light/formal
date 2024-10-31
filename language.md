@@ -20,6 +20,8 @@ In a program with 10,000 instructions, 3 harts, 10 racy instructions, 10 indeter
 
 To make it viable in larger projects there should be some configuration arguments:
 
+- `racy-groups`: This should allow configuring the minimum size of sections evaluated for racyness. E.g. with 2 racy instructions a setting of 1 for a system with 2 harts would results in 4 evaluations of the first instruction and 16 evaluations of the 2nd instruction, while a setting of 2 would result in 4 evaluations of both instructions as these instructions would be merged to form a group of 2 instructions when evaluating racyness. This setting can massively reduce O'notation by assuming instructions which are very near are very unlikely to not be run sequentially, it is unlikely for race conditions to exist at this level and extremely unlikely for a race condition to be hit even if they exist (given we are talking about nanosecond times scales). This is of course an imperfect heuristic and you can definitely write programs that break this.
+TODO I don't know how this would work with syscalls (on this specifically I don't care, as I'm only focussing on embedded and bare metal) and I think this issue will also apply to interrupts on bare metal.
 - `seqeuntial`: Only explores 1 ordering of instructions, removing `h^r` from the onotation.
 - `typed`: Requires all variables have types which can be immedately inferred, removing `8^v` from the onotation. For example `define x local u32` `y=x` works becuase `x` is fully defined and `y` is identical to `x`.
 - `partial`: Allows partial exploration, doesn't remove untouched code, any `fail`s become like Zig exceptions returning unique error codes.
