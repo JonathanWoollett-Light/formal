@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::draw::draw_tree;
 use crate::verifier_types::*;
 use itertools::Itertools;
 use std::alloc::dealloc;
@@ -51,6 +52,7 @@ impl PrevVerifierNode {
     }
 }
 
+#[derive(Debug,Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub enum InnerNextVerifierNode {
     Branch(Vec<*mut VerifierNode>),
     Leaf(*mut VerifierLeafNode),
@@ -59,6 +61,7 @@ pub enum InnerNextVerifierNode {
 /// We use a tree to trace the execution of the program,
 /// then when conditions are required it can resolve them
 /// by looking back at the trace.
+#[derive(Debug)]
 pub struct VerifierNode {
     // The previous node in global execution.
     pub prev: PrevVerifierNode,
@@ -425,9 +428,9 @@ impl Explorerer {
         // deallocate already deallocated child node, but this exists as a second check to ensure
         // this.
         #[cfg(debug_assertions)]
-        let mut deallocated_leaves = BTreeSet::new();
-        #[cfg(debug_assertions)]
         let mut deallocated_branches = BTreeSet::new();
+        #[cfg(debug_assertions)]
+        let mut deallocated_leaves = BTreeSet::new();
 
         // Deallocate all nodes after the 1st occurence of the variable `recent`.
         let mut skip = BTreeSet::new();
@@ -436,6 +439,7 @@ impl Explorerer {
         // variable `recent`.
         for leaf_ptr in self.queue.iter().copied() {
             let leaf = leaf_ptr.as_ref().unwrap();
+            debug_assert_eq!(leaf.hart_fronts.len() as u8, leaf.prev.as_ref().unwrap().root.as_ref().unwrap().harts);
 
             if skip.contains(&leaf_ptr) {
                 continue;
@@ -443,78 +447,115 @@ impl Explorerer {
             let Some(encounter) = leaf.variable_encounters.get(&recent) else {
                 continue;
             };
-            let encounter_prev = *encounter.as_ref().unwrap().prev.branch().unwrap();
+
+            let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
+            let first_explr = explr_root.next;
+            info!("explr_root harts: {}",explr_root.harts);
+            let check = draw_tree(first_explr, 2, |n| {
+                let r = n.as_ref().unwrap();
+                format!("{:?} {:?}", r.hart, r.node.as_ref().value.this)
+            });
+            info!("check {leaf_ptr:?}: {check:?}");
+
+            debug_assert!(!deallocated_branches.contains(encounter));
             let mut variable_encounters = leaf.variable_encounters.clone();
 
             // Starting from the 1st occurence record on this leaf, deallocate all children.
             // If we deallocate a leaf node, record this so we can skip it in the outer loop since
             // it should have the same 1st occurence and we should have already deallocated it and
             // all it's children.
-            let mut stack = vec![*encounter];
-            while let Some(current_ptr) = stack.pop() {
-                let current = current_ptr.as_ref().unwrap();
-                match &current.next {
+            let mut stack = vec![encounter.as_ref().unwrap().next.clone()];
+            while let Some(current) = stack.pop() {
+                info!("current before: {current:?}");
+                match current {
                     InnerNextVerifierNode::Branch(branches) => {
-                        stack.extend(branches.iter().copied());
+                        for branch in branches {
+                            let next = branch.as_ref().unwrap().next.clone();
+                            stack.push(next);
+
+                            // We will need a new version of encountered later and so we track if any of the
+                            // other encountered are deallocated in this process.
+                            // If a variable is present in this instruction.
+                            if let Some(var) = branch.as_ref().unwrap().node.as_ref().value.this.variable() {
+                                // If this node is the 1st where the variable is encountered.
+                                if branch == *variable_encounters.get(var).unwrap() {
+                                    variable_encounters.remove(var);
+                                }
+                            }
+
+                            debug_assert!(deallocated_branches.insert(branch));
+                            dealloc(branch.cast(), Layout::new::<VerifierLeafNode>());
+                        }
                     }
                     InnerNextVerifierNode::Leaf(l) => {
                         skip.insert(l);
                         #[cfg(debug_assertions)]
                         {
                             // Check for double-free errors.
-                            assert!(deallocated_leaves.insert(*l));
+                            assert!(deallocated_leaves.insert(l));
                             // Check that the 1st occurence of the variable for this leaf, matches the
                             // 1st occurence for the variable on `leaf`, this should be true since these
                             // leaves are both children of the first occurence node.
+                            info!("l: {l:?}");
                             let subleaf = l.as_ref().unwrap();
                             let subencounter = subleaf.variable_encounters.get(&recent).unwrap();
                             assert_eq!(subencounter, encounter);
                         }
                         
+                        info!("l before: {l:?}");
                         dealloc(l.cast(), Layout::new::<VerifierLeafNode>());
+                        info!("l after: {l:?}");
                     }
                 }
-                // If a variable is present in this instruction.
-                if let Some(var) = current.node.as_ref().as_ref().this.variable() {
-                    // If this node is the 1st where the variable is encountered.
-                    if current_ptr == *variable_encounters.get(var).unwrap() {
-                        variable_encounters.remove(var);
-                    }
-                }
-                // Check for double-free errors.
-                debug_assert!(deallocated_branches.insert(current_ptr));
-
-                dealloc(current_ptr.cast(), Layout::new::<VerifierNode>());
             }
             debug_assert!(deallocated_leaves.contains(&leaf_ptr));
 
-            // Set the new leaf node.
+            info!("hit here a");
+
+            // Set the new hart fronts.
             //
             // We could do this more efficiently by storing `hart_prev` on `VerifierNode` to indicate the last node on
             // the same hart. Unfortunately since we will have a large number of `VerifierNode`s this will add a massive
             // amount to memory usage for (what I estimate to be) a relatively insignficant runtime improvement.
             // TODO produce a comparison using the `hart_prev` approach.
             let mut hart_fronts = BTreeMap::new();
-            let mut start_ptr = encounter_prev;
+            let mut start_ptr = *encounter;
+            info!("hit here asd");
             let start = start_ptr.as_ref().unwrap();
             while hart_fronts.len() < leaf.hart_fronts.len() {
-                if !hart_fronts.contains_key(&start.hart) {
-                    hart_fronts.insert(start.hart, start_ptr);
-                }
+                info!("start: {start:?}");
+                // The first time `start.hart` is encountered, insert `start_ptr`, this sets the
+                // most recent instructions on each hart.
+                hart_fronts.entry(start.hart).or_insert(start_ptr);
+                info!("start.prev:{:?}", start.prev);
+                // It should not be possible to reach the root here, since every hart will have an
+                // initial `_start` instruction.
+                // Iterate back through the tree.
                 start_ptr = *start.prev.branch().unwrap();
             }
 
+            info!("didn't hit here b");
+
             // Set the new leaf.
             let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
-                prev: encounter_prev,
+                prev: *encounter,
                 variable_encounters,
                 hart_fronts,
             }));
-            encounter_prev.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
+            encounter.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
             new_queue.push_back(new_leaf);
+
+            let first_explr = encounter.as_ref().unwrap().root.as_ref().unwrap().next;
+            let check = draw_tree(first_explr, 2, |n| {
+                let r = n.as_ref().unwrap();
+                format!("{:?}", r.node.as_ref().value)
+            });
+            info!("chec a: {check:?}");
         }
         // Set new queue.
         self.queue = new_queue;
+
+        info!("hit here");
     }
 
     /// Attempts to modify initial types to include a new variable, if it cannot add it,
@@ -1055,6 +1096,7 @@ impl Explorerer {
                             variable_encounters: leaf.variable_encounters.clone(),
                             hart_fronts,
                         }));
+                        new_branch.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
 
                         (new_branch, new_leaf)
                     })
