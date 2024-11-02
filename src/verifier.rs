@@ -52,7 +52,7 @@ impl PrevVerifierNode {
     }
 }
 
-#[derive(Debug,Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub enum InnerNextVerifierNode {
     Branch(Vec<*mut VerifierNode>),
     Leaf(*mut VerifierLeafNode),
@@ -439,7 +439,10 @@ impl Explorerer {
         // variable `recent`.
         for leaf_ptr in self.queue.iter().copied() {
             let leaf = leaf_ptr.as_ref().unwrap();
-            debug_assert_eq!(leaf.hart_fronts.len() as u8, leaf.prev.as_ref().unwrap().root.as_ref().unwrap().harts);
+            debug_assert_eq!(
+                leaf.hart_fronts.len() as u8,
+                leaf.prev.as_ref().unwrap().root.as_ref().unwrap().harts
+            );
 
             if skip.contains(&leaf_ptr) {
                 continue;
@@ -450,7 +453,7 @@ impl Explorerer {
 
             let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
             let first_explr = explr_root.next;
-            info!("explr_root harts: {}",explr_root.harts);
+            info!("explr_root harts: {}", explr_root.harts);
             let check = draw_tree(first_explr, 2, |n| {
                 let r = n.as_ref().unwrap();
                 format!("{:?} {:?}", r.hart, r.node.as_ref().value.this)
@@ -476,7 +479,9 @@ impl Explorerer {
                             // We will need a new version of encountered later and so we track if any of the
                             // other encountered are deallocated in this process.
                             // If a variable is present in this instruction.
-                            if let Some(var) = branch.as_ref().unwrap().node.as_ref().value.this.variable() {
+                            if let Some(var) =
+                                branch.as_ref().unwrap().node.as_ref().value.this.variable()
+                            {
                                 // If this node is the 1st where the variable is encountered.
                                 if branch == *variable_encounters.get(var).unwrap() {
                                     variable_encounters.remove(var);
@@ -501,7 +506,7 @@ impl Explorerer {
                             let subencounter = subleaf.variable_encounters.get(&recent).unwrap();
                             assert_eq!(subencounter, encounter);
                         }
-                        
+
                         info!("l before: {l:?}");
                         dealloc(l.cast(), Layout::new::<VerifierLeafNode>());
                         info!("l after: {l:?}");

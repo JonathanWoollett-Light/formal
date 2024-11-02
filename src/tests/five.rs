@@ -14,7 +14,7 @@ fn five() {
         touched,
         jumped,
     } = unsafe {
-        for _ in 0..254 {
+        for _ in 0..28 {
             explorerer = explorerer.next_step().continued().unwrap();
         }
         explorerer.next_step().valid().unwrap()
