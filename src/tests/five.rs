@@ -1,10 +1,9 @@
 use crate::verifier_types::*;
 use crate::*;
-use tracing::info;
 
 #[test]
 fn five() {
-    let (guard, mut ast, asserter) = super::setup_test("five");
+    let (guard, mut ast, _asserter) = super::setup_test("five");
 
     let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
 

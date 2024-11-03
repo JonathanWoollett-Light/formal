@@ -1,35 +1,23 @@
+use crate::verifier_types::*;
+use crate::*;
+use tracing::info;
+
 #[test]
 fn four() {
-    let (guard, mut ast, asserter) = setup_test("four");
+    let (guard, mut ast, asserter) = super::setup_test("four");
 
-    let explorerer = Rc::new(RefCell::new(unsafe { Explorerer::new(ast, 1..3) }));
+    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
 
+    // Find valid path.
     let ValidPathResult {
         configuration,
         touched,
         jumped,
     } = unsafe {
-        let mut path = Explorerer::new_path(explorerer.clone());
-        let u32_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
-
-        // Iterate until reaching `u32` for `value`.
-        for _ in 0..4 {
-            for _ in 0..8 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-            ExplorererPath::next_step(path).invalid().unwrap();
-            path = Explorerer::new_path(explorerer.clone());
+        for _ in 0..31 {
+            explorerer = explorerer.next_step().continued().unwrap();
         }
-        for _ in 0..4 {
-            path = ExplorererPath::next_step(path).continued().unwrap();
-        }
-        u32_config.assert();
-
-        for _ in 0..574 {
-            path = ExplorererPath::next_step(path).continued().unwrap();
-        }
-        ExplorererPath::next_step(path).valid().unwrap()
+        explorerer.next_step().valid().unwrap()
     };
 
     // Optimize based on path.
