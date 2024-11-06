@@ -1,6 +1,7 @@
 mod five;
 mod four;
 mod six;
+mod three;
 
 use crate::*;
 use std::ptr::NonNull;

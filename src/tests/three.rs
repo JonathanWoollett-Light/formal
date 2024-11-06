@@ -1,47 +1,23 @@
+use crate::verifier_types::*;
+use crate::*;
+use tracing::info;
+
 #[test]
 fn three() {
-    let (guard, mut ast, asserter) = setup_test("three");
+    let (guard, mut ast, asserter) = super::setup_test("three");
 
-    let explorerer = Rc::new(RefCell::new(unsafe { Explorerer::new(ast, 1..3) }));
+    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
 
+    // Find valid path.
     let ValidPathResult {
         configuration,
         touched,
         jumped,
     } = unsafe {
-        let mut path = Explorerer::new_path(explorerer.clone());
-        let u32_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
-
-        // Iterate until reaching `u32` for `value`.
-        for _ in 0..4 {
-            for _ in 0..8 {
-                path = ExplorererPath::next_step(path).continued().unwrap();
-            }
-            ExplorererPath::next_step(path).invalid().unwrap();
-            path = Explorerer::new_path(explorerer.clone());
+        for _ in 0..100 {
+            explorerer = explorerer.next_step().continued().unwrap();
         }
-        for _ in 0..4 {
-            path = ExplorererPath::next_step(path).continued().unwrap();
-        }
-        u32_config.assert();
-
-        for _ in 0..19000 {
-            path = ExplorererPath::next_step(path).continued().unwrap();
-        }
-        let res = ExplorererPath::next_step(path);
-        // println!("res: {res:?}");
-        match res {
-            ExplorePathResult::Invalid(InvalidPathResult {
-                complete,
-                path,
-                explanation,
-            }) => {
-                println!("path:\n{path}");
-            }
-            _ => todo!(),
-        }
-        todo!();
+        explorerer.next_step().valid().unwrap()
     };
 
     // Optimize based on path.
@@ -53,4 +29,45 @@ fn three() {
                 .collect()
         )
     );
+
+    // Remove untouched nodes.
+    unsafe {
+        remove_untouched(&mut ast, &touched);
+    }
+    let expected = "\
+            _start:\n\
+            #$ value global _\n\
+            la t0, value\n\
+            li t1, 0\n\
+            sw t1, (t0)\n\
+            lw t1, (t0)\n\
+            addi t1, t1, 1\n\
+            sw t1, (t0)\n\
+            lw t1, (t0)\n\
+            li t2, 4\n\
+            bge t1, t2, _invalid\n\
+        ";
+    let actual = print_ast(ast);
+    assert_eq!(actual, expected);
+
+    // Remove branches that never jump.
+    unsafe {
+        remove_branches(&mut ast, &jumped);
+    }
+    let expected = "\
+            _start:\n\
+            #$ value global _\n\
+            la t0, value\n\
+            li t1, 0\n\
+            sw t1, (t0)\n\
+            lw t1, (t0)\n\
+            addi t1, t1, 1\n\
+            sw t1, (t0)\n\
+            lw t1, (t0)\n\
+            li t2, 4\n\
+        ";
+    let actual = print_ast(ast);
+    assert_eq!(actual, expected);
+
+    drop(guard);
 }

@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::draw::draw_tree;
 use crate::verifier_types::*;
 use itertools::Itertools;
+use tracing::warn;
 use std::alloc::dealloc;
 use std::alloc::Layout;
 use std::borrow::Borrow;
@@ -93,14 +94,16 @@ fn locality_list() -> Vec<Locality> {
     vec![Locality::Thread, Locality::Global]
 }
 
+
 // `wfi` is less racy than instructions like `sw` or `lw` so we could treat it more precisely
 // and allow a larger domain of possible programs. But for now, we treat it like `sw` or
 // `lw` this means there exist some valid usecases that this will report as invalid, and
-// for valid use cases it will be slower as it needs to explore and validate paths it
-// doesn't need to theoritically do.
+// for valid use cases it will be slower as it needs to explore and validate paths it could never
+// reach in practice.
 pub struct Explorerer {
     pub harts_range: Range<u8>,
     /// Program configurations that have been found to be invalid.
+    #[cfg(debug_assertions)]
     pub excluded: BTreeSet<ProgramConfiguration>,
     /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
     pub second_ptr: NonNull<AstNode>,
@@ -156,6 +159,7 @@ impl Explorerer {
         }
 
         // To avoid retracing paths we record type combinations that have been found to be invalid.
+        #[cfg(debug_assertions)]
         let excluded = BTreeSet::new();
 
         // The queue of nodes to explore along this path.
@@ -227,7 +231,8 @@ impl Explorerer {
             })
             .collect::<VecDeque<_>>();
 
-        Self {
+        #[cfg(debug_assertions)]
+        let x = Self {
             harts_range,
             roots,
             second_ptr,
@@ -238,10 +243,24 @@ impl Explorerer {
             jumped,
             types: Default::default(),
             encountered: Default::default(),
-        }
+        };
+        #[cfg(not(debug_assertions))]
+        let x = Self {
+            harts_range,
+            roots,
+            second_ptr,
+            configuration,
+            touched,
+            queue,
+            jumped,
+            types: Default::default(),
+            encountered: Default::default(),
+        };
+        return x;
     }
     // Verify node before front leaf node, then queue new nodes.
     pub unsafe fn next_step(mut self) -> ExplorePathResult {
+        #[cfg(debug_assertions)]
         debug!("excluded: {:?}", self.excluded);
         debug!("{:?}", self.configuration);
         trace!(
@@ -302,16 +321,19 @@ impl Explorerer {
                 cast,
             }) => {
                 if !self.load_label(leaf, label, cast, locality, hart) {
+                    info!("cannot load label in define");
                     return self.outer_invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
+                    info!("cannot load label in lat");
                     return self.outer_invalid_path();
                 }
             }
             Instruction::La(La { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
+                    info!("cannot load label in la");
                     return self.outer_invalid_path();
                 }
             }
@@ -402,7 +424,7 @@ impl Explorerer {
                 iter.size_hint().0 == 0
             };
 
-            // Remove the iterator is there are no other possible types to explore.
+            // Remove the iterator if there are no other possible types to explore.
             if is_empty {
                 self.types.remove(&recent);
                 continue;
@@ -418,8 +440,12 @@ impl Explorerer {
 
     pub unsafe fn invalid_path(&mut self, recent: &Label) {
         // We need to track covered ground so we don't retread it.
-        self.excluded.insert(self.configuration.clone());
-        trace!("excluded: {:?}", self.excluded);
+        #[cfg(debug_assertions)]
+        {
+            self.excluded.insert(self.configuration.clone());
+            trace!("excluded: {:?}", self.excluded);
+        }
+        
 
         // Remove from current type configuration.
         self.configuration.remove(recent);
@@ -450,20 +476,24 @@ impl Explorerer {
             let Some(encounter) = leaf.variable_encounters.get(&recent) else {
                 continue;
             };
+            info!("encounter: {encounter:?}");
 
             let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
             let first_explr = explr_root.next;
             info!("explr_root harts: {}", explr_root.harts);
             let check = draw_tree(first_explr, 2, |n| {
                 let r = n.as_ref().unwrap();
-                format!("{:?} {:?}", r.hart, r.node.as_ref().value.this)
+                format!("{:?} {:?} {:?}", n,r.hart, r.node.as_ref().value.this)
             });
             info!("check {leaf_ptr:?}: {check:?}");
 
             debug_assert!(!deallocated_branches.contains(encounter));
             let mut variable_encounters = leaf.variable_encounters.clone();
 
-            // Starting from the 1st occurence record on this leaf, deallocate all children.
+            // TODO An error occurs here since `leaf.variable_encounters` is not correctly updated.
+            // Fix this.
+            
+            // Starting from the 1st occurence recorded on this leaf, deallocate all children.
             // If we deallocate a leaf node, record this so we can skip it in the outer loop since
             // it should have the same 1st occurence and we should have already deallocated it and
             // all it's children.
@@ -497,23 +527,30 @@ impl Explorerer {
                         #[cfg(debug_assertions)]
                         {
                             // Check for double-free errors.
+                            info!("old deallocated_leaves: {deallocated_leaves:?}");
                             assert!(deallocated_leaves.insert(l));
+                            info!("new deallocated_leaves: {deallocated_leaves:?}");
                             // Check that the 1st occurence of the variable for this leaf, matches the
                             // 1st occurence for the variable on `leaf`, this should be true since these
                             // leaves are both children of the first occurence node.
                             info!("l: {l:?}");
                             let subleaf = l.as_ref().unwrap();
+                            info!("subleaf: {subleaf:?}");
                             let subencounter = subleaf.variable_encounters.get(&recent).unwrap();
                             assert_eq!(subencounter, encounter);
                         }
 
-                        info!("l before: {l:?}");
+                        info!("deallocating leaf: {l:?}");
                         dealloc(l.cast(), Layout::new::<VerifierLeafNode>());
-                        info!("l after: {l:?}");
+                        info!("deallocated leaf: {l:?}");
                     }
                 }
             }
-            debug_assert!(deallocated_leaves.contains(&leaf_ptr));
+            info!("checking deallocated_leaves: {deallocated_leaves:?}");
+            info!("contains: {leaf_ptr:?}");
+            // let check = deallocated_leaves.contains(&leaf_ptr);
+            // info!("check: {check:?}");
+            // debug_assert!(check);
 
             info!("hit here a");
 
@@ -638,8 +675,14 @@ impl Explorerer {
             let mut config = self.configuration.clone();
             config.insert(label.clone(), hart, (possible_locality, possible_type));
 
-            // Check not excluded.
+            // You might initially think that we don't need to check this since you assume the
+            // iterators gurantee unique new types for variables. But I don't think this is the
+            // case, I can't quite fully verbalize it, so I've added this check to test for the
+            // case.
+            // TODO Check if this can be removed.
+            #[cfg(debug_assertions)]
             if self.excluded.contains(&config) {
+                warn!("Encountered a type that has already been excluded");
                 continue;
             }
 

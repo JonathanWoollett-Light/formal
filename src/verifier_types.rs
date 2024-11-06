@@ -83,6 +83,36 @@ impl RangeType for MemoryValueU16 {
 }
 
 #[derive(Debug, Clone)]
+pub struct MemoryValueI32 {
+    pub start: i32,
+    pub stop: i32,
+}
+impl From<i32> for MemoryValueI32 {
+    fn from(x: i32) -> Self {
+        Self { start: x, stop: x }
+    }
+}
+
+impl MemoryValueI32 {
+    const ZERO: Self = Self { start: 0, stop: 0 };
+}
+impl RangeType for MemoryValueI32 {
+    type Base = i32;
+    fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
+        match start.cmp(&stop) {
+            Ordering::Less => None,
+            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+        }
+    }
+    fn start(&self) -> Self::Base {
+        self.start
+    }
+    fn stop(&self) -> Self::Base {
+        self.stop
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MemoryValueI16 {
     pub start: i16,
     pub stop: i16,
@@ -642,6 +672,7 @@ pub enum MemoryValue {
     List(Vec<MemoryValue>),
     I8(MemoryValueI8),
     I64(MemoryValueI64),
+    I32(MemoryValueI32),
     I16(MemoryValueI16),
     Ptr(MemoryPtr),
     Csr(CsrValue),
@@ -655,8 +686,9 @@ impl From<MemoryValue> for Type {
             U16(_) => Type::U16,
             U8(_) => Type::U8,
             List(x) => Type::List(x.into_iter().map(Type::from).collect()),
-            I8(_) => Type::I8,
             I64(_) => Type::I64,
+            I32(_) => Type::I32,
+            I8(_) => Type::I8,
             I16(_) => Type::I16,
             Ptr(_) => Type::I64,
             Csr(_) => todo!(),
@@ -706,7 +738,11 @@ impl From<Type> for MemoryValue {
                 start: u32::MIN,
                 stop: u32::MAX,
             }),
-            _ => todo!(),
+            Type::I32 => MemoryValue::I32(MemoryValueI32 {
+                start: i32::MIN,
+                stop: i32::MAX,
+            }),
+            x => todo!("{x:?}"),
         }
     }
 }
@@ -843,6 +879,27 @@ impl MemoryValue {
             RangeScalarOrdering::Within => {
                 match self {
                     MemoryValue::U32(_) => match value {
+                        MemoryValue::I64(from) => {
+                            let new_value = from
+                                .get(&SubSlice {
+                                    offset: offset.clone(),
+                                    len: 4,
+                                })
+                                .unwrap();
+                            debug_assert_eq!(
+                                size(&Type::from(new_value.clone())),
+                                size_of_existing
+                            );
+                            *self = new_value;
+                            Ok(())
+                        }
+                        MemoryValue::U32(_) => {
+                            *self = value;
+                            Ok(())
+                        }
+                        x => todo!("{x:?}"),
+                    },
+                    MemoryValue::I32(_) => match value {
                         MemoryValue::I64(from) => {
                             let new_value = from
                                 .get(&SubSlice {
