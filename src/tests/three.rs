@@ -14,7 +14,7 @@ fn three() {
         touched,
         jumped,
     } = unsafe {
-        for _ in 0..100 {
+        for _ in 0..200 {
             explorerer = explorerer.next_step().continued().unwrap();
         }
         explorerer.next_step().valid().unwrap()

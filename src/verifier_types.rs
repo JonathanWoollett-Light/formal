@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::iter::once;
+use std::iter::repeat;
 use std::iter::Peekable;
 use std::ops::Add;
 use std::ops::Range;
@@ -20,6 +21,7 @@ use std::{
 };
 use thiserror::Error;
 use tracing::error;
+use tracing::info;
 use tracing::trace;
 
 #[derive(Debug, Clone)]
@@ -40,8 +42,8 @@ impl RangeType for MemoryValueI8 {
     type Base = i8;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -70,8 +72,8 @@ impl RangeType for MemoryValueU16 {
     type Base = u16;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -100,8 +102,8 @@ impl RangeType for MemoryValueI32 {
     type Base = i32;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -130,8 +132,8 @@ impl RangeType for MemoryValueI16 {
     type Base = i16;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -156,8 +158,8 @@ impl RangeType for MemoryValueU8 {
     type Base = u8;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -230,8 +232,8 @@ impl RangeType for MemoryValueU32 {
     type Base = u32;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -246,8 +248,8 @@ impl RangeType for MemoryValueI64 {
     type Base = i64;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -258,8 +260,11 @@ impl RangeType for MemoryValueI64 {
     }
 }
 
+use num::Bounded;
+use std::fmt::Debug;
 pub trait RangeType {
-    type Base: Eq
+    type Base: Debug
+        + Eq
         + Copy
         + PartialEq
         + Ord
@@ -267,7 +272,8 @@ pub trait RangeType {
         + num::CheckedAdd
         + num::CheckedSub
         + num::traits::ToBytes
-        + num::traits::FromBytes;
+        + num::traits::FromBytes
+        + num::Bounded;
     fn start(&self) -> Self::Base;
     fn stop(&self) -> Self::Base;
     /// Returns if the given scalar is greater than, less than or within `self`.
@@ -305,6 +311,17 @@ pub trait RangeType {
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self>
     where
         Self: Sized;
+    fn any() -> Self
+    where
+        Self: Sized,
+    {
+        let min = Self::Base::min_value();
+        let max = Self::Base::max_value();
+        match Self::new(min, max) {
+            Some(x) => x,
+            None => panic!("Failed to create memory value from {min:?} and {max:?}"),
+        }
+    }
     /// 4..8 + 2..4 = 6..12
     fn add(&self, other: &Self) -> Option<Self>
     where
@@ -482,12 +499,19 @@ pub struct MemoryValueU64 {
     pub start: u64,
     pub stop: u64,
 }
+
+pub struct DynamicMemoryValue {
+    size: usize,
+    /// `segments.iter().map(MemoryValue::size).sum() == size`
+    segments: Vec<MemoryValue>,
+}
+
 impl RangeType for MemoryValueU64 {
     type Base = u64;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
         match start.cmp(&stop) {
-            Ordering::Less => None,
-            Ordering::Equal | Ordering::Greater => Some(Self { start, stop }),
+            Ordering::Greater => None,
+            Ordering::Less | Ordering::Equal => Some(Self { start, stop }),
         }
     }
     fn start(&self) -> Self::Base {
@@ -708,6 +732,10 @@ impl From<&MemoryValue> for Type {
             MemoryValue::Ptr(_) => Type::U64,
             MemoryValue::List(x) => Type::List(x.iter().map(Type::from).collect()),
             MemoryValue::I64(_) => Type::I64,
+            MemoryValue::U32(_) => Type::U32,
+            MemoryValue::I32(_) => Type::I32,
+            MemoryValue::I8(_) => Type::I8,
+            MemoryValue::I16(_) => Type::I16,
             x @ _ => todo!("{x:?}"),
         }
     }
@@ -741,6 +769,14 @@ impl From<Type> for MemoryValue {
             Type::I32 => MemoryValue::I32(MemoryValueI32 {
                 start: i32::MIN,
                 stop: i32::MAX,
+            }),
+            Type::I64 => MemoryValue::I64(MemoryValueI64 {
+                start: i64::MIN,
+                stop: i64::MAX,
+            }),
+            Type::U64 => MemoryValue::U64(MemoryValueU64 {
+                start: u64::MIN,
+                stop: u64::MAX,
             }),
             x => todo!("{x:?}"),
         }
@@ -873,7 +909,7 @@ impl MemoryValue {
         // we can't use recursion for lists since it may affect multiple items in a list.
 
         // Compare the size of the value we are attempting to store with the size of the type minus the offset.
-        // Essentially asks "does storing `value` store it up to the last address in `self`?"
+        // Essentially asks "does storing `value` insert it up to the last address in `self`?"
         match diff.compare_scalar(len) {
             // Setting bytes from the offset reaching the end of the type.
             RangeScalarOrdering::Within => {
@@ -1036,7 +1072,82 @@ impl MemoryValue {
                     println!("len: {len:?}");
                     Err(MemoryValueSetError::ListMultiple)
                 }
-                _ => todo!(),
+                MemoryValue::U64(_) => match value {
+                    MemoryValue::I64(from) => {
+                        let new_value = from
+                            .get(&SubSlice {
+                                offset: offset.clone(),
+                                len: *len,
+                            })
+                            .unwrap();
+                        let exact_offset = offset.exact().unwrap();
+                        let current_size = size(&Type::from(self.clone()));
+                        let exact_rem =
+                            current_size - size(&Type::from(new_value.clone())) - exact_offset;
+                        // TODO Technically this is throwing away infomation, if we know the value
+                        // starts as zero, we can also say these other segments are 0.
+                        let start = repeat(MemoryValue::U8(MemoryValueU8::any()));
+                        let end = repeat(MemoryValue::U8(MemoryValueU8::any()));
+                        let items = start
+                            .take(exact_offset as usize)
+                            .chain(once(new_value))
+                            .chain(end.take(exact_rem as usize))
+                            .collect::<Vec<_>>();
+                        debug_assert_eq!(
+                            items
+                                .iter()
+                                .map(|item| size(&Type::from(item.clone())))
+                                .sum::<u64>(),
+                            current_size
+                        );
+                        *self = MemoryValue::List(items);
+                        Ok(())
+                    }
+                    _ => todo!(
+                        "self: {:?}, offset: {offset:?}, len: {len:?}, value: {value:?}",
+                        &self
+                    ),
+                },
+                MemoryValue::I64(_) => match value {
+                    MemoryValue::I64(from) => {
+                        let new_value = from
+                            .get(&SubSlice {
+                                offset: offset.clone(),
+                                len: *len,
+                            })
+                            .unwrap();
+                        let exact_offset = offset.exact().unwrap();
+                        let current_size = size(&Type::from(self.clone()));
+                        let exact_rem =
+                            current_size - size(&Type::from(new_value.clone())) - exact_offset;
+                        // TODO Technically this is throwing away infomation, if we know the value
+                        // starts as zero, we can also say these other segments are 0.
+                        let start = repeat(MemoryValue::U8(MemoryValueU8::any()));
+                        let end = repeat(MemoryValue::U8(MemoryValueU8::any()));
+                        let items = start
+                            .take(exact_offset as usize)
+                            .chain(once(new_value))
+                            .chain(end.take(exact_rem as usize))
+                            .collect::<Vec<_>>();
+                        debug_assert_eq!(
+                            items
+                                .iter()
+                                .map(|item| size(&Type::from(item.clone())))
+                                .sum::<u64>(),
+                            current_size
+                        );
+                        *self = MemoryValue::List(items);
+                        Ok(())
+                    }
+                    _ => todo!(
+                        "self: {:?}, offset: {offset:?}, len: {len:?}, value: {value:?}",
+                        &self
+                    ),
+                },
+                _ => todo!(
+                    "self: {:?}, offset: {offset:?}, len: {len:?}, value: {value:?}",
+                    &self
+                ),
             },
             // Setting bytes after the end of the type.
             RangeScalarOrdering::Greater => Err(MemoryValueSetError::TooLarge),
