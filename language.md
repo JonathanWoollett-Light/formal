@@ -60,6 +60,7 @@ keyword|assembly symbol
 `fail`|`#!`
 `unreachable`|`#?`
 `define`|`#$`
+`section`|`#@`
 
 ## optimizing
 

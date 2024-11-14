@@ -34,9 +34,29 @@ fn type_list() -> Vec<Type> {
 }
 
 /// Contains the configuration of the system
+#[derive(Debug)]
 pub struct VerifierConfiguration {
-    pub harts: u8,
+    pub configuration: InnerVerifierConfiguration,
     pub next: *mut VerifierNode,
+}
+#[derive(Debug, Clone)]
+pub struct InnerVerifierConfiguration {
+    pub sections: Vec<Section>,
+    pub harts: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct Section {
+    pub address: MemoryValueI64,
+    pub size: MemoryValueI64,
+    pub permissions: Permissions,
+    pub volatile: bool,
+}
+#[derive(Debug, Clone)]
+pub enum Permissions {
+    Read,
+    Write,
+    ReadWrite,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,16 +120,15 @@ fn locality_list() -> Vec<Locality> {
 // for valid use cases it will be slower as it needs to explore and validate paths it could never
 // reach in practice.
 pub struct Explorerer {
-    pub harts_range: Range<u8>,
     /// Program configurations that have been found to be invalid.
     #[cfg(debug_assertions)]
-    pub excluded: BTreeSet<ProgramConfiguration>,
+    pub excluded: BTreeSet<TypeConfiguration>,
     /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
     pub second_ptr: NonNull<AstNode>,
     /// The different systems configurations to verify.
     pub systems: Vec<*mut VerifierConfiguration>,
     // The current program configuration (e.g. variable types).
-    pub configuration: ProgramConfiguration,
+    pub configuration: TypeConfiguration,
     // The queue of unexplored leaf nodes.
     pub queue: VecDeque<*mut VerifierLeafNode>,
     // All the nodes that are touched.
@@ -139,9 +158,12 @@ pub struct Explorerer {
 }
 
 impl Explorerer {
-    pub unsafe fn new(ast: Option<NonNull<AstNode>>, harts_range: Range<u8>) -> Self {
+    pub unsafe fn new(
+        ast: Option<NonNull<AstNode>>,
+        systems: &[InnerVerifierConfiguration],
+    ) -> Self {
         // You cannot verify a program that starts running on 0 harts.
-        assert!(harts_range.start > 0);
+        assert!(systems.iter().all(|x| x.harts > 0));
 
         // Intial misc stuff
         let first = ast.unwrap().as_ref();
@@ -166,22 +188,22 @@ impl Explorerer {
         // `[(_start, hart 0), (_start, hart 0), (_start, hart 0)]`
         // where each entry has a number of predeccessors e.g. `(_start, hart 1)`
         // up to the number of harts for that path.
-        let systems = harts_range
-            .clone()
-            .map(|harts| {
+        let systems = systems
+            .iter()
+            .map(|system| {
                 Box::into_raw(Box::new(VerifierConfiguration {
-                    harts,
+                    configuration: system.clone(),
                     next: null_mut(),
                 }))
             })
             .collect::<Vec<_>>();
 
-        info!("systems: {systems:?}");
+        // info!("systems: {systems:?}");
 
         // Record the initial types used for variables in this verification path.
         // Different harts can treat the same variables as different types, they have
         // different inputs and often follow different execution paths (effectively having a different AST).
-        let configuration = ProgramConfiguration::new();
+        let configuration = TypeConfiguration::new();
 
         // To remove uneeded code (e.g. a branch might always be true so we remove the code it skips)
         // we record all the AST instructions that get touched.
@@ -195,7 +217,7 @@ impl Explorerer {
         let queue = systems
             .iter().copied()
             .map(|root| {
-                let harts = (*root).harts;
+                let harts = (*root).configuration.harts;
                 // All harts are intiailized as `_start`.
                 let mut prev = PrevVerifierNode::Root(root);
                 let mut hart_fronts = BTreeMap::new();
@@ -209,11 +231,11 @@ impl Explorerer {
                     }));
 
                     match &prev {
-                        PrevVerifierNode::Root(mut root) => {
+                        PrevVerifierNode::Root(root) => {
                             debug_assert!(root.as_ref().unwrap().next.is_null());
                             root.as_mut().unwrap().next = nonull;
                         },
-                        PrevVerifierNode::Branch(mut branch) => {
+                        PrevVerifierNode::Branch(branch) => {
                             debug_assert!(matches!(branch.as_ref().unwrap().next,InnerNextVerifierNode::Leaf(leaf) if leaf.is_null()));
                             branch.as_mut().unwrap().next = InnerNextVerifierNode::Branch(vec![nonull]);
                         }
@@ -235,7 +257,6 @@ impl Explorerer {
         // We return the explorer and it's contained state.
         #[cfg(debug_assertions)]
         let x = Self {
-            harts_range,
             systems,
             second_ptr,
             excluded,
@@ -248,7 +269,6 @@ impl Explorerer {
         };
         #[cfg(not(debug_assertions))]
         let x = Self {
-            harts_range,
             systems,
             second_ptr,
             configuration,
@@ -264,8 +284,8 @@ impl Explorerer {
     // Advance the verifier by one instruction.
     pub unsafe fn next_step(mut self) -> ExplorePathResult {
         #[cfg(debug_assertions)]
-        debug!("excluded: {:?}", self.excluded);
-        debug!("{:?}", self.configuration);
+        // debug!("excluded: {:?}", self.excluded);
+        // debug!("{:?}", self.configuration);
         // The queue represents all the nodes that need to be explored, the ordering of the queue
         // does not matter. When parallelising this the queue would not exist and instead we would
         // dispatch each node as a task.
@@ -293,10 +313,10 @@ impl Explorerer {
         let ast = branch.node;
         let hart = branch.hart;
         let root = branch.root.as_ref().unwrap();
-        let harts = root.harts;
+        let harts = root.configuration.harts;
 
-        debug!("hart: {}/{}", hart + 1, harts);
-        debug!("{:?}", branch.node.as_ref().value);
+        // debug!("hart: {}/{}", hart + 1, harts);
+        // debug!("{:?}", branch.node.as_ref().value);
 
         // Record all the AST node that are reachable.
         // We can use this for naive dead-code analysisand optimization.
@@ -324,19 +344,19 @@ impl Explorerer {
                 cast,
             }) => {
                 if !self.load_label(leaf, label, cast, locality, hart) {
-                    info!("cannot load label in define");
+                    // info!("cannot load label in define");
                     return self.outer_invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
-                    info!("cannot load label in lat");
+                    // info!("cannot load label in lat");
                     return self.outer_invalid_path();
                 }
             }
             Instruction::La(La { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
-                    info!("cannot load label in la");
+                    // info!("cannot load label in la");
                     return self.outer_invalid_path();
                 }
             }
@@ -485,16 +505,16 @@ impl Explorerer {
             let Some(encounter) = leaf.variable_encounters.get(&recent) else {
                 continue;
             };
-            info!("encounter: {encounter:?}");
+            // info!("encounter: {encounter:?}");
 
-            let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
-            let first_explr = explr_root.next;
-            info!("explr_root harts: {}", explr_root.harts);
-            let check = draw_tree(first_explr, 2, |n| {
-                let r = n.as_ref().unwrap();
-                format!("{:?} {:?} {:?}", n, r.hart, r.node.as_ref().value.this)
-            });
-            info!("check {leaf_ptr:?}: {check:?}");
+            // let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
+            // let first_explr = explr_root.next;
+            // info!("explr_root harts: {}", explr_root.harts);
+            // let check = draw_tree(first_explr, 2, |n| {
+            //     let r = n.as_ref().unwrap();
+            //     format!("{:?} {:?} {:?}", n, r.hart, r.node.as_ref().value.this)
+            // });
+            // info!("check {leaf_ptr:?}: {check:?}");
 
             debug_assert!(!deallocated_branches.contains(encounter));
             let mut variable_encounters = leaf.variable_encounters.clone();
@@ -508,7 +528,7 @@ impl Explorerer {
             // all it's children.
             let mut stack = vec![encounter.as_ref().unwrap().next.clone()];
             while let Some(current) = stack.pop() {
-                info!("current before: {current:?}");
+                // info!("current before: {current:?}");
                 match current {
                     InnerNextVerifierNode::Branch(branches) => {
                         for branch in branches {
@@ -536,32 +556,32 @@ impl Explorerer {
                         #[cfg(debug_assertions)]
                         {
                             // Check for double-free errors.
-                            info!("old deallocated_leaves: {deallocated_leaves:?}");
+                            // info!("old deallocated_leaves: {deallocated_leaves:?}");
                             assert!(deallocated_leaves.insert(l));
-                            info!("new deallocated_leaves: {deallocated_leaves:?}");
+                            // info!("new deallocated_leaves: {deallocated_leaves:?}");
                             // Check that the 1st occurence of the variable for this leaf, matches the
                             // 1st occurence for the variable on `leaf`, this should be true since these
                             // leaves are both children of the first occurence node.
-                            info!("l: {l:?}");
+                            // info!("l: {l:?}");
                             let subleaf = l.as_ref().unwrap();
-                            info!("subleaf: {subleaf:?}");
+                            // info!("subleaf: {subleaf:?}");
                             let subencounter = subleaf.variable_encounters.get(&recent).unwrap();
                             assert_eq!(subencounter, encounter);
                         }
 
-                        info!("deallocating leaf: {l:?}");
+                        // info!("deallocating leaf: {l:?}");
                         dealloc(l.cast(), Layout::new::<VerifierLeafNode>());
-                        info!("deallocated leaf: {l:?}");
+                        // info!("deallocated leaf: {l:?}");
                     }
                 }
             }
-            info!("checking deallocated_leaves: {deallocated_leaves:?}");
-            info!("contains: {leaf_ptr:?}");
+            // info!("checking deallocated_leaves: {deallocated_leaves:?}");
+            // info!("contains: {leaf_ptr:?}");
             // let check = deallocated_leaves.contains(&leaf_ptr);
-            // info!("check: {check:?}");
+            // // info!("check: {check:?}");
             // debug_assert!(check);
 
-            info!("hit here a");
+            // info!("hit here a");
 
             // Set the new hart fronts.
             //
@@ -571,7 +591,7 @@ impl Explorerer {
             // TODO produce a comparison of the current approach to an approach using the `hart_prev` approach.
             let mut hart_fronts = BTreeMap::new();
             let mut start_ptr = *encounter;
-            info!("hit here asd");
+            // info!("hit here asd");
 
             // We iterate until collecting as many hart fronts as we had previously, this should be
             // the case since the leaf is in the same system configuration with the same number of
@@ -585,11 +605,11 @@ impl Explorerer {
                     assert!(checker < 100);
                 }
                 let start = start_ptr.as_ref().unwrap();
-                info!("start: {start:?}");
+                // info!("start: {start:?}");
                 // The first time `start.hart` is encountered, insert `start_ptr`, this sets the
                 // most recent instructions on each hart.
                 hart_fronts.entry(start.hart).or_insert(start_ptr);
-                info!("start.prev:{:?}", start.prev);
+                // info!("start.prev:{:?}", start.prev);
 
                 if hart_fronts.len() == leaf.hart_fronts.len() {
                     break;
@@ -603,7 +623,7 @@ impl Explorerer {
                 start_ptr = *start.prev.branch().unwrap();
             }
 
-            info!("didn't hit here b");
+            // info!("didn't hit here b");
 
             // Set the new leaf.
             let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
@@ -611,10 +631,10 @@ impl Explorerer {
                 variable_encounters,
                 hart_fronts,
             }));
-            info!(
-                "updating `encounter.as_mut().unwrap().next`: {:?} -> {new_leaf:?}",
-                encounter.as_mut().unwrap().next
-            );
+            // info!(
+            //     "updating `encounter.as_mut().unwrap().next`: {:?} -> {new_leaf:?}",
+            //     encounter.as_mut().unwrap().next
+            // );
             encounter.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
             new_queue.push_back(new_leaf);
 
@@ -623,12 +643,12 @@ impl Explorerer {
                 let r = n.as_ref().unwrap();
                 format!("{:?}", r.node.as_ref().value)
             });
-            info!("chec a: {check:?}");
+            // info!("chec a: {check:?}");
         }
         // Set new queue.
         self.queue = new_queue;
 
-        info!("hit here");
+        // info!("hit here");
     }
 
     /// Attempts to modify initial types to include a new variable, if it cannot add it,
@@ -786,7 +806,7 @@ impl Explorerer {
                     false => {
                         // The path is invalid, so we add the current types to the
                         // excluded list and restart exploration.
-                        return Err(self.outer_invalid_path());
+                        Err(self.outer_invalid_path())
                     }
                     true => {
                         // Else we found the label and we can validate that the loading
@@ -794,6 +814,47 @@ impl Explorerer {
                         // So we continue exploration.
                         Ok(self)
                     }
+                }
+            }
+            // For acceses to main memory, we need to validate this is in `sections`.
+            Some(MemoryValue::I64(x)) => {
+                let start = x
+                    .add(&MemoryValueI64::from(offset.borrow().value.value))
+                    .unwrap();
+                let sections = &branch
+                    .borrow()
+                    .root
+                    .as_ref()
+                    .unwrap()
+                    .configuration
+                    .sections;
+
+                // Find a section that the store would be within.
+                let section_opt = sections.iter().find(|s| {
+                    let required_size = start
+                        .sub(&s.address)
+                        .unwrap()
+                        .add(&MemoryValueI64::from(i64::try_from(type_size).unwrap()))
+                        .unwrap();
+                    match (start.compare(&s.address), s.size.compare(&required_size)) {
+                        (
+                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
+                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                        ) => true,
+                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                        _ => todo!(),
+                    }
+                });
+
+                // Check this section supports writing.
+                if let Some(section) = section_opt {
+                    match section.permissions {
+                        Permissions::ReadWrite | Permissions::Write => Ok(self),
+                        Permissions::Read => Err(self.outer_invalid_path()),
+                    }
+                } else {
+                    Err(self.outer_invalid_path())
                 }
             }
             x => todo!("{x:?}"),
@@ -867,7 +928,7 @@ impl Explorerer {
         // Search the verifier tree for the fronts of all harts.
         let mut fronts = BTreeMap::new();
         let mut current = leaf.prev.as_ref().unwrap();
-        let harts = current.root.as_ref().unwrap().harts;
+        let harts = current.root.as_ref().unwrap().configuration.harts;
         fronts.insert(current.hart, current.node);
         while fronts.len() < harts as usize {
             let PrevVerifierNode::Branch(branch) = current.prev else {
@@ -877,18 +938,19 @@ impl Explorerer {
             fronts.entry(current.hart).or_insert(current.node);
         }
 
-        debug!(
-            "fronts: {:?}",
-            fronts
-                .iter()
-                .map(|(hart, ast)| (hart, ast.as_ref().as_ref().this.to_string()))
-                .collect::<BTreeMap<_, _>>()
-        );
+        // debug!(
+        //     "fronts: {:?}",
+        //     fronts
+        //         .iter()
+        //         .map(|(hart, ast)| (hart, ast.as_ref().as_ref().this.to_string()))
+        //         .collect::<BTreeMap<_, _>>()
+        // );
 
         let followup = |node: NonNull<AstNode>,
                         hart: u8|
          -> Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>> {
-            match &node.as_ref().as_ref().this {
+            let instruction = &node.as_ref().as_ref().this;
+            match instruction {
                 // Non-racy.
                 Instruction::Label(_)
                 | Instruction::La(_)
@@ -928,7 +990,13 @@ impl Explorerer {
                                 }
                             }
                         }
-                        x => todo!("{x:?}"),
+                        // The assumption here is that this hardcoded memory refers to RAM and does
+                        // not overlap the `.bss` or `.data` section (this will be checked in
+                        // `check_load`) given this assumption it's racy.
+                        MemoryValue::I64(_) => Some(Ok((hart, node))),
+                        // TODO We hit this in `three.s` we should not hit this, the `from` should
+                        // always be `MemoryValue::Ptr`.
+                        _ => todo!("instruction: {instruction:?} value: {value:?}"),
                     }
                 }
                 // See note on `wfi`.
@@ -1131,24 +1199,24 @@ impl Explorerer {
             })
             .collect::<Result<Vec<_>, _>>();
 
-        debug!("racy: {}", next_nodes.is_ok());
+        // debug!("racy: {}", next_nodes.is_ok());
 
-        debug!(
-            "next: {:?}",
-            next_nodes
-                .as_ref()
-                .map(|racy| racy
-                    .iter()
-                    .map(|(h, n)| format!(
-                        "{{ hart: {h}, instruction: {} }}",
-                        n.as_ref().as_ref().this.to_string()
-                    ))
-                    .collect::<Vec<_>>())
-                .map_err(|(h, n)| format!(
-                    "{{ hart: {h}, instruction: {} }}",
-                    n.as_ref().as_ref().this.to_string()
-                ))
-        );
+        // debug!(
+        //     "next: {:?}",
+        //     next_nodes
+        //         .as_ref()
+        //         .map(|racy| racy
+        //             .iter()
+        //             .map(|(h, n)| format!(
+        //                 "{{ hart: {h}, instruction: {} }}",
+        //                 n.as_ref().as_ref().this.to_string()
+        //             ))
+        //             .collect::<Vec<_>>())
+        //         .map_err(|(h, n)| format!(
+        //             "{{ hart: {h}, instruction: {} }}",
+        //             n.as_ref().as_ref().this.to_string()
+        //         ))
+        // );
 
         // TODO Currently these does breadth first search by pushing to the back of the queue. It would be more
         // efficient to do depth first search (since this is more likely to hit invalid paths earlier). I remember
@@ -1238,7 +1306,7 @@ impl Explorerer {
 impl Drop for Explorerer {
     fn drop(&mut self) {
         unsafe {
-            info!("dropping explorerer");
+            // info!("dropping explorerer");
             let mut stack = Vec::new();
             for system in self.systems.iter().copied() {
                 stack.push(system.as_ref().unwrap().next);
@@ -1301,7 +1369,7 @@ pub struct InvalidPathResult {
 
 #[derive(Debug)]
 pub struct ValidPathResult {
-    pub configuration: ProgramConfiguration,
+    pub configuration: TypeConfiguration,
     // All the nodes that are touched.
     pub touched: BTreeSet<NonNull<AstNode>>,
     // All the branch nodes that jump.
@@ -1392,12 +1460,26 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 }
 
 unsafe fn find_state(
-    leaf: *mut VerifierLeafNode, // The record of which children to follow from the root to reach the current position.
-    configuration: &ProgramConfiguration,
+    leaf: *mut VerifierLeafNode, // The leaf to finish at.
+    configuration: &TypeConfiguration,
 ) -> State {
+    info!(
+        "find_state for {:?} up to {:?}",
+        leaf.as_ref()
+            .unwrap()
+            .prev
+            .as_ref()
+            .unwrap()
+            .root
+            .as_ref()
+            .unwrap(),
+        leaf.as_ref().unwrap().prev.as_ref().unwrap().node.as_ref()
+    );
+
     let record = get_backpath_harts(leaf);
     let root = leaf.as_ref().unwrap().prev.as_ref().unwrap().root;
-    let harts = root.as_ref().unwrap().harts;
+    let system = &root.as_ref().unwrap().configuration;
+    let harts = system.harts;
 
     // Iterator to generate unique labels.
     const N: u8 = b'z' - b'a';
@@ -1411,7 +1493,7 @@ unsafe fn find_state(
         .peekable();
 
     // Iterate forward to find the values.
-    let mut state = State::new(harts, configuration);
+    let mut state = State::new(system, configuration);
     let mut current = root.as_ref().unwrap().next;
     for next in record.iter().rev() {
         let vnode = current.as_ref().unwrap();
@@ -1529,6 +1611,22 @@ unsafe fn find_state(
             InnerNextVerifierNode::Leaf(_) => unreachable!(),
         };
     }
+
+    info!(
+        "hart: {}/{}, state: {:?}",
+        leaf.as_ref().unwrap().prev.as_ref().unwrap().hart,
+        leaf.as_ref()
+            .unwrap()
+            .prev
+            .as_ref()
+            .unwrap()
+            .root
+            .as_ref()
+            .unwrap()
+            .configuration
+            .harts,
+        state
+    );
     state
 }
 
@@ -1572,7 +1670,10 @@ fn find_state_store(
                     ))
                     .unwrap(),
             }));
-            state.memory.set(&memloc, &len, from_value.clone()).unwrap();
+            state.memory.set(&MemoryValue::Ptr(memloc), &len, from_value.clone()).unwrap();
+        }
+        MemoryValue::I64(x) => {
+            state.memory.set(&MemoryValue::I64(*x), &len, from_value.clone()).unwrap();
         }
         _ => todo!(),
     }

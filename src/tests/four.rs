@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::verifier_types::*;
 use crate::*;
 use tracing::info;
@@ -6,7 +8,21 @@ use tracing::info;
 fn four() {
     let (guard, mut ast, asserter) = super::setup_test("four");
 
-    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
+    let mut explorerer = unsafe {
+        Explorerer::new(
+            ast,
+            &[
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 1,
+                },
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 2,
+                },
+            ],
+        )
+    };
 
     // Find valid path.
     let ValidPathResult {
@@ -23,7 +39,7 @@ fn four() {
     // Optimize based on path.
     assert_eq!(
         configuration,
-        ProgramConfiguration(
+        TypeConfiguration(
             vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
                 .into_iter()
                 .collect()

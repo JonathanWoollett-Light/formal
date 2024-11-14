@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::verifier_types::*;
 use crate::*;
 use tracing::info;
@@ -6,7 +8,33 @@ use tracing::info;
 fn three() {
     let (guard, mut ast, asserter) = super::setup_test("three");
 
-    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
+    let expected = include_str!("../../assets/three_ast.s");
+    let actual = print_ast(ast);
+    assert_eq!(actual, expected);
+
+    let sections = vec![
+        Section {
+            address: MemoryValueI64::from(0x10000000),
+            size: MemoryValueI64::from(1),
+            permissions: Permissions::Write,
+            volatile: true,
+        },
+    ];
+    let mut explorerer = unsafe {
+        Explorerer::new(
+            ast,
+            &[
+                InnerVerifierConfiguration {
+                    sections: sections.clone(),
+                    harts: 1,
+                },
+                InnerVerifierConfiguration {
+                    sections: sections.clone(),
+                    harts: 2,
+                },
+            ],
+        )
+    };
 
     // Find valid path.
     let ValidPathResult {
@@ -14,7 +42,7 @@ fn three() {
         touched,
         jumped,
     } = unsafe {
-        for _ in 0..200 {
+        for _ in 0..8200 {
             explorerer = explorerer.next_step().continued().unwrap();
         }
         explorerer.next_step().valid().unwrap()
@@ -23,7 +51,7 @@ fn three() {
     // Optimize based on path.
     assert_eq!(
         configuration,
-        ProgramConfiguration(
+        TypeConfiguration(
             vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
                 .into_iter()
                 .collect()

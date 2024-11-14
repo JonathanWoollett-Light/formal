@@ -696,9 +696,15 @@ fn new_lb(src: &[char]) -> Lb {
     let to = new_register(&src[..2]).unwrap();
     for i in 4..src.len() {
         if src[i] == '(' {
+            let from = src
+                .iter()
+                .skip(i + 1)
+                .take_while(|&&c| c != ')')
+                .copied()
+                .collect::<Vec<_>>();
             return Lb {
                 to,
-                from: new_register(&src[i + 1..src.len() - 1]).unwrap(),
+                from: new_register(&from).unwrap(),
                 offset: new_offset(&src[4..i]).unwrap(),
             };
         }
@@ -887,19 +893,17 @@ pub struct Offset {
 
 impl fmt::Display for Offset {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let x = if self.value == Immediate::ZERO {
-            String::new()
-        } else {
-            self.value.to_string()
-        };
-        write!(f, "{x}")
+        write!(f, "{}", self.value)
     }
 }
 
 fn new_offset(src: &[char]) -> Result<Offset, <i64 as std::str::FromStr>::Err> {
     Ok(Offset {
         value: if src.is_empty() {
-            Immediate { value: 0 }
+            Immediate {
+                radix: 10,
+                value: 0,
+            }
         } else {
             new_immediate(src)?
         },
@@ -1126,25 +1130,16 @@ fn new_li(src: &[char]) -> Li {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Immediate {
+    pub radix: u8,
     pub value: i64,
 }
 
 impl fmt::Display for Immediate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
-impl Immediate {
-    pub const ZERO: Immediate = Immediate { value: 0 };
-}
-
-impl std::ops::Add for Immediate {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            value: self.value + other.value,
+        match self.radix {
+            10 => write!(f, "{}", self.value),
+            16 => write!(f, "0x{:x}", self.value),
+            _ => unreachable!(),
         }
     }
 }
@@ -1155,54 +1150,21 @@ impl Immediate {
     }
 }
 
-impl From<[u8; 4]> for Immediate {
-    fn from(word: [u8; 4]) -> Self {
-        let bytes = <[u8; 8]>::try_from(
-            [0u8, 0u8, 0u8, 0u8]
-                .iter()
-                .chain(word.iter())
-                .copied()
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        Self {
-            value: i64::from_ne_bytes(bytes),
-        }
-    }
-}
-
-impl From<[u8; 8]> for Immediate {
-    fn from(doubleword: [u8; 8]) -> Self {
-        Self {
-            value: i64::from_ne_bytes(doubleword),
-        }
-    }
-}
-
-impl From<u8> for Immediate {
-    fn from(byte: u8) -> Self {
-        let bytes = <[u8; 8]>::try_from(
-            [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
-                .iter()
-                .chain(std::iter::once(&byte))
-                .copied()
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        Self {
-            value: i64::from_ne_bytes(bytes),
-        }
-    }
-}
-
 fn new_immediate(src: &[char]) -> Result<Immediate, <i64 as std::str::FromStr>::Err> {
-    let value = match src {
-        ['-', rem @ ..] => -rem.iter().collect::<String>().parse::<i64>()?,
-        ['0', 'x', rem @ ..] => i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
-        _ => src.iter().collect::<String>().parse()?,
+    let (radix, value) = match src {
+        ['-', '0', 'x', rem @ ..] => (
+            16,
+            -i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
+        ),
+        ['0', 'x', rem @ ..] => (
+            16,
+            i64::from_str_radix(&rem.iter().collect::<String>(), 16).unwrap(),
+        ),
+        ['-', rem @ ..] => (10, -rem.iter().collect::<String>().parse::<i64>()?),
+        _ => (10, src.iter().collect::<String>().parse()?),
     };
 
-    Ok(Immediate { value })
+    Ok(Immediate { radix, value })
 }
 
 #[derive(Debug, Clone)]

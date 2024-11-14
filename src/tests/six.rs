@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::path::PathBuf;
 
@@ -9,7 +10,21 @@ use tracing::info;
 fn six() {
     let (guard, mut ast, asserter) = super::setup_test("six");
 
-    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
+    let mut explorerer = unsafe {
+        Explorerer::new(
+            ast,
+            &[
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 1,
+                },
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 2,
+                },
+            ],
+        )
+    };
     let path = PathBuf::from("./assets/six.s");
     use crate::Instruction;
     use crate::Locality;
@@ -23,7 +38,7 @@ fn six() {
         // With each step we check the logs to ensure the state is as expected.
 
         // At the start of the program there are no found variables so no initial types for variables.
-        let mut program_configuration = ProgramConfiguration::new();
+        let mut program_configuration = TypeConfiguration::new();
         let config_is_empty = asserter.debug(&program_configuration);
         // We start with no types explored so none excluded.
         let empty_excluded = asserter.matches("excluded: {}");
@@ -122,7 +137,10 @@ fn six() {
             },
             this: Instruction::Li(Li {
                 register: Register::X6,
-                immediate: Immediate { value: 0 },
+                immediate: Immediate {
+                    radix: 10,
+                    value: 0,
+                },
             }),
         });
         let current = li_t1.clone();
@@ -149,7 +167,10 @@ fn six() {
                 to: Register::X5,
                 from: Register::X6,
                 offset: Offset {
-                    value: Immediate { value: 0 },
+                    value: Immediate {
+                        radix: 10,
+                        value: 0,
+                    },
                 },
             }),
         });
@@ -176,7 +197,10 @@ fn six() {
                 to: Register::X6,
                 from: Register::X5,
                 offset: Offset {
-                    value: Immediate { value: 0 },
+                    value: Immediate {
+                        radix: 10,
+                        value: 0,
+                    },
                 },
             }),
         });
@@ -203,7 +227,10 @@ fn six() {
             },
             this: Instruction::Li(Li {
                 register: Register::X7,
-                immediate: Immediate { value: 0 },
+                immediate: Immediate {
+                    radix: 10,
+                    value: 0,
+                },
             }),
         });
         let current = li_t2.clone();
@@ -569,7 +596,7 @@ fn six() {
     // Optimize based on path.
     assert_eq!(
         configuration,
-        ProgramConfiguration(
+        TypeConfiguration(
             vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
                 .into_iter()
                 .collect()

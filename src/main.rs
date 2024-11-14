@@ -105,7 +105,10 @@ fn print_ast(root: Option<NonNull<AstNode>>) -> String {
     let mut string = String::new();
     while let Some(next) = next_opt {
         let as_ref = unsafe { next.as_ref() };
-        string.push_str(&format!("{}\n", as_ref.as_ref().this));
+        string.push_str(&as_ref.as_ref().this.to_string());
+        #[cfg(target_os = "windows")]
+        string.push('\r');
+        string.push('\n');
         next_opt = as_ref.next;
     }
     string

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::verifier_types::*;
 use crate::*;
 
@@ -5,7 +7,21 @@ use crate::*;
 fn five() {
     let (guard, mut ast, _asserter) = super::setup_test("five");
 
-    let mut explorerer = unsafe { Explorerer::new(ast, 1..3) };
+    let mut explorerer = unsafe {
+        Explorerer::new(
+            ast,
+            &[
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 1,
+                },
+                InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts: 2,
+                },
+            ],
+        )
+    };
 
     // Find valid path.
     let ValidPathResult {
@@ -22,7 +38,7 @@ fn five() {
     // Optimize based on path.
     assert_eq!(
         configuration,
-        ProgramConfiguration(
+        TypeConfiguration(
             vec![(Label::from("value"), (LabelLocality::Global, Type::U32))]
                 .into_iter()
                 .collect()

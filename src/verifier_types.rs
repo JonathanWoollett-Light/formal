@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::InnerVerifierConfiguration;
 use num::traits::ToBytes;
 use num::CheckedAdd;
 use num::CheckedSub;
@@ -1271,11 +1272,24 @@ pub enum SetMemoryMapError {
     Missing,
     #[error("Failed to set the value: {0}")]
     Value(MemoryValueSetError),
+    #[error("Failed to set the value in main memory: {0}")]
+    MemoryValue(MemoryValueSetError)
 }
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
+    /// The contents of the programs `.bss` and `.data` sections.
     pub map: BTreeMap<MemoryLabel, MemoryValue>,
+    /// The contents of the programs heap (outside the `.bss` and `.data` sections).
+    pub memory: Vec<MemorySection>,
+    /// The description of the programs heap (outside the `.bss` and `.data` sections).
+    pub sections: Vec<crate::Section>,
 }
+#[derive(Debug, Clone)]
+pub struct MemorySection {
+    pub address: MemoryValueI64,
+    pub value: MemoryValue
+}
+use crate::Permissions;
 impl MemoryMap {
     pub fn get(
         &self,
@@ -1294,19 +1308,70 @@ impl MemoryMap {
     pub fn set(
         &mut self,
         // Memory location.
-        key: &MemoryPtr,
+        key: &MemoryValue,
         // Register length.
         len: &u64,
         // Register value.
         value: MemoryValue,
     ) -> Result<(), SetMemoryMapError> {
-        let MemoryPtr(Some(NonNullMemoryPtr { tag, offset })) = key else {
-            return Err(SetMemoryMapError::NullPtr);
-        };
-        let existing = self.map.get_mut(tag).ok_or(SetMemoryMapError::Missing)?;
-        existing
-            .set(offset, len, value)
-            .map_err(SetMemoryMapError::Value)
+        match key {
+            MemoryValue::Ptr(ptr) => {
+                let MemoryPtr(Some(NonNullMemoryPtr { tag, offset })) = ptr else {
+                    return Err(SetMemoryMapError::NullPtr);
+                };
+                let existing = self.map.get_mut(tag).ok_or(SetMemoryMapError::Missing)?;
+                existing
+                    .set(offset, len, value)
+                    .map_err(SetMemoryMapError::Value)
+            },
+            MemoryValue::I64(start) => {
+                let type_size = size(&Type::from(&value));
+                // Find the section that the store would be within.
+                // We can unwrap since we have found this exact section under `check_store` before.
+                let section = self.sections.iter().find(|s| {
+                    let required_size = start
+                        .sub(&s.address)
+                        .unwrap()
+                        .add(&MemoryValueI64::from(i64::try_from(type_size).unwrap()))
+                        .unwrap();
+                    match (start.compare(&s.address), s.size.compare(&required_size)) {
+                        (
+                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
+                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                        ) => true,
+                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                        _ => todo!(),
+                    }
+                }).unwrap();
+                // We again checked this before under `check_store`.
+                debug_assert!(matches!(section.permissions, Permissions::ReadWrite | Permissions::Write));
+                // We only store if the section is non-volatile.
+                if section.volatile {
+                    // Volatile sections should not exist
+                    debug_assert!(self.memory.iter().find(|m|match m.address.compare(&section.address) {
+                        RangeOrdering::Equal | RangeOrdering::Matches => true,
+                        _ => false
+                    }).is_none());
+                    Ok(())
+                }
+                else {
+                    // TODO This implementation means that every non-volatile memory section is fully stored
+                    // even if most of it will never be accessed by a program. This is super inefficient for
+                    // the compiler as it will massively bloat memory usage. Instead it should only store
+                    // values for the main memory which is actually used.
+                    let offset = &MemoryValueU64::try_from(start.sub(&section.address).unwrap()).unwrap();
+                    // Get memory section.
+                    let memory = self.memory.iter_mut().find(|m|match m.address.compare(&section.address) {
+                        RangeOrdering::Equal | RangeOrdering::Matches => true,
+                        _ => false
+                    }).unwrap();
+                    memory.value.set(offset, len, value).map_err(SetMemoryMapError::MemoryValue)
+                }
+                
+            }
+            _ => todo!()
+        }
     }
 
     // TODO This should be improved, I'm pretty sure the current approach is bad.
@@ -1316,7 +1381,7 @@ impl MemoryMap {
         value: &Type,
         tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
         hart: u8,
-    ) -> (MemoryLabel, ProgramConfiguration) {
+    ) -> (MemoryLabel, TypeConfiguration) {
         let mut vec = Vec::new();
         vec.push((None, value.clone()));
         let mut right = 0;
@@ -1332,7 +1397,7 @@ impl MemoryMap {
         }
 
         let mut left = right;
-        let mut subtypes = ProgramConfiguration::new();
+        let mut subtypes = TypeConfiguration::new();
         while left > 0 {
             left -= 1;
             if let (None, Type::List(_)) = &vec[left] {
@@ -1433,12 +1498,14 @@ pub struct State {
     // Each hart has its own registers.
     pub registers: Vec<RegisterValues>,
     pub memory: MemoryMap,
-    pub configuration: ProgramConfiguration,
+    pub configuration: TypeConfiguration,
 }
 impl State {
-    pub fn new(harts: u8, configuration: &ProgramConfiguration) -> Self {
+    pub fn new(system: &InnerVerifierConfiguration, configuration: &TypeConfiguration) -> Self {
         let mut memory = MemoryMap {
             map: Default::default(),
+            memory: Default::default(),
+            sections: system.sections.clone(),
         };
 
         // Initialize bss
@@ -1466,7 +1533,7 @@ impl State {
         }
 
         Self {
-            registers: (0..harts).map(|_| RegisterValues::default()).collect(),
+            registers: (0..system.harts).map(|_| RegisterValues::default()).collect(),
             memory,
             configuration: configuration.clone(),
         }
@@ -1518,11 +1585,11 @@ impl From<Locality> for LabelLocality {
     }
 }
 
-/// Each execution path is based on the initial types assumed for each variables encountered and the locality assumed for each variable encountered.
+/// Each execution path is based on the types and localities for each variable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ProgramConfiguration(pub BTreeMap<Label, (LabelLocality, Type)>);
-impl ProgramConfiguration {
-    pub fn append(&mut self, other: ProgramConfiguration) {
+pub struct TypeConfiguration(pub BTreeMap<Label, (LabelLocality, Type)>);
+impl TypeConfiguration {
+    pub fn append(&mut self, other: TypeConfiguration) {
         for (label, (locality, ttype)) in other.0.into_iter() {
             match locality {
                 LabelLocality::Global => {

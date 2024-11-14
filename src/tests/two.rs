@@ -74,7 +74,7 @@ fn two() {
         // With each step we check the logs to ensure the state is as expected.
 
         // At the start of the program there are no found variables so no initial types for variables.
-        let config_is_empty = asserter.matches("configuration: ProgramConfiguration({})");
+        let config_is_empty = asserter.matches("configuration: TypeConfiguration({})");
         // The initial state of the queue contains the 1st instruction for
         // the 1st hart for each number of running harts (in this case we
         // are checking program for systems with 1 hart and with 2 harts).
@@ -110,7 +110,7 @@ fn two() {
         queue.assert();
 
         let u8_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U8)})");
+            asserter.matches("configuration: TypeConfiguration({\"value\": (Global, U8)})");
         let base_assertions = &u8_config & &empty_excluded.repeat() & is_not_racy.repeat();
         let queue = asserter.matches(
             "queue: [\
@@ -175,7 +175,7 @@ fn two() {
         );
         let u8_excluded = asserter.matches(
             "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)})\
+            TypeConfiguration({\"value\": (Global, U8)})\
         }",
         );
         assert!(matches!(
@@ -197,7 +197,7 @@ fn two() {
         }
 
         let i8_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I8)})");
+            asserter.matches("configuration: TypeConfiguration({\"value\": (Global, I8)})");
         let queue = asserter.matches(
             "queue: [\
             { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
@@ -206,8 +206,8 @@ fn two() {
         );
         let excluded = asserter.matches(
             "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)})\
+            TypeConfiguration({\"value\": (Global, U8)}), \
+            TypeConfiguration({\"value\": (Global, I8)})\
         }",
         );
         assert!(matches!(
@@ -227,7 +227,7 @@ fn two() {
         }
 
         let u16_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U16)})");
+            asserter.matches("configuration: TypeConfiguration({\"value\": (Global, U16)})");
         let queue = asserter.matches(
             "queue: [\
             { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
@@ -236,9 +236,9 @@ fn two() {
         );
         let excluded = asserter.matches(
             "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)})\
+            TypeConfiguration({\"value\": (Global, U8)}), \
+            TypeConfiguration({\"value\": (Global, I8)}), \
+            TypeConfiguration({\"value\": (Global, U16)})\
         }",
         );
         assert!(matches!(
@@ -257,7 +257,7 @@ fn two() {
         }
 
         let i32_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, I16)})");
+            asserter.matches("configuration: TypeConfiguration({\"value\": (Global, I16)})");
         let queue = asserter.matches(
             "queue: [\
             { hart: 1/1, instruction: \"./assets/two.s:10:0\" }, \
@@ -266,10 +266,10 @@ fn two() {
         );
         let excluded = asserter.matches(
             "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)}), \
-            ProgramConfiguration({\"value\": (Global, I16)})\
+            TypeConfiguration({\"value\": (Global, U8)}), \
+            TypeConfiguration({\"value\": (Global, I8)}), \
+            TypeConfiguration({\"value\": (Global, U16)}), \
+            TypeConfiguration({\"value\": (Global, I16)})\
         }",
         );
         assert!(matches!(
@@ -287,10 +287,10 @@ fn two() {
         let queue = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:2:0\" }, { hart: 1/2, instruction: \"./assets/two.s:2:0\" }]");
         let excluded = asserter.matches(
             "excluded: {\
-            ProgramConfiguration({\"value\": (Global, U8)}), \
-            ProgramConfiguration({\"value\": (Global, I8)}), \
-            ProgramConfiguration({\"value\": (Global, U16)}), \
-            ProgramConfiguration({\"value\": (Global, I16)})\
+            TypeConfiguration({\"value\": (Global, U8)}), \
+            TypeConfiguration({\"value\": (Global, I8)}), \
+            TypeConfiguration({\"value\": (Global, U16)}), \
+            TypeConfiguration({\"value\": (Global, I16)})\
         }",
         );
         let base_assertions = (&config_is_empty.repeat() & &excluded) & is_not_racy.repeat();
@@ -319,7 +319,7 @@ fn two() {
         queue.assert();
 
         let u32_config =
-            asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32)})");
+            asserter.matches("configuration: TypeConfiguration({\"value\": (Global, U32)})");
         let queue = asserter.matches(
             "queue: [\
             { hart: 2/2, instruction: \"./assets/two.s:5:0\" }, \
@@ -461,7 +461,7 @@ fn two() {
             path = ExplorererPath::next_step(path).continued().unwrap();
         }
 
-        // let a = asserter.matches("configuration: ProgramConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
+        // let a = asserter.matches("configuration: TypeConfiguration({\"value\": (Global, U32), \"welcome\": (Thread({0}), List([U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8, U8]))})");
         // let b = asserter.matches("queue: [{ hart: 1/1, instruction: \"./assets/two.s:10:0\" }, { hart: 1/2, instruction: \"./assets/two.s:6:0\" }]");
         // let c = asserter.matches(
         //     "excluded: {\
