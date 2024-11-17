@@ -1,5 +1,16 @@
 # language
 
+## todo
+
+1. When running `cargo test three -- --nocapture` it gets stuck at step 9327 (likely loop, possibly in `draw_tree`).
+
+## things to make
+
+1. A bare-metal OS running doom.
+2. A bare-metal OS running a tor node.
+3. A bare-metal OS running a web-server
+4. A bare-metal OS running a level 1 hyper-visor, which can form the base of the serverless platform.
+
 ## onotation
 
 `O(n * h^r * 2^b * 8^v)`

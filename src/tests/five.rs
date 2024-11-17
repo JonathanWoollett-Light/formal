@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::verifier_types::*;
 use crate::*;
 

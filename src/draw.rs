@@ -3,7 +3,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::iter::repeat;
 use std::ops::Bound::{Excluded, Included};
-use std::ptr::NonNull;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 struct Coordinate {
@@ -35,20 +34,23 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
     let mut prev_depth = None;
     let mut coordinates = BTreeMap::<Coordinate, Type>::new();
     let mut stack = vec![(0, node)];
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some((depth, next)) = stack.pop() {
+        debug_assert!(check.next().is_some());
         let display = f(next);
 
         // Add width
         let width = display.chars().count();
 
+        // Only increment column when staying at same depth or going back up
         if let Some(pd) = prev_depth {
             if depth <= pd {
-                column += width_spacing + width + 1;
+                column += width_spacing;
             }
         }
-        prev_depth = Some(depth);
 
-        // Add coordinates of the node
+        // Store coordinates before adding width to maintain proper spacing
         coordinates.insert(
             Coordinate {
                 x: column,
@@ -57,7 +59,11 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
             next,
         );
 
-        // Add new nodes to stack.
+        // Now increment column by width for next iteration
+        column += width;
+        prev_depth = Some(depth);
+
+        // Add new nodes to stack
         if let crate::verifier::InnerNextVerifierNode::Branch(branch) = &next.as_ref().unwrap().next
         {
             stack.extend(branch.iter().copied().map(|n| (depth + 1, n)));
@@ -67,7 +73,10 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
     let mut output = String::new();
     let mut row = 0;
     let mut column = 0;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     for (Coordinate { x, y }, node) in &coordinates {
+        debug_assert!(check.next().is_some());
         let row_diff = y - row;
         if row_diff > 0 {
             column = 0;
@@ -82,7 +91,11 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
                 .peekable();
             output.push('\n');
             let mut last = 0;
+
+            #[cfg(debug_assertions)]
+            let mut inner_check = (0..1000).into_iter();
             while let Some(prev) = prev_iter.next() {
+                debug_assert!(inner_check.next().is_some());
                 let start = Coordinate { x: prev.x, y: *y };
                 let end = match prev_iter.peek() {
                     Some(Coordinate { x, .. }) => Coordinate { x: *x, y: *y },
@@ -104,7 +117,10 @@ pub unsafe fn draw_tree(node: Type, width_spacing: usize, f: fn(Type) -> String)
                         output.push('├');
                         output.extend(repeat('─').take(second.x - first.x - 1));
 
+                        #[cfg(debug_assertions)]
+                        let mut inner_inner_check = (0..1000).into_iter();
                         while let Some(first_following) = below_iter.next() {
+                            debug_assert!(inner_inner_check.next().is_some());
                             if let Some(second_following) = below_iter.peek() {
                                 output.push('┬');
                                 output.extend(

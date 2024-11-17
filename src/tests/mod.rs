@@ -15,7 +15,7 @@ pub fn setup_test(
 ) {
     use tracing_subscriber::layer::SubscriberExt;
     // Unforutnately `CARGO_TARGET_TMPDIR` isn't defined for unit tests.
-    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let dir = env!("CARGO_MANIFEST_DIR");
     let tmpdir = format!("{dir}/target/tmp");
     if !std::fs::exists(&tmpdir).unwrap() {
         std::fs::create_dir(&tmpdir).unwrap();

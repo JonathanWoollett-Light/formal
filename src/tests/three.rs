@@ -1,25 +1,21 @@
-use std::collections::BTreeMap;
-
 use crate::verifier_types::*;
 use crate::*;
-use tracing::info;
+use indicatif::{ProgressBar, ProgressStyle};
 
 #[test]
 fn three() {
-    let (guard, mut ast, asserter) = super::setup_test("three");
+    let (guard, mut ast, _asserter) = super::setup_test("three");
 
     let expected = include_str!("../../assets/three_ast.s");
     let actual = print_ast(ast);
     assert_eq!(actual, expected);
 
-    let sections = vec![
-        Section {
-            address: MemoryValueI64::from(0x10000000),
-            size: MemoryValueI64::from(1),
-            permissions: Permissions::Write,
-            volatile: true,
-        },
-    ];
+    let sections = vec![Section {
+        address: MemoryValueI64::from(0x10000000),
+        size: MemoryValueI64::from(1),
+        permissions: Permissions::Write,
+        volatile: true,
+    }];
     let mut explorerer = unsafe {
         Explorerer::new(
             ast,
@@ -36,15 +32,26 @@ fn three() {
         )
     };
 
+    let style = ProgressStyle::with_template(
+        "{bar:40} {pos:>7}/{len:>7} [{elapsed_precise} / {eta_precise}] {msg}",
+    )
+    .unwrap();
+
     // Find valid path.
     let ValidPathResult {
         configuration,
         touched,
         jumped,
     } = unsafe {
-        for _ in 0..8200 {
+        const N: u64 = 100_000;
+        let bar = ProgressBar::new(N)
+            .with_style(style.clone())
+            .with_message("verifiying program");
+        for _ in 0..N {
             explorerer = explorerer.next_step().continued().unwrap();
+            bar.inc(1);
         }
+        bar.finish();
         explorerer.next_step().valid().unwrap()
     };
 

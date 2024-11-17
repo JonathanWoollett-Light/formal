@@ -1,4 +1,4 @@
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{alloc, Layout};
 use std::ptr::NonNull;
 
 mod ast;
@@ -68,7 +68,10 @@ fn compress(root: &mut Option<NonNull<AstNode>>) {
         // Counts
         let mut next_opt = *root;
         let mut stack = Vec::new();
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while let Some(next) = next_opt {
+            debug_assert!(check.next().is_some());
             let as_ref = next.as_ref();
             stack.push(next);
             next_opt = as_ref.next;
@@ -77,7 +80,11 @@ fn compress(root: &mut Option<NonNull<AstNode>>) {
         // Re-allocates
         let ptr = alloc(Layout::array::<AstNode>(stack.len()).unwrap()).cast::<AstNode>();
         let mut next = None;
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while let Some(prev) = stack.pop() {
+            debug_assert!(check.next().is_some());
+
             // Copy
             let mut dest = NonNull::new(ptr.add(stack.len())).unwrap();
             prev.copy_to_nonoverlapping(dest, 1);
@@ -103,7 +110,10 @@ fn compress(root: &mut Option<NonNull<AstNode>>) {
 fn print_ast(root: Option<NonNull<AstNode>>) -> String {
     let mut next_opt = root;
     let mut string = String::new();
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some(next) = next_opt {
+        debug_assert!(check.next().is_some());
         let as_ref = unsafe { next.as_ref() };
         string.push_str(&as_ref.as_ref().this.to_string());
         #[cfg(target_os = "windows")]

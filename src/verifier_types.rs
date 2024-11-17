@@ -3,7 +3,6 @@ use crate::InnerVerifierConfiguration;
 use num::traits::ToBytes;
 use num::CheckedAdd;
 use num::CheckedSub;
-use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -12,18 +11,8 @@ use std::iter::once;
 use std::iter::repeat;
 use std::iter::Peekable;
 use std::ops::Add;
-use std::ops::Range;
-use std::ptr;
-use std::rc::Rc;
-use std::{
-    alloc::alloc,
-    collections::{HashMap, VecDeque},
-    ptr::NonNull,
-};
 use thiserror::Error;
 use tracing::error;
-use tracing::info;
-use tracing::trace;
 
 #[derive(Debug, Clone)]
 pub struct MemoryValueI8 {
@@ -36,9 +25,6 @@ impl From<i8> for MemoryValueI8 {
     }
 }
 
-impl MemoryValueI8 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-}
 impl RangeType for MemoryValueI8 {
     type Base = i8;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
@@ -66,9 +52,6 @@ impl From<u16> for MemoryValueU16 {
     }
 }
 
-impl MemoryValueU16 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-}
 impl RangeType for MemoryValueU16 {
     type Base = u16;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
@@ -96,9 +79,6 @@ impl From<i32> for MemoryValueI32 {
     }
 }
 
-impl MemoryValueI32 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-}
 impl RangeType for MemoryValueI32 {
     type Base = i32;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
@@ -126,9 +106,6 @@ impl From<i16> for MemoryValueI16 {
     }
 }
 
-impl MemoryValueI16 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-}
 impl RangeType for MemoryValueI16 {
     type Base = i16;
     fn new(start: Self::Base, stop: Self::Base) -> Option<Self> {
@@ -178,8 +155,6 @@ pub enum MemoryValueU8GetError {
 }
 
 impl MemoryValueU8 {
-    const ZERO: Self = Self { start: 0, stop: 0 };
-
     fn get(
         &self,
         SubSlice { offset, len }: &SubSlice,
@@ -499,12 +474,6 @@ pub enum MemoryValueU32GetError {
 pub struct MemoryValueU64 {
     pub start: u64,
     pub stop: u64,
-}
-
-pub struct DynamicMemoryValue {
-    size: usize,
-    /// `segments.iter().map(MemoryValue::size).sum() == size`
-    segments: Vec<MemoryValue>,
 }
 
 impl RangeType for MemoryValueU64 {
@@ -833,7 +802,10 @@ impl MemoryValue {
                 let mut iter = list.iter().enumerate();
 
                 // Iterate items before.
+                #[cfg(debug_assertions)]
+                let mut check = (0..1000).into_iter();
                 loop {
+                    debug_assert!(check.next().is_some());
                     let Some((i, item)) = iter.next() else { break };
                     let next = previous + size(&Type::from(item));
                     let current = MemoryValueU64 {
@@ -866,7 +838,10 @@ impl MemoryValue {
                     }
                 }
                 // Iterate items within
+                #[cfg(debug_assertions)]
+                let mut check = (0..1000).into_iter();
                 loop {
+                    debug_assert!(check.next().is_some());
                     let Some((i, item)) = iter.next() else { break };
                     let next = previous + size(&Type::from(item));
                     let current = MemoryValueU64 {
@@ -994,7 +969,10 @@ impl MemoryValue {
                     let mut iter = list.iter_mut().enumerate();
 
                     // Iterate items before.
+                    #[cfg(debug_assertions)]
+                    let mut check = (0..1000).into_iter();
                     loop {
+                        debug_assert!(check.next().is_some());
                         let Some((i, item)) = iter.next() else { break };
                         let size_of_item = size(&Type::from(item.clone()));
                         let next = previous + size_of_item;
@@ -1045,7 +1023,10 @@ impl MemoryValue {
                         }
                     }
                     // Iterate items within
+                    #[cfg(debug_assertions)]
+                    let mut check = (0..1000).into_iter();
                     loop {
+                        debug_assert!(check.next().is_some());
                         let Some((i, item)) = iter.next() else { break };
                         let next = previous + size(&Type::from(item.clone()));
                         let current = MemoryValueU64 {
@@ -1273,7 +1254,7 @@ pub enum SetMemoryMapError {
     #[error("Failed to set the value: {0}")]
     Value(MemoryValueSetError),
     #[error("Failed to set the value in main memory: {0}")]
-    MemoryValue(MemoryValueSetError)
+    MemoryValue(MemoryValueSetError),
 }
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
@@ -1287,7 +1268,7 @@ pub struct MemoryMap {
 #[derive(Debug, Clone)]
 pub struct MemorySection {
     pub address: MemoryValueI64,
-    pub value: MemoryValue
+    pub value: MemoryValue,
 }
 use crate::Permissions;
 impl MemoryMap {
@@ -1323,54 +1304,73 @@ impl MemoryMap {
                 existing
                     .set(offset, len, value)
                     .map_err(SetMemoryMapError::Value)
-            },
+            }
             MemoryValue::I64(start) => {
                 let type_size = size(&Type::from(&value));
                 // Find the section that the store would be within.
                 // We can unwrap since we have found this exact section under `check_store` before.
-                let section = self.sections.iter().find(|s| {
-                    let required_size = start
-                        .sub(&s.address)
-                        .unwrap()
-                        .add(&MemoryValueI64::from(i64::try_from(type_size).unwrap()))
-                        .unwrap();
-                    match (start.compare(&s.address), s.size.compare(&required_size)) {
-                        (
-                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
-                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
-                        ) => true,
-                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
-                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
-                        _ => todo!(),
-                    }
-                }).unwrap();
+                let section = self
+                    .sections
+                    .iter()
+                    .find(|s| {
+                        let required_size = start
+                            .sub(&s.address)
+                            .unwrap()
+                            .add(&MemoryValueI64::from(i64::try_from(type_size).unwrap()))
+                            .unwrap();
+                        match (start.compare(&s.address), s.size.compare(&required_size)) {
+                            (
+                                RangeOrdering::Greater
+                                | RangeOrdering::Equal
+                                | RangeOrdering::Matches,
+                                RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                            ) => true,
+                            (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                            (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                            _ => todo!(),
+                        }
+                    })
+                    .unwrap();
                 // We again checked this before under `check_store`.
-                debug_assert!(matches!(section.permissions, Permissions::ReadWrite | Permissions::Write));
+                debug_assert!(matches!(
+                    section.permissions,
+                    Permissions::ReadWrite | Permissions::Write
+                ));
                 // We only store if the section is non-volatile.
                 if section.volatile {
                     // Volatile sections should not exist
-                    debug_assert!(self.memory.iter().find(|m|match m.address.compare(&section.address) {
-                        RangeOrdering::Equal | RangeOrdering::Matches => true,
-                        _ => false
-                    }).is_none());
+                    debug_assert!(self
+                        .memory
+                        .iter()
+                        .find(|m| match m.address.compare(&section.address) {
+                            RangeOrdering::Equal | RangeOrdering::Matches => true,
+                            _ => false,
+                        })
+                        .is_none());
                     Ok(())
-                }
-                else {
+                } else {
                     // TODO This implementation means that every non-volatile memory section is fully stored
                     // even if most of it will never be accessed by a program. This is super inefficient for
                     // the compiler as it will massively bloat memory usage. Instead it should only store
                     // values for the main memory which is actually used.
-                    let offset = &MemoryValueU64::try_from(start.sub(&section.address).unwrap()).unwrap();
+                    let offset =
+                        &MemoryValueU64::try_from(start.sub(&section.address).unwrap()).unwrap();
                     // Get memory section.
-                    let memory = self.memory.iter_mut().find(|m|match m.address.compare(&section.address) {
-                        RangeOrdering::Equal | RangeOrdering::Matches => true,
-                        _ => false
-                    }).unwrap();
-                    memory.value.set(offset, len, value).map_err(SetMemoryMapError::MemoryValue)
+                    let memory = self
+                        .memory
+                        .iter_mut()
+                        .find(|m| match m.address.compare(&section.address) {
+                            RangeOrdering::Equal | RangeOrdering::Matches => true,
+                            _ => false,
+                        })
+                        .unwrap();
+                    memory
+                        .value
+                        .set(offset, len, value)
+                        .map_err(SetMemoryMapError::MemoryValue)
                 }
-                
             }
-            _ => todo!()
+            _ => todo!(),
         }
     }
 
@@ -1386,7 +1386,10 @@ impl MemoryMap {
         vec.push((None, value.clone()));
         let mut right = 0;
         // Fill queue with all types
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while right < vec.len() {
+            debug_assert!(check.next().is_some());
             if let Type::List(list) = &vec[right].1 {
                 for offset in 0..list.len() {
                     let t = vec[right].1.list_mut()[offset].clone();
@@ -1398,7 +1401,10 @@ impl MemoryMap {
 
         let mut left = right;
         let mut subtypes = TypeConfiguration::new();
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while left > 0 {
+            debug_assert!(check.next().is_some());
             left -= 1;
             if let (None, Type::List(_)) = &vec[left] {
                 let memory_types = vec
@@ -1533,7 +1539,9 @@ impl State {
         }
 
         Self {
-            registers: (0..system.harts).map(|_| RegisterValues::default()).collect(),
+            registers: (0..system.harts)
+                .map(|_| RegisterValues::default())
+                .collect(),
             memory,
             configuration: configuration.clone(),
         }

@@ -1,5 +1,4 @@
 use crate::ast::*;
-use crate::draw::draw_tree;
 use crate::verifier_types::*;
 use itertools::Itertools;
 use std::alloc::dealloc;
@@ -8,14 +7,10 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::iter::once;
-use std::ops::Range;
-use std::ptr;
 use std::ptr::null_mut;
-use std::{alloc::alloc, collections::VecDeque, ptr::NonNull};
+use std::{collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
-use tracing::debug;
 use tracing::error;
-use tracing::info;
 use tracing::trace;
 use tracing::warn;
 
@@ -312,8 +307,6 @@ impl Explorerer {
         let branch = leaf.prev.as_ref().unwrap();
         let ast = branch.node;
         let hart = branch.hart;
-        let root = branch.root.as_ref().unwrap();
-        let harts = root.configuration.harts;
 
         // debug!("hart: {}/{}", hart + 1, harts);
         // debug!("{:?}", branch.node.as_ref().value);
@@ -337,7 +330,8 @@ impl Explorerer {
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
             | Instruction::Branch(_)
-            | Instruction::Beq(_) => {}
+            | Instruction::Beq(_)
+            | Instruction::J(_) => {}
             Instruction::Define(Define {
                 label,
                 locality,
@@ -436,7 +430,10 @@ impl Explorerer {
         // valid path.
         // If the most recently encountered variable has exhausted all possible types, then move
         // on the the 2nd most recently encountered variable.
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while let Some(recent) = self.encountered.pop() {
+            debug_assert!(check.next().is_some());
             // Deallocate the path back to the 1st occurence of the variable `recent`.
             self.invalid_path(&recent);
 
@@ -485,7 +482,10 @@ impl Explorerer {
         let mut new_queue = VecDeque::new();
         // Iterate through the leaves in the tree and deallocate back to the 1st occurence of the
         // variable `recent`.
+        #[cfg(debug_assertions)]
+        let mut check = (0..10_000).into_iter();
         for leaf_ptr in self.queue.iter().copied() {
+            debug_assert!(check.next().is_some());
             let leaf = leaf_ptr.as_ref().unwrap();
 
             // You might think this condition would be fair
@@ -527,7 +527,10 @@ impl Explorerer {
             // it should have the same 1st occurence and we should have already deallocated it and
             // all it's children.
             let mut stack = vec![encounter.as_ref().unwrap().next.clone()];
+            #[cfg(debug_assertions)]
+            let mut inner_check = (0..10_000).into_iter();
             while let Some(current) = stack.pop() {
+                debug_assert!(inner_check.next().is_some());
                 // info!("current before: {current:?}");
                 match current {
                     InnerNextVerifierNode::Branch(branches) => {
@@ -597,13 +600,9 @@ impl Explorerer {
             // the case since the leaf is in the same system configuration with the same number of
             // harts.
             #[cfg(debug_assertions)]
-            let mut checker = 0;
+            let mut inner_check = (0..1000).into_iter();
             loop {
-                #[cfg(debug_assertions)]
-                {
-                    checker += 1;
-                    assert!(checker < 100);
-                }
+                debug_assert!(inner_check.next().is_some());
                 let start = start_ptr.as_ref().unwrap();
                 // info!("start: {start:?}");
                 // The first time `start.hart` is encountered, insert `start_ptr`, this sets the
@@ -638,11 +637,11 @@ impl Explorerer {
             encounter.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
             new_queue.push_back(new_leaf);
 
-            let first_explr = encounter.as_ref().unwrap().root.as_ref().unwrap().next;
-            let check = draw_tree(first_explr, 2, |n| {
-                let r = n.as_ref().unwrap();
-                format!("{:?}", r.node.as_ref().value)
-            });
+            // let first_explr = encounter.as_ref().unwrap().root.as_ref().unwrap().next;
+            // let check = draw_tree(first_explr, 2, |n| {
+            //     let r = n.as_ref().unwrap();
+            //     format!("{:?}", r.node.as_ref().value)
+            // });
             // info!("chec a: {check:?}");
         }
         // Set new queue.
@@ -733,7 +732,10 @@ impl Explorerer {
         // if typeof x = i8
         //   define y _ i8
         // ```
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while let Some((possible_locality, possible_type)) = iter.next() {
+            debug_assert!(check.next().is_some());
             // Check the possible type doesn't disagree with the define statement.
             if let Some(given_locality) = locality.borrow() {
                 if possible_locality != *given_locality {
@@ -930,7 +932,10 @@ impl Explorerer {
         let mut current = leaf.prev.as_ref().unwrap();
         let harts = current.root.as_ref().unwrap().configuration.harts;
         fronts.insert(current.hart, current.node);
+        #[cfg(debug_assertions)]
+        let mut check = (0..1000).into_iter();
         while fronts.len() < harts as usize {
+            debug_assert!(check.next().is_some());
             let PrevVerifierNode::Branch(branch) = current.prev else {
                 unreachable!()
             };
@@ -966,7 +971,8 @@ impl Explorerer {
                 | Instruction::Bge(_)
                 | Instruction::Fail(_)
                 | Instruction::Branch(_)
-                | Instruction::Beq(_) => Some(Err((hart, node))),
+                | Instruction::Beq(_)
+                | Instruction::J(_) => Some(Err((hart, node))),
                 // Possibly racy.
                 // If the label is thread local its not racy.
                 Instruction::Sb(Sb { to: register, .. })
@@ -1172,6 +1178,11 @@ impl Explorerer {
                             _ => todo!(),
                         }
                     }
+                    Instruction::J(J { dest }) => {
+                        jumped.insert(node);
+                        let label_node = find_label(node, dest).unwrap();
+                        followup(label_node, hart)
+                    }
                     // Non-conditional
                     Instruction::Label(_)
                     | Instruction::La(_)
@@ -1312,7 +1323,10 @@ impl Drop for Explorerer {
                 stack.push(system.as_ref().unwrap().next);
                 dealloc(system.cast(), Layout::new::<VerifierConfiguration>());
             }
+            #[cfg(debug_assertions)]
+            let mut check = (0..100_000).into_iter();
             while let Some(current) = stack.pop() {
+                debug_assert!(check.next().is_some());
                 match &current.as_ref().unwrap().next {
                     InnerNextVerifierNode::Branch(branch) => stack.extend_from_slice(&branch),
                     InnerNextVerifierNode::Leaf(leaf) => {
@@ -1409,7 +1423,10 @@ pub enum InvalidExplanation {
 unsafe fn get_backpath_harts(prev: *mut VerifierLeafNode) -> Vec<usize> {
     let mut current = prev.as_ref().unwrap().prev;
     let mut record = Vec::new();
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let PrevVerifierNode::Branch(branch) = current.as_ref().unwrap().prev {
+        debug_assert!(check.next().is_some());
         let r = match &branch.as_ref().unwrap().next {
             InnerNextVerifierNode::Branch(branches) => {
                 branches.iter().position(|&x| x == current).unwrap()
@@ -1436,7 +1453,10 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 
     // Trace backwards.
     let mut back = node;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some(prev) = back.as_ref().prev {
+        debug_assert!(check.next().is_some());
         if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().as_ref().this {
             if tag == label {
                 return Some(prev);
@@ -1447,7 +1467,10 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
 
     // Trace forward.
     let mut front = node;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some(next) = front.as_ref().next {
+        debug_assert!(check.next().is_some());
         if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().as_ref().this {
             if tag == label {
                 return Some(next);
@@ -1463,23 +1486,22 @@ unsafe fn find_state(
     leaf: *mut VerifierLeafNode, // The leaf to finish at.
     configuration: &TypeConfiguration,
 ) -> State {
-    info!(
-        "find_state for {:?} up to {:?}",
-        leaf.as_ref()
-            .unwrap()
-            .prev
-            .as_ref()
-            .unwrap()
-            .root
-            .as_ref()
-            .unwrap(),
-        leaf.as_ref().unwrap().prev.as_ref().unwrap().node.as_ref()
-    );
+    // info!(
+    //     "find_state for {:?} up to {:?}",
+    //     leaf.as_ref()
+    //         .unwrap()
+    //         .prev
+    //         .as_ref()
+    //         .unwrap()
+    //         .root
+    //         .as_ref()
+    //         .unwrap(),
+    //     leaf.as_ref().unwrap().prev.as_ref().unwrap().node.as_ref()
+    // );
 
     let record = get_backpath_harts(leaf);
     let root = leaf.as_ref().unwrap().prev.as_ref().unwrap().root;
     let system = &root.as_ref().unwrap().configuration;
-    let harts = system.harts;
 
     // Iterator to generate unique labels.
     const N: u8 = b'z' - b'a';
@@ -1508,7 +1530,8 @@ unsafe fn find_state(
             | Instruction::Bge(_)
             | Instruction::Bne(_)
             | Instruction::Branch(_)
-            | Instruction::Beq(_) => {}
+            | Instruction::Beq(_)
+            | Instruction::J(_) => {}
             // No side affects, but worth double checking.
             Instruction::Define(Define {
                 label,
@@ -1612,21 +1635,21 @@ unsafe fn find_state(
         };
     }
 
-    info!(
-        "hart: {}/{}, state: {:?}",
-        leaf.as_ref().unwrap().prev.as_ref().unwrap().hart,
-        leaf.as_ref()
-            .unwrap()
-            .prev
-            .as_ref()
-            .unwrap()
-            .root
-            .as_ref()
-            .unwrap()
-            .configuration
-            .harts,
-        state
-    );
+    // info!(
+    //     "hart: {}/{}, state: {:?}",
+    //     leaf.as_ref().unwrap().prev.as_ref().unwrap().hart,
+    //     leaf.as_ref()
+    //         .unwrap()
+    //         .prev
+    //         .as_ref()
+    //         .unwrap()
+    //         .root
+    //         .as_ref()
+    //         .unwrap()
+    //         .configuration
+    //         .harts,
+    //     state
+    // );
     state
 }
 
@@ -1670,10 +1693,16 @@ fn find_state_store(
                     ))
                     .unwrap(),
             }));
-            state.memory.set(&MemoryValue::Ptr(memloc), &len, from_value.clone()).unwrap();
+            state
+                .memory
+                .set(&MemoryValue::Ptr(memloc), &len, from_value.clone())
+                .unwrap();
         }
         MemoryValue::I64(x) => {
-            state.memory.set(&MemoryValue::I64(*x), &len, from_value.clone()).unwrap();
+            state
+                .memory
+                .set(&MemoryValue::I64(*x), &len, from_value.clone())
+                .unwrap();
         }
         _ => todo!(),
     }

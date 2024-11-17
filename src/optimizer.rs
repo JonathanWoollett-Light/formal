@@ -11,7 +11,10 @@ pub unsafe fn remove_untouched(
     // Remove untouched nodes.
     let mut next = *ast;
     let mut first = true;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some(current) = next {
+        debug_assert!(check.next().is_some());
         next = current.as_ref().next;
         if !touched.contains(&current) {
             if first {
@@ -32,7 +35,10 @@ pub unsafe fn remove_branches(
     use crate::Instruction::*;
     let mut next = *ast;
     let mut first = true;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     while let Some(current) = next {
+        debug_assert!(check.next().is_some());
         next = current.as_ref().next;
         match current.as_ref().as_ref().this {
             Bne(_) | Blt(_) | Beq(_) | Beqz(_) | Bnez(_) | Bge(_) => {

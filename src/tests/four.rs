@@ -1,12 +1,9 @@
-use std::collections::BTreeMap;
-
 use crate::verifier_types::*;
 use crate::*;
-use tracing::info;
 
 #[test]
 fn four() {
-    let (guard, mut ast, asserter) = super::setup_test("four");
+    let (guard, mut ast, _asserter) = super::setup_test("four");
 
     let mut explorerer = unsafe {
         Explorerer::new(

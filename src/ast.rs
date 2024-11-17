@@ -66,7 +66,11 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
     let mut front_opt = None;
     let mut a = 0;
     let mut b = 0;
+    #[cfg(debug_assertions)]
+    let mut check = (0..100_000).into_iter();
     while b < src.len() {
+        debug_assert!(check.next().is_some());
+
         // See https://stackoverflow.com/questions/1761051/difference-between-n-and-r
         #[cfg(target_os = "windows")]
         match src.get(b..=b + 1) {
@@ -102,7 +106,10 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
     alloc_node(&src[a..b], &mut front_opt, Span { path, span: a..b });
 
     let mut first = None;
+    #[cfg(debug_assertions)]
+    let mut inner_check = (0..1000).into_iter();
     while let Some(current) = front_opt {
+        debug_assert!(inner_check.next().is_some());
         first = Some(current);
         front_opt = unsafe { current.as_ref().prev };
     }
@@ -111,7 +118,10 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
 
 fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: Span) {
     let mut i = 0;
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     src = loop {
+        debug_assert!(check.next().is_some());
         match src.get(i) {
             None => return,
             Some(' ') => {}
@@ -503,7 +513,10 @@ fn new_cast(src: &[char]) -> Define {
     let mut i = 0;
     let mut j = 1;
 
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     let label = loop {
+        debug_assert!(check.next().is_some());
         if src[j] == ' ' {
             break new_label(&src[i..j]);
         }
@@ -524,7 +537,10 @@ fn new_cast(src: &[char]) -> Define {
     j += 1;
     i = j;
 
+    #[cfg(debug_assertions)]
+    let mut check = (0..1000).into_iter();
     let cast = loop {
+        debug_assert!(check.next().is_some());
         match src.get(j) {
             None | Some('#') => {
                 if matches!(src[i..j], ['_']) {
@@ -1332,7 +1348,7 @@ fn new_bnez(src: &[char]) -> Bnez {
 /// Jump
 #[derive(Debug, Clone)]
 pub struct J {
-    dest: Label,
+    pub dest: Label,
 }
 
 impl fmt::Display for J {
