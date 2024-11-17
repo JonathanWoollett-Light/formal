@@ -73,33 +73,25 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
 
         // See https://stackoverflow.com/questions/1761051/difference-between-n-and-r
         #[cfg(target_os = "windows")]
-        match src.get(b..=b + 1) {
-            Some(['\r', '\n']) => {
-                alloc_node(
-                    &src[a..b],
-                    &mut front_opt,
-                    Span {
-                        path: path.clone(),
-                        span: a..b,
-                    },
-                );
-                a = b + 2;
-            }
-            _ => {}
-        }
+        let cond = matches!(src.get(b..=b + 1), Some(['\r', '\n']));
 
         #[cfg(target_os = "linux")]
-        if src[b] == '\n' {
+        let cond = src[b] == '\n';
+
+        if cond {
             alloc_node(
                 &src[a..b],
                 &mut front_opt,
                 Span {
                     path: path.clone(),
-                    row,
-                    column: 0,
+                    span: a..b,
                 },
             );
             a = b + 1;
+            #[cfg(target_os = "windows")]
+            {
+                a += 1;
+            }
         }
         b += 1;
     }

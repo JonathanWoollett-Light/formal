@@ -43,7 +43,7 @@ fn three() {
         touched,
         jumped,
     } = unsafe {
-        const N: u64 = 100_000;
+        const N: u64 = 1_000_000;
         let bar = ProgressBar::new(N)
             .with_style(style.clone())
             .with_message("verifiying program");

@@ -1003,7 +1003,7 @@ impl MemoryValue {
                                             todo!()
                                         }
                                     }
-                                    _ => todo!(),
+                                    x => todo!("{x:?}"),
                                 }
                             }
                             // This case is likely to be a pain since the sub-type might itself be a list, so we need some

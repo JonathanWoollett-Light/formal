@@ -28,6 +28,8 @@ fn type_list() -> Vec<Type> {
     ]
 }
 
+use std::collections::HashSet;
+
 /// Contains the configuration of the system
 #[derive(Debug)]
 pub struct VerifierConfiguration {
@@ -115,6 +117,8 @@ fn locality_list() -> Vec<Locality> {
 // for valid use cases it will be slower as it needs to explore and validate paths it could never
 // reach in practice.
 pub struct Explorerer {
+    #[cfg(debug_assertions)]
+    pub counter: usize,
     /// Program configurations that have been found to be invalid.
     #[cfg(debug_assertions)]
     pub excluded: BTreeSet<TypeConfiguration>,
@@ -261,6 +265,7 @@ impl Explorerer {
             jumped,
             types: Default::default(),
             encountered: Default::default(),
+            counter: 0,
         };
         #[cfg(not(debug_assertions))]
         let x = Self {
@@ -279,6 +284,10 @@ impl Explorerer {
     // Advance the verifier by one instruction.
     pub unsafe fn next_step(mut self) -> ExplorePathResult {
         #[cfg(debug_assertions)]
+        {
+            self.counter += 1;
+        }
+
         // debug!("excluded: {:?}", self.excluded);
         // debug!("{:?}", self.configuration);
         // The queue represents all the nodes that need to be explored, the ordering of the queue
@@ -424,6 +433,12 @@ impl Explorerer {
         return ExplorePathResult::Continue(self);
     }
 
+    /// When an invalid path is encountered we need to backtrack from where we can start exploring a
+    /// new path. To do this we iterate across all leaves and de-allocate back up 1st encounter of
+    /// the last encountered variable (such that we can then try a new path where this variable has
+    /// different type infomation).
+    /// 1. Pop most recently encountered variable.
+    /// 2. De-allocate all nodes below
     pub unsafe fn outer_invalid_path(mut self) -> ExplorePathResult {
         // Deallocate nodes up to the 1st occurence of the most recently encountered variable.
         // If there is an invalid path without any variables defined, then there is no possible
@@ -459,7 +474,7 @@ impl Explorerer {
     }
 
     pub unsafe fn invalid_path(&mut self, recent: &Label) {
-        // We need to track covered ground so we don't retread it.
+        // I think we might need to track covered ground so we don't retread it.
         #[cfg(debug_assertions)]
         {
             self.excluded.insert(self.configuration.clone());
@@ -469,185 +484,85 @@ impl Explorerer {
         // Remove from current type configuration.
         self.configuration.remove(recent);
 
-        // Since the verification datastructure is a tree it should not be possible to attempt to
-        // deallocate already deallocated child node, but this exists as a second check to ensure
-        // this.
-        #[cfg(debug_assertions)]
-        let mut deallocated_branches = BTreeSet::new();
-        #[cfg(debug_assertions)]
-        let mut deallocated_leaves = BTreeSet::new();
-
-        // Deallocate all nodes after the 1st occurence of the variable `recent`.
-        let mut skip = BTreeSet::new();
-        let mut new_queue = VecDeque::new();
-        // Iterate through the leaves in the tree and deallocate back to the 1st occurence of the
-        // variable `recent`.
-        #[cfg(debug_assertions)]
-        let mut check = (0..10_000).into_iter();
-        for leaf_ptr in self.queue.iter().copied() {
-            debug_assert!(check.next().is_some());
-            let leaf = leaf_ptr.as_ref().unwrap();
-
-            // You might think this condition would be fair
-            // ```
-            // debug_assert_eq!(
-            //     leaf.hart_fronts.len() as u8,
-            //     leaf.prev.as_ref().unwrap().root.as_ref().unwrap().harts
-            // );
-            // ```
-            // but this would be a mistake since this iterates over all leaves and not all leaves
-            // belong to the same system configuration and thus values of `leaf_ptr` in this
-            // iteration can have a different number of harts.
-
-            if skip.contains(&leaf_ptr) {
-                continue;
+        // Split leafs into leafs which have encountered the variable and leafs which haven't.
+        // We can leave the leafs which haven't encounterd the variable unchanged while we need to
+        // deallocated leafs which have encountered it.
+        let mut encounters: BTreeMap<*mut VerifierNode, BTreeMap<Label, *mut VerifierNode>> =
+            BTreeMap::new();
+        let mut unchanged = VecDeque::new();
+        for leaf in self.queue.iter().copied() {
+            // Multiple leafs might have the same 1st encounter, in this case these leafs might
+            // encounter different variables later, but for encounters before the shared encounter
+            // they will all be the same. Given 2 leafs with encounters [a: 1, b: 3, d: 6] and
+            // [a: 1, b: 3, d:5] the new leaf that should exist after their deallocation should have
+            // only contain encounters that happened before the shared encounter e.g. [a: 1], we can
+            // easily determine this by the using the intersection of all encounters (retain where
+            // they have the same variable encountered at the same place).
+            let mut map = leaf.as_ref().unwrap().variable_encounters.clone();
+            if let Some(encounter) = map.remove(&recent) {
+                encounters
+                    .entry(encounter)
+                    .and_modify(|ve| ve.retain(|k, v| map.get(k) == Some(v)))
+                    .or_insert(map);
+            } else {
+                unchanged.push_back(leaf);
             }
-            let Some(encounter) = leaf.variable_encounters.get(&recent) else {
-                continue;
-            };
-            // info!("encounter: {encounter:?}");
+        }
 
-            // let explr_root = encounter.as_ref().unwrap().root.as_ref().unwrap();
-            // let first_explr = explr_root.next;
-            // info!("explr_root harts: {}", explr_root.harts);
-            // let check = draw_tree(first_explr, 2, |n| {
-            //     let r = n.as_ref().unwrap();
-            //     format!("{:?} {:?} {:?}", n, r.hart, r.node.as_ref().value.this)
-            // });
-            // info!("check {leaf_ptr:?}: {check:?}");
+        // Set the queue to the leafs which haven't encountered the variable.
+        // We will append new leafs later in this scope as leafs to replace the leafs we deallocate.
+        self.queue = unchanged;
 
-            debug_assert!(!deallocated_branches.contains(encounter));
-            let mut variable_encounters = leaf.variable_encounters.clone();
+        // Iterate across leafs we need to deallocate.
+        for (encounter_ptr, variable_encounters) in encounters {
+            // We can `unwrap` here since every path will have `_start` nodes for every heart that
+            // will prevent an encounter ever following a root.
+            let encounter_ref = encounter_ptr.as_ref().unwrap();
+            // Store previous node.
+            let current = *encounter_ref.prev.branch().unwrap();
+            let root = encounter_ref.root;
+            let harts = root.as_ref().unwrap().configuration.harts;
 
-            // TODO An error occurs here since `leaf.variable_encounters` is not correctly updated.
-            // Fix this.
-
-            // Starting from the 1st occurence recorded on this leaf, deallocate all children.
-            // If we deallocate a leaf node, record this so we can skip it in the outer loop since
-            // it should have the same 1st occurence and we should have already deallocated it and
-            // all it's children.
-            let mut stack = vec![encounter.as_ref().unwrap().next.clone()];
-            #[cfg(debug_assertions)]
-            let mut inner_check = (0..10_000).into_iter();
-            while let Some(current) = stack.pop() {
-                debug_assert!(inner_check.next().is_some());
-                // info!("current before: {current:?}");
-                match current {
+            // De-allocate the 1st encounter for this variable.
+            let mut stack = vec![encounter_ptr];
+            while let Some(next) = stack.pop() {
+                match &next.as_ref().unwrap().next {
                     InnerNextVerifierNode::Branch(branches) => {
-                        for branch in branches {
-                            let next = branch.as_ref().unwrap().next.clone();
-                            stack.push(next);
-
-                            // We will need a new version of encountered later and so we track if any of the
-                            // other encountered are deallocated in this process.
-                            // If a variable is present in this instruction.
-                            if let Some(var) =
-                                branch.as_ref().unwrap().node.as_ref().value.this.variable()
-                            {
-                                // If this node is the 1st where the variable is encountered.
-                                if branch == *variable_encounters.get(var).unwrap() {
-                                    variable_encounters.remove(var);
-                                }
-                            }
-
-                            debug_assert!(deallocated_branches.insert(branch));
-                            dealloc(branch.cast(), Layout::new::<VerifierLeafNode>());
-                        }
+                        stack.extend(branches);
                     }
-                    InnerNextVerifierNode::Leaf(l) => {
-                        skip.insert(l);
-                        #[cfg(debug_assertions)]
-                        {
-                            // Check for double-free errors.
-                            // info!("old deallocated_leaves: {deallocated_leaves:?}");
-                            assert!(deallocated_leaves.insert(l));
-                            // info!("new deallocated_leaves: {deallocated_leaves:?}");
-                            // Check that the 1st occurence of the variable for this leaf, matches the
-                            // 1st occurence for the variable on `leaf`, this should be true since these
-                            // leaves are both children of the first occurence node.
-                            // info!("l: {l:?}");
-                            let subleaf = l.as_ref().unwrap();
-                            // info!("subleaf: {subleaf:?}");
-                            let subencounter = subleaf.variable_encounters.get(&recent).unwrap();
-                            assert_eq!(subencounter, encounter);
-                        }
-
-                        // info!("deallocating leaf: {l:?}");
-                        dealloc(l.cast(), Layout::new::<VerifierLeafNode>());
-                        // info!("deallocated leaf: {l:?}");
+                    InnerNextVerifierNode::Leaf(leaf) => {
+                        dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>());
                     }
                 }
+                dealloc(next.cast(), Layout::new::<VerifierLeafNode>());
             }
-            // info!("checking deallocated_leaves: {deallocated_leaves:?}");
-            // info!("contains: {leaf_ptr:?}");
-            // let check = deallocated_leaves.contains(&leaf_ptr);
-            // // info!("check: {check:?}");
-            // debug_assert!(check);
 
-            // info!("hit here a");
-
-            // Set the new hart fronts.
-            //
-            // We could do this more efficiently by storing `hart_prev` on `VerifierNode` to indicate the last node on
-            // the same hart. Unfortunately since we will have a large number of `VerifierNode`s this will add a massive
-            // amount to memory usage for (what I estimate to be) a relatively insignificant runtime improvement.
-            // TODO produce a comparison of the current approach to an approach using the `hart_prev` approach.
+            // Get new hart fronts
+            let mut prev = current;
             let mut hart_fronts = BTreeMap::new();
-            let mut start_ptr = *encounter;
-            // info!("hit here asd");
-
-            // We iterate until collecting as many hart fronts as we had previously, this should be
-            // the case since the leaf is in the same system configuration with the same number of
-            // harts.
-            #[cfg(debug_assertions)]
-            let mut inner_check = (0..1000).into_iter();
             loop {
-                debug_assert!(inner_check.next().is_some());
-                let start = start_ptr.as_ref().unwrap();
-                // info!("start: {start:?}");
-                // The first time `start.hart` is encountered, insert `start_ptr`, this sets the
-                // most recent instructions on each hart.
-                hart_fronts.entry(start.hart).or_insert(start_ptr);
-                // info!("start.prev:{:?}", start.prev);
-
-                if hart_fronts.len() == leaf.hart_fronts.len() {
+                let branch_ptr = prev;
+                let branch_ref = branch_ptr.as_ref().unwrap();
+                hart_fronts.entry(branch_ref.hart).or_insert(branch_ptr);
+                if hart_fronts.len() == harts as usize {
                     break;
                 }
-
-                // Iterate back through the tree.
-                //
-                // It should not be possible to reach the root here, since every hart will have an
-                // initial `_start` instruction `hart_fronts.len() < leaf.hart_fronts.len()` should
-                // be true before `start.prev.branch().is_none()`
-                start_ptr = *start.prev.branch().unwrap();
+                // We can `unwrap` here since it should be guranteed that every path has a node for
+                // every hart which will ensure `hart_fronts.len() == harts as usize` before hitting
+                // the root.
+                prev = *branch_ref.prev.branch().unwrap();
             }
 
-            // info!("didn't hit here b");
-
-            // Set the new leaf.
+            // Set new leaf node.
+            // The `encounter.prev` will never be a root since the `_start` nodes follow the root.
             let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
-                prev: *encounter,
+                prev: current,
                 variable_encounters,
-                hart_fronts,
+                hart_fronts: hart_fronts,
             }));
-            // info!(
-            //     "updating `encounter.as_mut().unwrap().next`: {:?} -> {new_leaf:?}",
-            //     encounter.as_mut().unwrap().next
-            // );
-            encounter.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
-            new_queue.push_back(new_leaf);
-
-            // let first_explr = encounter.as_ref().unwrap().root.as_ref().unwrap().next;
-            // let check = draw_tree(first_explr, 2, |n| {
-            //     let r = n.as_ref().unwrap();
-            //     format!("{:?}", r.node.as_ref().value)
-            // });
-            // info!("chec a: {check:?}");
+            current.as_mut().unwrap().next = InnerNextVerifierNode::Leaf(new_leaf);
+            self.queue.push_back(new_leaf);
         }
-        // Set new queue.
-        self.queue = new_queue;
-
-        // info!("hit here");
     }
 
     /// Attempts to modify initial types to include a new variable, if it cannot add it,
