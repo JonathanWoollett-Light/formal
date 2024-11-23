@@ -127,9 +127,28 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
-        ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
+        ['#', '$', ' ', rem @ .., ] => {
+            Instruction::Define(new_cast(rem))
+        },
         ['#', ..] => return,
-        _ => new_instruction(src),
+        _ => {
+            let mut out = None;
+            // Get all characters until finding a comment
+            'outer: for j in 0..src.len() {
+                if src[j] == '#' {
+                    // Skip all spaces that precede the comment seperator
+                    for k in (0..j).rev() {
+                        if src[k] != ' ' {
+                            out = Some(new_instruction(&src[0..=k]));
+                            break 'outer;
+                        }
+                    }
+                    unreachable!();
+                }
+            }
+            // Unwrap in case of comment or create new in case of no comment
+            out.unwrap_or(new_instruction(&src[0..]))
+        },
     };
 
     let nonnull = unsafe {
@@ -393,7 +412,6 @@ fn new_type(src: &[char]) -> Type {
             break;
         };
         match c {
-            '#' => break,
             ']' => {
                 let current = Type::List(current_list.take().unwrap());
                 if let Some(mut stacked) = list_stack.pop() {
@@ -534,7 +552,7 @@ fn new_cast(src: &[char]) -> Define {
     let cast = loop {
         debug_assert!(check.next().is_some());
         match src.get(j) {
-            None | Some('#') => {
+            None => {
                 if matches!(src[i..j], ['_']) {
                     break None;
                 } else {
@@ -855,16 +873,12 @@ impl fmt::Display for Sb {
 
 fn new_sb(src: &[char]) -> Sb {
     let from = new_register(&src[..2]).unwrap();
-    for i in 4..src.len() {
-        if src[i] == '(' {
-            return Sb {
-                from,
-                to: new_register(&src[i + 1..src.len() - 1]).unwrap(),
-                offset: new_offset(&src[4..i]).unwrap(),
-            };
-        }
+    let (i,j) = parse_store(src);
+    Sb {
+        from,
+        to: new_register(&src[i + 1..j]).unwrap(),
+        offset: new_offset(&src[4..i]).unwrap(),
     }
-    unreachable!()
 }
 
 #[derive(Debug, Clone)]
@@ -882,13 +896,22 @@ impl fmt::Display for Sw {
 
 fn new_sw(src: &[char]) -> Sw {
     let from = new_register(&src[..2]).unwrap();
+    let (i,j) = parse_store(src);
+    Sw {
+        from,
+        to: new_register(&src[i + 1..j]).unwrap(),
+        offset: new_offset(&src[4..i]).unwrap(),
+    }
+}
+
+fn parse_store(src: &[char]) -> (usize,usize) {
     for i in 4..src.len() {
         if src[i] == '(' {
-            return Sw {
-                from,
-                to: new_register(&src[i + 1..src.len() - 1]).unwrap(),
-                offset: new_offset(&src[4..i]).unwrap(),
-            };
+            for j in i..src.len() {
+                if src[j] == ')' {
+                    return (i, j);
+                }
+            }
         }
     }
     unreachable!()
@@ -1097,17 +1120,17 @@ impl fmt::Debug for Register {
     }
 }
 
-fn new_register(src: &[char]) -> Option<Register> {
+fn new_register(src: &[char]) -> Result<Register, Vec<char>> {
     match src {
-        ['t', '0'] => Some(Register::X5),
-        ['t', '1'] => Some(Register::X6),
-        ['t', '2'] => Some(Register::X7),
-        ['t', '3'] => Some(Register::X28),
-        ['t', '4'] => Some(Register::X29),
-        ['t', '5'] => Some(Register::X30),
-        ['a', '0'] => Some(Register::X10),
-        ['a', '1'] => Some(Register::X11),
-        _ => None,
+        ['t', '0'] => Ok(Register::X5),
+        ['t', '1'] => Ok(Register::X6),
+        ['t', '2'] => Ok(Register::X7),
+        ['t', '3'] => Ok(Register::X28),
+        ['t', '4'] => Ok(Register::X29),
+        ['t', '5'] => Ok(Register::X30),
+        ['a', '0'] => Ok(Register::X10),
+        ['a', '1'] => Ok(Register::X11),
+        _ => Err(Vec::from(src)),
     }
 }
 
@@ -1131,8 +1154,8 @@ fn new_li(src: &[char]) -> Li {
         .copied()
         .collect::<Vec<_>>();
     Li {
-        register: new_register(&src[..2]).unwrap(),
-        immediate: new_immediate(&imm).unwrap(),
+        register: new_register(&src[..2]).expect(&format!("{:?} {src:?}",&src[..2])),
+        immediate: new_immediate(&imm).expect(&format!("{imm:?} {src:?}")),
     }
 }
 

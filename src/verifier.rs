@@ -14,6 +14,9 @@ use tracing::error;
 use tracing::trace;
 use tracing::warn;
 
+use std::collections::HashSet;
+use tracing::info;
+
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
     vec![
@@ -28,7 +31,7 @@ fn type_list() -> Vec<Type> {
     ]
 }
 
-use std::collections::HashSet;
+
 
 /// Contains the configuration of the system
 #[derive(Debug)]
@@ -117,6 +120,8 @@ fn locality_list() -> Vec<Locality> {
 // for valid use cases it will be slower as it needs to explore and validate paths it could never
 // reach in practice.
 pub struct Explorerer {
+    #[cfg(debug_assertions)]
+    pub last_out: Option<TypeConfiguration>,
     #[cfg(debug_assertions)]
     pub counter: usize,
     /// Program configurations that have been found to be invalid.
@@ -256,6 +261,7 @@ impl Explorerer {
         // We return the explorer and it's contained state.
         #[cfg(debug_assertions)]
         let x = Self {
+            last_out: None,
             systems,
             second_ptr,
             excluded,
@@ -286,7 +292,20 @@ impl Explorerer {
         #[cfg(debug_assertions)]
         {
             self.counter += 1;
+            
+            if let Some(old) = &mut self.last_out {
+                if *old != self.configuration {
+                    info!("{}",self.configuration);
+                    *old = self.configuration.clone();
+                }
+                
+            }
+            else {
+                info!("{}",self.configuration);
+                self.last_out = Some(self.configuration.clone());
+            }
         }
+        
 
         // debug!("excluded: {:?}", self.excluded);
         // debug!("{:?}", self.configuration);
@@ -347,19 +366,19 @@ impl Explorerer {
                 cast,
             }) => {
                 if !self.load_label(leaf, label, cast, locality, hart) {
-                    // info!("cannot load label in define");
+                    info!("cannot load label in define {:?}", ast.as_ref());
                     return self.outer_invalid_path();
                 }
             }
             Instruction::Lat(Lat { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
-                    // info!("cannot load label in lat");
+                    info!("cannot load label in lat {:?}", ast.as_ref());
                     return self.outer_invalid_path();
                 }
             }
             Instruction::La(La { register: _, label }) => {
                 if !self.load_label(leaf, label, None, None, hart) {
-                    // info!("cannot load label in la");
+                    info!("cannot load label in la {:?}", ast.as_ref());
                     return self.outer_invalid_path();
                 }
             }
@@ -418,6 +437,7 @@ impl Explorerer {
             }
             // If any fail is encountered then the path is invalid.
             Instruction::Fail(_) => {
+                info!("hit fail {:?}", ast.as_ref());
                 return self.outer_invalid_path();
             }
             x => todo!("{x:?}"),
@@ -723,6 +743,7 @@ impl Explorerer {
                     false => {
                         // The path is invalid, so we add the current types to the
                         // excluded list and restart exploration.
+                        info!("reached invalid store in path due to attempting to accress memory space past a label, size: {size:?}, offset: {full_offset:?}, node: {:?}", branch.borrow().node.as_ref().value);
                         Err(self.outer_invalid_path())
                     }
                     true => {
@@ -768,9 +789,13 @@ impl Explorerer {
                 if let Some(section) = section_opt {
                     match section.permissions {
                         Permissions::ReadWrite | Permissions::Write => Ok(self),
-                        Permissions::Read => Err(self.outer_invalid_path()),
+                        Permissions::Read => {
+                            info!("reached invalid path due to attempt to write to read-only");
+                            Err(self.outer_invalid_path())
+                        },
                     }
                 } else {
+                    info!("reached invalid path due to attempt to write to undescribed memory");
                     Err(self.outer_invalid_path())
                 }
             }
@@ -800,9 +825,10 @@ impl Explorerer {
                     state.configuration.get(<&Label>::from(from_label)).unwrap();
 
                 // If attempting to access outside the memory space for the label.
+                let offset_value = offset.borrow().value.value;
                 let full_offset = MemoryValueU64::from(type_size)
                     .add(&MemoryValueU64::from(
-                        u64::try_from(offset.borrow().value.value).unwrap(),
+                        u64::try_from(offset_value).unwrap(),
                     ))
                     .unwrap()
                     .add(from_offset)
@@ -812,6 +838,7 @@ impl Explorerer {
                     false => {
                         // The path is invalid, so we add the current types to the
                         // excluded list and restart exploration.
+                        info!("reached invalid load in path due to attempting to accress memory space past a label, size: {size:?}, offset: {full_offset:?} ({type_size:?} + {offset_value} + {from_offset:?}), node: {:?}", branch.borrow().node.as_ref().value);
                         return Err(self.outer_invalid_path());
                     }
                     true => {

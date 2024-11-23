@@ -1643,6 +1643,16 @@ impl TypeConfiguration {
         Self(BTreeMap::new())
     }
 }
+impl fmt::Display for TypeConfiguration {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let x = self.0.iter().map(|(k,(l,v))|format!("{k}:{}{v},", match l {
+            LabelLocality::Global => "G",
+            LabelLocality::Thread(_) => "T"
+        })).collect::<String>();
+        write!(f, "Config: [{x}]")
+    }
+}
 
 pub fn memory_range(offset: &MemoryValueU64, len: &u64) -> MemoryValueU64 {
     MemoryValueU64 {

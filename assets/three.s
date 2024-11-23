@@ -65,19 +65,18 @@ _no_items:
     la t0, welcome
     li t1, 72 # 'H'
     sb t1, 0(t0)
-    li t1, 48 # '0'
+    li t1, 0 # '0'
     sb t1, 1(t0)
 
     # Output message
-    la a0, welcome
-
+    la a0, welcome # Load message address
+    li t1, 0x10000000 # Load character device address
 _write_uart:
-    li t1, 0x10000000
-    lb t2, (a0)
-    beqz t2, _wait
-    sb t2, (t1)
-    addi a0, a0, 1
-    j _write_uart
+    lb t2, (a0) # Load character
+    beqz t2, _wait # If character is \0 break
+    sb t2, (t1) # Store character into character device
+    addi a0, a0, 1 # Add 1 message address
+    j _write_uart # Jump to load next character
 
 _wait:
     wfi

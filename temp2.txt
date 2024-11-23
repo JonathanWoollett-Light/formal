@@ -36,7 +36,7 @@ _no_items:
 la t0, welcome
 li t1, 72
 sb t1, 0(t0)
-li t1, 0
+li t1, 48
 sb t1, 1(t0)
 la a0, welcome
 li t1, 0x10000000

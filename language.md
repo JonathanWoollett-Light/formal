@@ -2,7 +2,7 @@
 
 ## todo
 
-1. When running `cargo test three -- --nocapture` it gets stuck at step 9327 (likely loop, possibly in `draw_tree`).
+1. When running `cargo test three -- --nocapture` it seems to break on a different step each time, this shouldn't be possible as execution should be deterministic.
 
 ## things to make
 
