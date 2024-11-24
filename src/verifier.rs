@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::verifier_types::*;
 use itertools::Itertools;
+use sha2::Digest;
 use std::alloc::dealloc;
 use std::alloc::Layout;
 use std::borrow::Borrow;
@@ -11,11 +12,9 @@ use std::ptr::null_mut;
 use std::{collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
 use tracing::error;
+use tracing::info;
 use tracing::trace;
 use tracing::warn;
-
-use std::collections::HashSet;
-use tracing::info;
 
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
@@ -30,8 +29,6 @@ fn type_list() -> Vec<Type> {
         Type::I64,
     ]
 }
-
-
 
 /// Contains the configuration of the system
 #[derive(Debug)]
@@ -120,6 +117,8 @@ fn locality_list() -> Vec<Locality> {
 // for valid use cases it will be slower as it needs to explore and validate paths it could never
 // reach in practice.
 pub struct Explorerer {
+    #[cfg(debug_assertions)]
+    pub hash: sha2::Sha256,
     #[cfg(debug_assertions)]
     pub last_out: Option<TypeConfiguration>,
     #[cfg(debug_assertions)]
@@ -261,6 +260,7 @@ impl Explorerer {
         // We return the explorer and it's contained state.
         #[cfg(debug_assertions)]
         let x = Self {
+            hash: sha2::Sha256::new(),
             last_out: None,
             systems,
             second_ptr,
@@ -292,20 +292,17 @@ impl Explorerer {
         #[cfg(debug_assertions)]
         {
             self.counter += 1;
-            
+
             if let Some(old) = &mut self.last_out {
                 if *old != self.configuration {
-                    info!("{}",self.configuration);
+                    info!("{}", self.configuration);
                     *old = self.configuration.clone();
                 }
-                
-            }
-            else {
-                info!("{}",self.configuration);
+            } else {
+                info!("{}", self.configuration);
                 self.last_out = Some(self.configuration.clone());
             }
         }
-        
 
         // debug!("excluded: {:?}", self.excluded);
         // debug!("{:?}", self.configuration);
@@ -328,6 +325,25 @@ impl Explorerer {
                 jumped: self.jumped.clone(),
             });
         };
+
+        #[cfg(debug_assertions)]
+        {
+            use base64::prelude::*;
+            let leaf = leaf_ptr.as_ref().unwrap();
+            let branch = leaf.prev.as_ref().unwrap();
+            let node = branch.node.as_ref();
+            let ast = &node.value;
+            self.hash.update(format!("{ast:?}"));
+            let out = match self.counter {
+                _ => self.counter % 1000 == 0,
+            };
+            if out {
+                let buffer = self.hash.finalize_reset();
+                let bytes = buffer.as_slice();
+                let string = BASE64_STANDARD.encode(bytes);
+                info!("hash {}: {string}", self.counter);
+            }
+        }
 
         // Get some data.
         let leaf = leaf_ptr.as_mut().unwrap();
@@ -792,7 +808,7 @@ impl Explorerer {
                         Permissions::Read => {
                             info!("reached invalid path due to attempt to write to read-only");
                             Err(self.outer_invalid_path())
-                        },
+                        }
                     }
                 } else {
                     info!("reached invalid path due to attempt to write to undescribed memory");
@@ -827,9 +843,7 @@ impl Explorerer {
                 // If attempting to access outside the memory space for the label.
                 let offset_value = offset.borrow().value.value;
                 let full_offset = MemoryValueU64::from(type_size)
-                    .add(&MemoryValueU64::from(
-                        u64::try_from(offset_value).unwrap(),
-                    ))
+                    .add(&MemoryValueU64::from(u64::try_from(offset_value).unwrap()))
                     .unwrap()
                     .add(from_offset)
                     .unwrap();

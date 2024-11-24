@@ -8,6 +8,8 @@ tracing = { version = "0.1.40", features =["valuable"]}
 itertools = "0.13.0"
 thiserror = "1.0.63"
 num = "0.4.3"
+sha2 = "0.10.8"
+base64 = "0.22.1"
 
 [dev-dependencies]
 tracing-test = "0.2.5"

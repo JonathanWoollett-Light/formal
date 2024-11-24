@@ -127,9 +127,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
     let instr = match src {
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
-        ['#', '$', ' ', rem @ .., ] => {
-            Instruction::Define(new_cast(rem))
-        },
+        ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -148,7 +146,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
             }
             // Unwrap in case of comment or create new in case of no comment
             out.unwrap_or(new_instruction(&src[0..]))
-        },
+        }
     };
 
     let nonnull = unsafe {
@@ -873,7 +871,7 @@ impl fmt::Display for Sb {
 
 fn new_sb(src: &[char]) -> Sb {
     let from = new_register(&src[..2]).unwrap();
-    let (i,j) = parse_store(src);
+    let (i, j) = parse_store(src);
     Sb {
         from,
         to: new_register(&src[i + 1..j]).unwrap(),
@@ -896,7 +894,7 @@ impl fmt::Display for Sw {
 
 fn new_sw(src: &[char]) -> Sw {
     let from = new_register(&src[..2]).unwrap();
-    let (i,j) = parse_store(src);
+    let (i, j) = parse_store(src);
     Sw {
         from,
         to: new_register(&src[i + 1..j]).unwrap(),
@@ -904,7 +902,7 @@ fn new_sw(src: &[char]) -> Sw {
     }
 }
 
-fn parse_store(src: &[char]) -> (usize,usize) {
+fn parse_store(src: &[char]) -> (usize, usize) {
     for i in 4..src.len() {
         if src[i] == '(' {
             for j in i..src.len() {
@@ -1154,7 +1152,7 @@ fn new_li(src: &[char]) -> Li {
         .copied()
         .collect::<Vec<_>>();
     Li {
-        register: new_register(&src[..2]).expect(&format!("{:?} {src:?}",&src[..2])),
+        register: new_register(&src[..2]).expect(&format!("{:?} {src:?}", &src[..2])),
         immediate: new_immediate(&imm).expect(&format!("{imm:?} {src:?}")),
     }
 }
