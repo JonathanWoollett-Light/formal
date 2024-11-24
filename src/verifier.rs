@@ -373,7 +373,6 @@ impl Explorerer {
             | Instruction::Beqz(_)
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
-            | Instruction::Branch(_)
             | Instruction::Beq(_)
             | Instruction::J(_) => {}
             Instruction::Define(Define {
@@ -926,7 +925,6 @@ impl Explorerer {
                 | Instruction::Beqz(_)
                 | Instruction::Bge(_)
                 | Instruction::Fail(_)
-                | Instruction::Branch(_)
                 | Instruction::Beq(_)
                 | Instruction::J(_) => Some(Err((hart, node))),
                 // Possibly racy.
@@ -1153,10 +1151,6 @@ impl Explorerer {
                     | Instruction::Lw(_)
                     | Instruction::Lb(_)
                     | Instruction::Fail(_) => followup(node_ref.next.unwrap(), hart),
-                    Instruction::Branch(Branch { out }) => {
-                        let label_node = find_label(node, out).unwrap();
-                        followup(label_node, hart)
-                    }
                     // See note on `wfi`.
                     Instruction::Wfi(_) => Some(Ok((hart, node_ref.next.unwrap()))),
                     // Blocking.
@@ -1485,7 +1479,6 @@ unsafe fn find_state(
             | Instruction::Beqz(_)
             | Instruction::Bge(_)
             | Instruction::Bne(_)
-            | Instruction::Branch(_)
             | Instruction::Beq(_)
             | Instruction::J(_) => {}
             // No side affects, but worth double checking.

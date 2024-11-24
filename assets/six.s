@@ -5,7 +5,7 @@ _start:
     # It would otherwise default to thread local.
     #
     # Another way we could enforce locality would be loading the
-    # type of `value` (with `lat`) then comparing the type locality
+    # type of `value` (with `#&`) then comparing the type locality
     # and jumping to `invalid` if the type were not thread local.
     #
     # The difference in these approaches is that `#$` is faster and

@@ -128,6 +128,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
         ['#', '!'] => Instruction::Fail(Fail),
         ['#', '?'] => Instruction::Unreachable(Unreachable),
         ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
+        ['#', '&', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -197,7 +198,6 @@ pub enum Instruction {
     Bne(Bne),
     Define(Define),
     Lat(Lat),
-    Branch(Branch),
     Beq(Beq),
 }
 
@@ -233,8 +233,6 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['b', 'g', 'e', ' ', rem @ ..] => Instruction::Bge(new_bge(rem)),
         ['l', 'd', ' ', rem @ ..] => Instruction::Ld(new_ld(rem)),
         ['b', 'n', 'e', ' ', rem @ ..] => Instruction::Bne(new_bne(rem)),
-        ['l', 'a', 't', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
-        ['b', 'r', 'a', 'n', 'c', 'h', ' ', rem @ ..] => Instruction::Branch(new_branch(rem)),
         ['b', 'e', 'q', ' ', rem @ ..] => Instruction::Beq(new_beq(rem)),
         [.., ':'] => Instruction::Label(new_label_instruction(src)),
         x => todo!("{x:?}"),
@@ -269,7 +267,6 @@ impl fmt::Display for Instruction {
             Bne(bne) => write!(f, "{bne}"),
             Unreachable(unreachable) => write!(f, "{unreachable}"),
             Define(cast) => write!(f, "{cast}"),
-            Branch(branch) => write!(f, "{branch}"),
             Beq(beq) => write!(f, "{beq}"),
         }
     }
@@ -573,27 +570,6 @@ fn new_locality(src: &[char]) -> Locality {
         ['t', 'h', 'r', 'e', 'a', 'd'] => Locality::Thread,
         ['g', 'l', 'o', 'b', 'a', 'l'] => Locality::Global,
         x @ _ => todo!("{x:?}"),
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Branch {
-    pub out: Label,
-}
-
-impl fmt::Display for Branch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "branch {}", self.out)
-    }
-}
-fn new_branch(src: &[char]) -> Branch {
-    let out = src
-        .iter()
-        .take_while(|&&c| c != ' ')
-        .copied()
-        .collect::<Vec<_>>();
-    Branch {
-        out: new_label(&out),
     }
 }
 
@@ -1224,7 +1200,7 @@ pub struct Lat {
 
 impl fmt::Display for Lat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "lat {}, {}", self.register, self.label)
+        write!(f, "#& {}, {}", self.register, self.label)
     }
 }
 

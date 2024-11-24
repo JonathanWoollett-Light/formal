@@ -33,7 +33,7 @@ _start:
 
     # Declare string
     # Get address of type structure
-    lat t0, welcome
+    #& t0, welcome
 
     # Check variable is list
     li t2, 8 # Load list type number
@@ -58,7 +58,7 @@ _check_item:
     bne t3, t4, _invalid
     addi t0, t0, 25  # Increment list item address (8+8+8+1)
     addi t5, t5, 1 # Increment the count
-    branch _check_item # Keep iterating until no items left
+    j _check_item # Keep iterating until no items left
 _no_items:
 
     # Set string

@@ -68,10 +68,11 @@ In future it might be worth using a custom version of `NonNull` that counts the 
 
 keyword|assembly symbol
 ---|---
-`fail`|`#!`
-`unreachable`|`#?`
-`define`|`#$`
-`section`|`#@`
+`fail` | `#!`
+`unreachable` | `#?`
+`define` | `#$`
+`section` | `#@`
+`lat` | `#&`
 
 ## optimizing
 

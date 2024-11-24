@@ -13,7 +13,7 @@ bge t1, t2, _invalid
 csrr t0, mhartid
 bnez t0, _wait
 #$ welcome _ [u8 u8]
-lat t0, welcome
+#& t0, welcome
 li t2, 8
 ld t1, 0(t0)
 bne t1, t2, _invalid
@@ -31,7 +31,7 @@ li t4, 0
 bne t3, t4, _invalid
 addi t0, t0, 25
 addi t5, t5, 1
-branch _check_item
+j _check_item
 _no_items:
 la t0, welcome
 li t1, 72

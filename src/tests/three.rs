@@ -44,7 +44,7 @@ fn three() {
         touched,
         jumped,
     } = unsafe {
-        const N: u64 = 20477;
+        const N: u64 = 20475;
         let bar = ProgressBar::new(N)
             .with_style(style.clone())
             .with_message("verifiying program");
@@ -94,7 +94,7 @@ fn three() {
         csrr t0, mhartid\n\
         bnez t0, _wait\n\
         #$ welcome _ [u8 u8]\n\
-        lat t0, welcome\n\
+        #& t0, welcome\n\
         li t2, 8\n\
         ld t1, 0(t0)\n\
         bne t1, t2, _invalid\n\
@@ -112,7 +112,7 @@ fn three() {
         bne t3, t4, _invalid\n\
         addi t0, t0, 25\n\
         addi t5, t5, 1\n\
-        branch _check_item\n\
+        j _check_item\n\
         _no_items:\n\
         la t0, welcome\n\
         li t1, 72\n\
@@ -152,7 +152,7 @@ fn three() {
         csrr t0, mhartid\n\
         bnez t0, _wait\n\
         #$ welcome _ [u8 u8]\n\
-        lat t0, welcome\n\
+        #& t0, welcome\n\
         li t2, 8\n\
         ld t1, 0(t0)\n\
         addi t0, t0, 16\n\
@@ -167,7 +167,7 @@ fn three() {
         li t4, 0\n\
         addi t0, t0, 25\n\
         addi t5, t5, 1\n\
-        branch _check_item\n\
+        j _check_item\n\
         _no_items:\n\
         la t0, welcome\n\
         li t1, 72\n\
