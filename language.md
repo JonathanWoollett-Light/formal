@@ -1,5 +1,15 @@
 # language
 
+## dev setup
+
+- download assembly and loader from https://github.com/riscv-collab/riscv-gnu-toolchain/releases
+- download `riscv64-elf-ubuntu-24.04-gcc`
+- run `riscv/riscv64-unknown-elf/bin/as -`
+- assemble source to ELF object file `riscv/riscv64-unknown-elf/bin/as -o program.o program.s`
+- link object file to ELF executable `riscv/riscv64-unknown-elf/bin/ld -o program.elf program.o`
+- convert ELF to raw binary `riscv/riscv64-unknown-elf/bin/objcopy -O binary program.elf program.bin`
+- when running in QEMU you will probably use the ELF executable.
+
 ## languages to take inspiration from
 
 - https://lean-lang.org/
