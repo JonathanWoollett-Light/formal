@@ -1,8 +1,14 @@
 # language
 
-## todo
+## languages to take inspiration from
 
-
+- https://lean-lang.org/
+- https://www.rust-lang.org/
+- https://ziglang.org/
+- https://ocaml.org/
+- https://ada-lang.io/
+- https://www.modular.com/mojo
+- https://www.python.org/
 
 ## things to make
 
