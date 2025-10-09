@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    />
+    <title>Placeholder lang</title>
+    <style>
+      .code {
+        font-family: "consolas";
+        background-color: rgba(100, 100, 100, 0.2);
+        padding: 5px;
+        border-radius: 3px;
+        white-space-collapse: preserve;
+        text-wrap: nowrap;
+        overflow-x: auto;
+        margin: 5px;
+      }
+      .assembly {
+        font-size: 14px;
+        overflow-y: auto;
+        max-height: 262px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container" style="padding-top: 0px">
+      <nav style="padding-bottom: 50px">
+        <ul>
+          <li><h1 style="margin-bottom: 0px">Placeholder lang</h1></li>
+        </ul>
+        <ul>
+          <li>
+            <a href="https://github.com/JonathanWoollett-Light/language"
+              >GitHub</a
+            >
+          </li>
+        </ul>
+      </nav>
+      <h4>
+        🚧Anything and everything might not work and much isn't yet
+        implemented🚧
+      </h4>
+      <ul>
+        <li>
+          <b>Fewer keywords than C.</b>
+          <i>"An idiot admires complexity, a genius admires simplicity"</i> -
+          Terry A Davis
+        </li>
+        <li>
+          <b>Infallible type inference</b> unlike
+          <a href="https://www.rust-lang.org/">Rust</a> which constantly fails
+          to infer type infomation.
+        </li>
+        <li>
+          <b>No stack overflow</b> because there is no recursion. There is
+          always a better iterative solution.
+        </li>
+        <li>
+          <b>No hidden memory allocations</b> unlike
+          <a href="https://ziglang.org/">Zig</a> which still does fallible stack
+          allocation.
+        </li>
+        <li>
+          <b>Formal verification</b> like
+          <a href="https://ada-lang.io/">Ada</a> but simpler.
+        </li>
+        <li>
+          <b>No generics or templates</b> becuase it doesn't need hints to
+          figure out the types that work.
+        </li>
+      </ul>
+      <p>Supports <a href="https://riscv.org/">RISC-V</a> ✓</p>
+      Doesn't support
+      <a href="https://en.wikipedia.org/wiki/AArch64">aarch64</a> ?
+      <p></p>
+      <p>
+        Won't support
+        <a href="https://en.wikipedia.org/wiki/X86-64">x86-64</a> ✗
+      </p>
+      <h3>Hello, World!</h3>
+      <div class="grid">
+        <div>
+          <h5>Placeholder</h5>
+          <p class="code">
+            include https://placeholder/syscalls.lang<br />write stdout "Hello,
+            World!\n"<br />exit 0
+          </p>
+          <p class="code">
+            placeholder new hello-world<br />cd hello-world<br />placeholder
+            build<br />cat ./build/assembly.s
+          </p>
+          <p class="code assembly">
+            .global _start<br />_start:<br />mov x8, #64<br />mov x0, #1<br />ldr
+            x1, =a<br />mov x2, #14<br />svc #0<br />mov x8, #93<br />mov x0,
+            #0<br />svc #0<br />.data<br />a: .byte
+            72,101,108,108,111,44,32,87,111,114,108,100,33,10
+          </p>
+        </div>
+        <div>
+          <h5>Rust</h5>
+          <p class="code">
+            fn main() {<br />
+            println!("Hello, world!");<br />}
+          </p>
+          <p class="code">
+            cargo new hello-world<br />cd hello-world<br />cargo rustc --release
+            -- --emit asm<br />cat $(find . | grep "hello_world-.*\.s")
+          </p>
+          <p class="code assembly">
+            .text<br />
+            .file "hello_world.72da610180e2e4bd-cgu.0"<br />
+            .section
+            .text._ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,"ax",@progbits<br />
+            .p2align 2<br />
+            .type
+            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,@function<br />_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E:<br />
+            .cfi_startproc<br />
+            str x30, [sp, #-16]!<br />
+            .cfi_def_cfa_offset 16<br />
+            .cfi_offset w30, -16<br />
+            blr x0<br />
+            //APP<br />
+            //NO_APP<br />
+            ldr x30, [sp], #16<br />
+            .cfi_def_cfa_offset 0<br />
+            .cfi_restore w30<br />
+            ret<br />.Lfunc_end0:<br />
+            .size
+            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,
+            .Lfunc_end0-_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
+            .cfi_endproc<br /><br />
+            .section
+            .text._ZN3std2rt10lang_start17h29862496ae07c657E,"ax",@progbits<br />
+            .hidden _ZN3std2rt10lang_start17h29862496ae07c657E<br />
+            .globl _ZN3std2rt10lang_start17h29862496ae07c657E<br />
+            .p2align 2<br />
+            .type _ZN3std2rt10lang_start17h29862496ae07c657E,@function<br />_ZN3std2rt10lang_start17h29862496ae07c657E:<br />
+            .cfi_startproc<br />
+            stp x30, x0, [sp, #-16]!<br />
+            .cfi_def_cfa_offset 16<br />
+            .cfi_offset w30, -16<br />
+            mov w4, w3<br />
+            mov x3, x2<br />
+            mov x2, x1<br />
+            adrp x1, .L__unnamed_1<br />
+            add x1, x1, :lo12:.L__unnamed_1<br />
+            add x0, sp, #8<br />
+            bl _ZN3std2rt19lang_start_internal17h95d6f6a22ba2f96dE<br />
+            ldr x30, [sp], #16<br />
+            .cfi_def_cfa_offset 0<br />
+            .cfi_restore w30<br />
+            ret<br />.Lfunc_end1:<br />
+            .size _ZN3std2rt10lang_start17h29862496ae07c657E,
+            .Lfunc_end1-_ZN3std2rt10lang_start17h29862496ae07c657E<br />
+            .cfi_endproc<br /><br />
+            .section
+            ".text._ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE","ax",@progbits<br />
+            .p2align 2<br />
+            .type
+            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE,@function<br />_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE:<br />
+            .cfi_startproc<br />
+            str x30, [sp, #-16]!<br />
+            .cfi_def_cfa_offset 16<br />
+            .cfi_offset w30, -16<br />
+            ldr x0, [x0]<br />
+            bl
+            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
+            mov w0, wzr<br />
+            ldr x30, [sp], #16<br />
+            .cfi_def_cfa_offset 0<br />
+            .cfi_restore w30<br />
+            ret<br />.Lfunc_end2:<br />
+            .size
+            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE,
+            .Lfunc_end2-_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
+            .cfi_endproc<br /><br />
+            .section
+            ".text._ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE","ax",@progbits<br />
+            .p2align 2<br />
+            .type
+            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE,@function<br />_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE:<br />
+            .cfi_startproc<br />
+            str x30, [sp, #-16]!<br />
+            .cfi_def_cfa_offset 16<br />
+            .cfi_offset w30, -16<br />
+            ldr x0, [x0]<br />
+            bl
+            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
+            mov w0, wzr<br />
+            ldr x30, [sp], #16<br />
+            .cfi_def_cfa_offset 0<br />
+            .cfi_restore w30<br />
+            ret<br />.Lfunc_end3:<br />
+            .size
+            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE,
+            .Lfunc_end3-_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE<br />
+            .cfi_endproc<br /><br />
+            .section
+            ".text._ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE","ax",@progbits<br />
+            .p2align 2<br />
+            .type
+            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE,@function<br />_ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE:<br />
+            .cfi_startproc<br />
+            ret<br />.Lfunc_end4:<br />
+            .size
+            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE,
+            .Lfunc_end4-_ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE<br />
+            .cfi_endproc<br /><br />
+            .section
+            .text._ZN11hello_world4main17hff90392c72a0ce9aE,"ax",@progbits<br />
+            .p2align 2<br />
+            .type _ZN11hello_world4main17hff90392c72a0ce9aE,@function<br />_ZN11hello_world4main17hff90392c72a0ce9aE:<br />
+            .cfi_startproc<br />
+            sub sp, sp, #64<br />
+            .cfi_def_cfa_offset 64<br />
+            str x30, [sp, #48]<br />
+            .cfi_offset w30, -16<br />
+            adrp x8, .L__unnamed_2<br />
+            add x8, x8, :lo12:.L__unnamed_2<br />
+            mov w9, #1<br />
+            adrp x10, .L__unnamed_3<br />
+            add x10, x10, :lo12:.L__unnamed_3<br />
+            mov x0, sp<br />
+            stp xzr, xzr, [sp, #24]<br />
+            stp x8, x9, [sp]<br />
+            str x10, [sp, #16]<br />
+            bl _ZN3std2io5stdio6_print17h111c70694d02e77dE<br />
+            ldr x30, [sp, #48]<br />
+            add sp, sp, #64<br />
+            .cfi_def_cfa_offset 0<br />
+            .cfi_restore w30<br />
+            ret<br />.Lfunc_end5:<br />
+            .size _ZN11hello_world4main17hff90392c72a0ce9aE,
+            .Lfunc_end5-_ZN11hello_world4main17hff90392c72a0ce9aE<br />
+            .cfi_endproc<br /><br />
+            .section .text.main,"ax",@progbits<br />
+            .globl main<br />
+            .p2align 2<br />
+            .type main,@function<br />main:<br />
+            .cfi_startproc<br />
+            str x30, [sp, #-16]!<br />
+            .cfi_def_cfa_offset 16<br />
+            .cfi_offset w30, -16<br />
+            mov x2, x1<br />
+            sxtw x1, w0<br />
+            adrp x0, _ZN11hello_world4main17hff90392c72a0ce9aE<br />
+            add x0, x0, :lo12:_ZN11hello_world4main17hff90392c72a0ce9aE<br />
+            mov w3, wzr<br />
+            bl _ZN3std2rt10lang_start17h29862496ae07c657E<br />
+            ldr x30, [sp], #16<br />
+            ret<br />.Lfunc_end6:<br />
+            .size main, .Lfunc_end6-main<br />
+            .cfi_endproc<br /><br />
+            .type .L__unnamed_1,@object<br />
+            .section .data.rel.ro..L__unnamed_1,"aw",@progbits<br />
+            .p2align 3, 0x0<br />.L__unnamed_1:<br />
+            .xword
+            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE<br />
+            .asciz "\b\000\000\000\000\000\000\000\b\000\000\000\000\000\000"<br />
+            .xword
+            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE<br />
+            .xword
+            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
+            .xword
+            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
+            .size .L__unnamed_1, 48<br /><br />
+            .type .L__unnamed_4,@object<br />
+            .section .rodata..L__unnamed_4,"a",@progbits<br />.L__unnamed_4:<br />
+            .ascii "Hello, world!\n"<br />
+            .size .L__unnamed_4, 14<br /><br />
+            .type .L__unnamed_2,@object<br />
+            .section .data.rel.ro..L__unnamed_2,"aw",@progbits<br />
+            .p2align 3, 0x0<br />.L__unnamed_2:<br />
+            .xword .L__unnamed_4<br />
+            .asciz "\016\000\000\000\000\000\000"<br />
+            .size .L__unnamed_2, 16<br /><br />
+            .type .L__unnamed_3,@object<br />
+            .section .rodata..L__unnamed_3,"a",@progbits<br />
+            .p2align 3, 0x0<br />.L__unnamed_3:<br />
+            .size .L__unnamed_3, 0<br /><br />
+            .ident "rustc version 1.76.0-nightly (9fad68599 2023-12-03)"<br />
+            .section ".note.GNU-stack","",@progbits
+          </p>
+        </div>
+      </div>
+      <h3>Keywords</h3>
+      <ol>
+        <li>
+          <span class="code">if</span>:
+          <a
+            href="https://doc.rust-lang.org/rust-by-example/flow_control/if_else.html"
+            >Rust's <span class="code">if</span></a
+          >
+          without the brackets<sup>1</sup>.
+        </li>
+        <li>
+          <span class="code">loop</span>:
+          <a
+            href="https://doc.rust-lang.org/rust-by-example/flow_control/loop.html"
+            >Rust's <span class="code">loop</span></a
+          >
+          without the brackets<sup>1</sup>.
+        </li>
+        <li>
+          <span class="code">break</span>: Jumps out of the current
+          <span class="code">loop</span><sup>1</sup>.
+        </li>
+        <li>
+          <span class="code">def</span>:
+          <a href="https://www.w3schools.com/python/python_functions.asp"
+            >Python's <span class="code">def</span></a
+          >
+          without the <span class="code">:</span><sup>2</sup>.
+        </li>
+        <li>
+          <span class="code">in</span>: The arguments given to a
+          function<sup>3</sup>.
+        </li>
+        <li>
+          <span class="code">out</span>: The output given to a function.
+          <span class="code">a := b - c + d</span> after unrolling and type
+          inference is equivalent to
+          <p class="code">c + d @ x<br />b - x @ y<br />a := y @ null</p>
+          <span class="code">@</span> can only be defined on the outermost
+          expression in a line, the outputs of nested expression are used to
+          chain the expressions together.
+        </li>
+        <li>
+          <span class="code">fail</span>: If reachable triggers a failure in
+          formal verification.
+        </li>
+        <li>
+          <span class="code">assume</span>: Mark code which will be passed to
+          formal verification but excluded at run-time.
+          <span class="code">assume x %= 4</span> tells the verifier
+          <span class="code">{ 0 ≤ x &lt 4 }</span>.
+        </li>
+        <li>
+          <span class="code">valueof</span>: Gets the value of a value.
+          <p class="code">
+            a := valueof 1 // a = value_literal = 0<br />b := valueof c // b =
+            value_variable = 1
+          </p>
+        </li>
+        <li>
+          <span class="code">unreachable</span>: Marks the end of execution, all
+          following statements are unreachable.
+        </li>
+        <li>
+          <span class="code">macro</span>: Similar to
+          <a href="https://gcc.gnu.org/onlinedocs/cpp/Macros.html"
+            >macros in C</a
+          >. Macro evaluation happens before the AST is parsed and simply
+          performs a find and replace on the text contents of source files.
+          Since <span class="code">:=</span> is a function,
+          <span class="code">macro</span> is how constants used in the
+          definition of <span class="code">:=</span> are defined. Unless writing
+          your own core, you should never need to use this.
+        </li>
+        <li>
+          <span class="code">asm</span>: The prefix for a line with in-line
+          assembly e.g. <span class="code">asm mov x0, 1</span>.
+        </li>
+        <li>
+          <span class="code">section</span>: Defines the valid address space.
+          <p class="code">
+            section 100 200 read // read 100 to 200<br />section 300 400 write
+            // write 300 to 400<br />section 500 600 readwrite // read+write 500
+            to 600
+          </p>
+        </li>
+      </ol>
+      <h4>Notes</h4>
+      <ol>
+        <li>
+          <span class="code">if</span>, <span class="code">loop</span> and
+          <span class="code">break</span>
+          will be removed as intrinsics and added to the core library as
+          functions when the compiler is re-written in the language. At this
+          point functions will be able to mutate their child AST. This will
+          enable equivalent support to
+          <a href="https://doc.rust-lang.org/reference/procedural-macros.html"
+            >procedural macros found in other languages</a
+          >
+          but better.
+        </li>
+        <li>
+          I'm not commited to using <span class="code">def</span> as the
+          function keyword. I'm considering <span class="code">fn</span>.
+        </li>
+        <li>
+          I'm thinking about splitting <span class="code">in</span> into
+          <span class="code">lhs</span> and <span class="code">rhs</span> as
+          this will make all input patterns differentiable to a function.
+          Currently with <span class="code">in</span> when you have a function
+          <span class="code">my_function</span> calling it with
+          <span class="code">a my_function b</span> or
+          <span class="code">my_function a b</span>
+          appears identical to the function.
+        </li>
+      </ol>
+
+      <h4>Features that might require new keywords</h4>
+      <ol>
+        <li>Generation of unique errors codes.</li>
+        <li>Deferred logging.</li>
+        <li>
+          Non-exhaustive checking. E.g. use gradient descent to search for a
+          minimium to check.
+        </li>
+        <li>
+          Starting new threads during execution. The current assumption is based
+          on bare-metal where the program begins with all hardware threads
+          running.
+        </li>
+        <li>
+          Functions mutating the AST like procedural macros. This would be a
+          massive usability improvement over traditional macros and even
+          procedural macros, in essence it would allow every function to access
+          a pointer to its location in the current AST and then edit it
+          dynamically making all functions more powerful than the most powerful
+          macros in other languages. This is accomplished through the formal
+          verification mechanism which can check that all paths resolve to the
+          same AST.
+        </li>
+      </ol>
+    </main>
+  </body>
+</html>

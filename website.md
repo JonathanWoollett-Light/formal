@@ -1,0 +1,1 @@
+Run `npx prettier ./index.html --write` to format `index.html`
