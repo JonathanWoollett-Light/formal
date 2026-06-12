@@ -47,6 +47,7 @@ fn three() {
         configuration,
         touched,
         jumped,
+        accessed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path. (Its full
@@ -203,12 +204,115 @@ fn three() {
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
 
-    // Lower to runnable RISC-V — instructions plus the generated `.data`/`.bss`
-    // for the inferred layout (`value: u32`, `welcome: [u8 u8]`, and `welcome`'s
-    // runtime type descriptor) — and boot it in QEMU (requires the toolchain +
-    // QEMU). Hart 0 writes the message ("H\0") to the UART, so success is "ran with
-    // no CPU fault and the UART received 'H'".
-    let serial = unsafe { run_program("three", ast, &configuration) };
+    // The byte ranges the program was proven to access at runtime. Note what is
+    // *absent*: byte 24 of `__welcome_type` and bytes 8–25/33–50 of
+    // `__welcome_subtypes` — each record's subtypes-ptr/length/locality fields the
+    // program only consults through the verifier at compile time. Those bytes'
+    // values are dead in the output (see the `.data` assertion below).
+    assert_eq!(
+        accessed,
+        vec![
+            (
+                Label::from("__welcome_subtypes"),
+                [(0, 8), (25, 33)].into_iter().collect()
+            ),
+            (
+                Label::from("__welcome_type"),
+                [(0, 8), (8, 16), (16, 24)].into_iter().collect()
+            ),
+            (Label::from("value"), [(0, 4)].into_iter().collect()),
+            (
+                Label::from("welcome"),
+                [(0, 1), (1, 2)].into_iter().collect()
+            ),
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    // Pin the exact lowered program. The headline is the `.data` section: the
+    // descriptor bytes the program never reads at runtime are **not stored** —
+    // each record's trailing locality byte vanishes (the program checks types via
+    // `#&` at offsets 0/8/16 only), and the interior dead bytes of the subtypes
+    // array survive only as `.zero` padding because the program strides the
+    // records by their full 25 bytes. No `.byte` (locality) directive remains
+    // anywhere in `.data`/`.bss`.
+    let asm = emit_executable(ast, &configuration, &accessed);
+    let expected = ".global _start
+_start:
+    #$ value global _
+    la t0, value
+    li t1, 0
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    addi t1, t1, 1
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    li t2, 4
+    csrr t0, mhartid
+    bnez t0, _wait
+    #$ welcome _ [u8 u8]
+    la t0, __welcome_type  # #& t0, welcome
+    li t2, 8
+    ld t1, 0(t0)
+    addi t0, t0, 16
+    ld t1, 0(t0)
+    li t2, 2
+    addi t0, t0, -8
+    ld t0, 0(t0)
+    li t5, 0
+_check_item:
+    beq t5, t2, _no_items
+    ld t3, 0(t0)
+    li t4, 0
+    addi t0, t0, 25
+    addi t5, t5, 1
+    j _check_item
+_no_items:
+    la t0, welcome
+    li t1, 72
+    sb t1, 0(t0)
+    li t1, 0
+    sb t1, 1(t0)
+    la a0, welcome
+    li t1, 0x10000000
+_write_uart:
+    lb t2, 0(a0)
+    beqz t2, _wait
+    sb t2, 0(t1)
+    addi a0, a0, 1
+    j _write_uart
+_wait:
+    wfi
+    j __halt  # unreachable (program end)
+__halt:
+    wfi
+    j __halt
+
+.section .data
+__welcome_type:
+    .dword 8                # List
+    .dword __welcome_subtypes      # subtypes
+    .dword 2                # length
+__welcome_subtypes:
+    .dword 0
+    .zero 17                # never accessed at runtime (padding)
+    .dword 0
+
+.section .bss
+    .balign 8
+value:
+    .zero 4
+    .balign 8
+welcome:
+    .zero 2
+";
+    assert_eq!(normalize(asm), expected);
+
+    // Boot it in QEMU (requires the toolchain + QEMU). Hart 0 writes the message
+    // ("H\0") to the UART, so success is "ran with no CPU fault and the UART
+    // received 'H'".
+    let serial = unsafe { run_program("three", ast, &configuration, &accessed) };
     assert!(
         serial.contains('H'),
         "three should write 'H' to the UART; got {serial:?}"

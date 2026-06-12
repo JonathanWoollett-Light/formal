@@ -1,7 +1,6 @@
-    # Load from a raw (non-label) address. The verifier does not model raw
-    # memory loads, so verifying this returns a `CompilerError::Unsupported`
-    # rather than panicking - see tests/error.rs.
-    li t0, 0x100
-    li t2, 0
-    lw t1, 0(t0)
+    # `.global` parses but the verifier does not handle it (programs have no
+    # explicit entry point - execution starts from the first line), so verifying
+    # it returns a `CompilerError::Unsupported` rather than panicking - see
+    # tests/error.rs.
+    .global _start
     #?

@@ -4,7 +4,7 @@
 //! helpers appear unused from any single test binary's perspective.
 #![allow(dead_code)]
 
-use formal::verifier_types::TypeConfiguration;
+use formal::verifier_types::{AccessedRanges, TypeConfiguration};
 use formal::*;
 use std::ptr::NonNull;
 
@@ -134,7 +134,7 @@ pub unsafe fn verify_and_optimize(
     name: &str,
     sections: Vec<Section>,
     harts: &[u8],
-) -> (Option<NonNull<AstNode>>, TypeConfiguration) {
+) -> (Option<NonNull<AstNode>>, TypeConfiguration, AccessedRanges) {
     let mut ast = setup_test(name);
     let systems = harts
         .iter()
@@ -149,10 +149,11 @@ pub unsafe fn verify_and_optimize(
         configuration,
         touched,
         jumped,
+        accessed,
     } = expect_valid(&trace, result);
     remove_untouched(&mut ast, &touched);
     remove_branches(&mut ast, &jumped);
-    (ast, configuration)
+    (ast, configuration, accessed)
 }
 
 /// Normalizes line endings so the expected strings (written with `\n`) compare
@@ -279,8 +280,9 @@ echo "===END==="
 
 /// Lowers the verified + optimized program to runnable RISC-V (`emit_executable`),
 /// checks it is self-contained (entry, halt loop, storage for every inferred
-/// variable), then builds and boots it in QEMU, asserting it ran **without any CPU
-/// fault**, and returns the captured UART output for the caller to assert on.
+/// variable) and that **no compile-time-only data leaked into it**, then builds
+/// and boots it in QEMU, asserting it ran **without any CPU fault**, and returns
+/// the captured UART output for the caller to assert on.
 ///
 /// Requires the toolchain + QEMU (see [`run_in_qemu`]); panics if they are absent.
 ///
@@ -290,8 +292,9 @@ pub unsafe fn run_program(
     name: &str,
     ast: Option<NonNull<AstNode>>,
     configuration: &TypeConfiguration,
+    accessed: &AccessedRanges,
 ) -> String {
-    let asm = emit_executable(ast, configuration);
+    let asm = emit_executable(ast, configuration, accessed);
 
     // The emitted program must be self-contained.
     assert!(asm.contains(".global _start"), "{name}: no entry point\n{asm}");
@@ -300,6 +303,18 @@ pub unsafe fn run_program(
         assert!(
             asm.contains(&format!("{label}:")),
             "{name}: no generated storage for `{label}`\n{asm}"
+        );
+    }
+
+    // Dead-data elimination: information only read at *compile time* (by the
+    // verifier) must not be stored in the output. None of these programs read a
+    // descriptor's locality byte at runtime, so no locality data — the only
+    // `.byte` directives the descriptor emitter produces — may survive anywhere
+    // in the generated `.data`/`.bss` sections.
+    if let Some((_, generated_sections)) = asm.split_once(".section .data") {
+        assert!(
+            !generated_sections.contains(".byte"),
+            "{name}: compile-time-only locality data leaked into the output:\n{asm}"
         );
     }
 

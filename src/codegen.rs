@@ -13,11 +13,13 @@ use crate::*;
 use std::collections::BTreeSet;
 use std::ptr::NonNull;
 
-/// Emits a complete, runnable RISC-V program for the verified + optimized `ast`
-/// and the memory layout the verifier inferred (`configuration`).
+/// Emits a complete, runnable RISC-V program for the verified + optimized `ast`,
+/// the memory layout the verifier inferred (`configuration`), and the byte ranges
+/// the program was proven to access at runtime (`accessed`).
 ///
 /// Directive lowering:
 /// - `#$ …` (define) — metadata only, kept as a comment.
+/// - `#@ …` (region) — metadata only (verified at compile time), kept as a comment.
 /// - `#& reg, label` (lat) — lowered to `la reg, __<label>_type`, loading the
 ///   address of the generated runtime type descriptor.
 /// - `#!` (fail) — should be proven unreachable; lowered to `ebreak` as a guard.
@@ -26,7 +28,19 @@ use std::ptr::NonNull;
 /// A `__halt: wfi; j __halt` loop is appended so execution never runs off the end
 /// of `.text`. Then `.data` holds the runtime type descriptors read via `#&`, and
 /// `.bss` holds zero-initialized storage for every inferred variable.
-pub fn emit_executable(ast: Option<NonNull<AstNode>>, configuration: &TypeConfiguration) -> String {
+///
+/// **Dead-data elimination.** Information only read at *compile time* need not
+/// exist in the output program. The verifier records (in `accessed`) every byte
+/// the program can load or store at runtime across all proven paths; descriptor
+/// bytes outside those ranges — e.g. each record's locality byte, which these
+/// programs only consult through the verifier — are emitted as zero padding when
+/// a later record's (strided) offset depends on them, and not emitted at all when
+/// trailing.
+pub fn emit_executable(
+    ast: Option<NonNull<AstNode>>,
+    configuration: &TypeConfiguration,
+    accessed: &AccessedRanges,
+) -> String {
     // Labels whose runtime *type descriptor* is read (via `#&` / lat).
     let mut lat_labels: BTreeSet<Label> = BTreeSet::new();
     let mut next = ast;
@@ -74,7 +88,7 @@ pub fn emit_executable(ast: Option<NonNull<AstNode>>, configuration: &TypeConfig
     let mut data = String::new();
     for label in &lat_labels {
         if let Some((_locality, ty)) = configuration.get(label) {
-            emit_type_descriptor(&mut data, &format!("__{label}"), ty);
+            emit_type_descriptor(&mut data, &format!("__{label}"), ty, accessed);
         }
     }
 
@@ -97,6 +111,28 @@ pub fn emit_executable(ast: Option<NonNull<AstNode>>, configuration: &TypeConfig
     out
 }
 
+/// The runtime-accessed byte ranges of one emitted region (e.g. `__welcome_type`
+/// or `__welcome_subtypes`), used to decide which descriptor bytes must exist in
+/// the output. A byte no range covers is only ever read at *compile time* (by the
+/// verifier) so its value is dead: it survives as zero padding when a live byte
+/// follows it (the programs stride descriptor records by their full 25 bytes), and
+/// is not emitted at all when trailing.
+struct Coverage<'a>(Option<&'a BTreeSet<(u64, u64)>>);
+
+impl Coverage<'_> {
+    /// Whether any runtime access touches a byte in `[lo, hi)`.
+    fn hit(&self, lo: u64, hi: u64) -> bool {
+        self.0
+            .is_some_and(|ranges| ranges.iter().any(|&(start, end)| start < hi && end > lo))
+    }
+    /// One past the last runtime-accessed byte of the region.
+    fn live_end(&self) -> u64 {
+        self.0
+            .and_then(|ranges| ranges.iter().map(|&(_, end)| end).max())
+            .unwrap_or(0)
+    }
+}
+
 /// Emits the runtime type descriptor for `ty` under the symbol `<name>_type`.
 ///
 /// The on-target layout matches what the verifier builds in `MemoryMap::set_type`
@@ -104,38 +140,87 @@ pub fn emit_executable(ast: Option<NonNull<AstNode>>, configuration: &TypeConfig
 /// `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]`, with `List`
 /// types followed by a `<name>_subtypes` array of one such record per element.
 /// (Records are deliberately *not* padded — the programs stride them by 25 bytes.)
-fn emit_type_descriptor(out: &mut String, name: &str, ty: &Type) {
+/// Only the bytes in `accessed` (what the program can read at runtime) are emitted
+/// with their values — see [`emit_executable`]'s dead-data-elimination note.
+fn emit_type_descriptor(out: &mut String, name: &str, ty: &Type, accessed: &AccessedRanges) {
+    let top = Coverage(accessed.get(&Label {
+        tag: format!("{name}_type"),
+    }));
+    out.push_str(&format!("{name}_type:\n"));
     match ty {
         Type::List(subtypes) => {
             let flat = FlatType::from(ty) as u64;
-            out.push_str(&format!("{name}_type:\n"));
-            out.push_str(&format!("    .dword {flat}                # List\n"));
-            out.push_str(&format!("    .dword {name}_subtypes      # subtypes\n"));
-            out.push_str(&format!("    .dword {}                # length\n", subtypes.len()));
-            out.push_str("    .byte 1                    # locality\n");
+            emit_descriptor_record(
+                out,
+                &top,
+                0,
+                [
+                    format!(".dword {flat}                # List"),
+                    format!(".dword {name}_subtypes      # subtypes"),
+                    format!(".dword {}                # length", subtypes.len()),
+                    String::from(".byte 1                    # locality"),
+                ],
+            );
+            let sub = Coverage(accessed.get(&Label {
+                tag: format!("{name}_subtypes"),
+            }));
             out.push_str(&format!("{name}_subtypes:\n"));
-            for sub in subtypes {
-                emit_descriptor_record(out, sub);
+            for (index, subtype) in subtypes.iter().enumerate() {
+                emit_descriptor_record(out, &sub, 25 * index as u64, leaf_record_fields(subtype));
             }
         }
         _ => {
-            out.push_str(&format!("{name}_type:\n"));
-            emit_descriptor_record(out, ty);
+            emit_descriptor_record(out, &top, 0, leaf_record_fields(ty));
         }
     }
 }
 
-/// Emits one inline 25-byte descriptor record (no symbol). Only the scalar and
-/// single-level-`List` cases the asset programs use are modelled here; a nested
-/// `List`/`Union` subtype would need its own `_subtypes` symbol.
-fn emit_descriptor_record(out: &mut String, ty: &Type) {
+/// The four field directives of one inline 25-byte descriptor record. Only the
+/// scalar and single-level-`List` cases the asset programs use are modelled here;
+/// a nested `List`/`Union` subtype would need its own `_subtypes` symbol.
+fn leaf_record_fields(ty: &Type) -> [String; 4] {
     let flat = FlatType::from(ty) as u64;
     let length = match ty {
         Type::List(subtypes) => subtypes.len(),
         _ => 0,
     };
-    out.push_str(&format!("    .dword {flat}\n"));
-    out.push_str("    .dword 0\n");
-    out.push_str(&format!("    .dword {length}\n"));
-    out.push_str("    .byte 1\n");
+    [
+        format!(".dword {flat}"),
+        String::from(".dword 0"),
+        format!(".dword {length}"),
+        String::from(".byte 1"),
+    ]
+}
+
+/// Emits one 25-byte descriptor record starting at byte `base` of its region,
+/// keeping only the bytes the program accesses at runtime: a live field is emitted
+/// with its value; a dead field a later live byte depends on (the records are
+/// strided by 25 bytes) becomes `.zero` padding; trailing dead bytes are omitted.
+fn emit_descriptor_record(out: &mut String, coverage: &Coverage, base: u64, fields: [String; 4]) {
+    // The record's fields sit at relative offsets 0, 8, 16, 24 (sizes 8, 8, 8, 1).
+    const FIELD_SIZES: [u64; 4] = [8, 8, 8, 1];
+    let live_end = coverage.live_end();
+    let mut offset = base;
+    let mut padding = 0;
+    for (size, directive) in FIELD_SIZES.into_iter().zip(fields) {
+        if coverage.hit(offset, offset + size) {
+            if padding > 0 {
+                out.push_str(&format!(
+                    "    .zero {padding}                # never accessed at runtime (padding)\n"
+                ));
+                padding = 0;
+            }
+            out.push_str(&format!("    {directive}\n"));
+        } else {
+            padding += size;
+        }
+        offset += size;
+    }
+    // Dead bytes before a later live byte keep the strided offsets intact; dead
+    // bytes after the region's last live byte are dropped entirely.
+    if padding > 0 && live_end > offset {
+        out.push_str(&format!(
+            "    .zero {padding}                # never accessed at runtime (padding)\n"
+        ));
+    }
 }

@@ -33,12 +33,15 @@ values, exploring an explicit execution tree.
   always produces the same step sequence, configuration and output (see the
   determinism note at the end of [§4.3](#43-verification--explorerer)).
 - **`cargo test` passes.** The verifier is exercised through the integration
-  tests in [tests/](tests/) (`three`/`four`/`five`/`six`), which parse, verify
-  and optimize the example programs and assert the inferred `TypeConfiguration`,
-  the optimized output, and the **exact incremental** behaviour of the state
-  machine (a full per-step trace for `five`/`six`; the exact step count and
-  type-inference timeline for `four`/`three`). See
-  [§6](#6-integration-tests-tests).
+  tests in [tests/](tests/) (`three`/`four`/`five`/`six`/`seven`), which parse,
+  verify and optimize the example programs and assert the inferred
+  `TypeConfiguration`, the **runtime-accessed byte ranges** (`accessed` — drives
+  dead-data elimination in codegen, [§4.8](#48-code-generation--emit_executable-srccodegenrs)),
+  the optimized output, the exact emitted program, and the **exact incremental**
+  behaviour of the state machine (a full per-step trace for `five`/`six`; the
+  exact step count and type-inference timeline for `four`/`three`). `eight` pins
+  the every-access-must-verify rule (a raw access no `#@` region describes →
+  `Invalid`). See [§6](#6-integration-tests-tests).
 - **`cargo run` panics.** [src/main.rs](src/main.rs) hard-codes its input to
   [assets/two.s](assets/two.s), which uses the readable `lat`/`branch` spellings
   the parser does not accept (only `#&` and `j` are accepted), so parsing hits
@@ -76,7 +79,7 @@ behind `#[cfg(debug_assertions)]`.
 | [src/optimizer.rs](src/optimizer.rs) | `remove_untouched` and `remove_branches` post-proof optimizations. |
 | [src/codegen.rs](src/codegen.rs) | `emit_executable` — lowers the verified+optimized AST + inferred layout into runnable RISC-V (generated `.data`/`.bss` + lowered directives). |
 | [src/draw.rs](src/draw.rs) | `draw_tree` — ASCII rendering of a `VerifierNode` tree (debug/diagnostic). |
-| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six.rs`, `error.rs` (one binary each). Each of `three/four/five/six` also lowers its output and **boots it in QEMU**. |
+| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six/seven/ten.rs`, `eight.rs`, `nine.rs`, `error.rs` (one binary each). Each of `three/four/five/six/seven/ten` also lowers its output and **boots it in QEMU**. |
 | [scripts/build-run.sh](scripts/build-run.sh) | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU. |
 | [assets/](assets/) | Example programs `*.s`; `three_ast.s` is the golden parsed/compressed form of `three.s`. |
 | [language.md](language.md) | Design notes (placement, racy-ness, list/union exploration, complexity, toolchain). |
@@ -100,8 +103,9 @@ parser matches raw `char`-slice patterns.
 - Each line goes to `alloc_node` ([src/ast.rs:111](src/ast.rs#L111)), which:
   1. skips leading spaces; an all-space line produces **no node**;
   2. dispatches on the trimmed slice — `#!`→`Fail`, `#?`→`Unreachable`,
-     `#$ …`→`Define(new_cast(..))`, `#& …`→`Lat(new_lat(..))`, any other
-     `#…`→a dropped comment (no node);
+     `#$ …`→`Define(new_cast(..))`, `#& …`→`Lat(new_lat(..))`,
+     `#@ …`→`Region(new_region(..))`, any other `#…`→a dropped comment (no
+     node);
   3. otherwise strips any inline `# comment` and passes the code to
      `new_instruction` ([src/ast.rs:215](src/ast.rs#L215)), which matches the
      mnemonic prefix and calls the matching `new_*` constructor;
@@ -169,12 +173,13 @@ empty.
 **One step** (`next_step`, [src/verifier.rs:291](src/verifier.rs#L291)):
 1. If `queue` is empty → **`Valid`**: every reachable path under the current
    `configuration` has been validated with no `#!` reached. Returns
-   `ValidPathResult { configuration, touched, jumped }`.
+   `ValidPathResult { configuration, touched, jumped, accessed }`.
 2. Pop (peek) the front leaf; mark its AST node in `touched`.
 3. Dispatch on the instruction:
    - **No-op for checking** (`Li`, `Label`, `Addi`, `Blt`, `Csrr`, `Bne`,
-     `Bnez`, `Beqz`, `Bge`, `Wfi`, `Beq`, `J`, `Unreachable`): nothing to check
-     here; their *effects* are applied later by `find_state`/`queue_up`.
+     `Bnez`, `Beqz`, `Bge`, `Wfi`, `Beq`, `J`, `Unreachable`, `Region`):
+     nothing to check here; their *effects* are applied later by
+     `find_state`/`queue_up`.
    - `Define` / `Lat` / `La`: `load_label(..)` —
      [type inference & backtracking](#type-inference--backtracking) below.
      Failure → invalid.
@@ -182,9 +187,14 @@ empty.
      ([src/verifier.rs:728](src/verifier.rs#L728)/[822](src/verifier.rs#L822)):
      reconstruct `State`, read the destination register; if it is a tagged
      `Ptr`, bounds-check `type_size + ptr_offset + insn_offset <= size(type)`;
-     if it is a raw `I64` address, find a covering `Section` and check
-     `Permissions`/`volatile`. Out-of-bounds / wrong-permission / no-section →
-     invalid.
+     if it is a raw `I64` address, find a covering `Section` — one configured on
+     the system **or declared by an already-executed `#@`** (the replayed
+     `state.memory.sections`) — and check `Permissions`/`volatile`. The section
+     must start at/before the access and be large enough
+     (`required_size.compare(&s.size)` must be `Less|Equal|Matches`).
+     Out-of-bounds / wrong-permission / no-section → invalid: **every memory
+     access must be verifiable as safe**, either through a symbolic variable or
+     a described raw region.
    - **`Fail` (`#!`)** → **invalid path** immediately: this path reached an
      assertion failure, so the current type configuration is unsound.
 4. On success: `queue_up(leaf)` (enqueue successors), `queue.pop_front()`,
@@ -220,7 +230,11 @@ searched by chronological backtracking:
   `MemoryLabel` is `Global` (thread-local accesses assert `thart == hart` and
   are non-racy); raw `I64`-addressed accesses are racy; `Wfi` is treated as racy
   (conservative over-approximation, design note at
-  [src/verifier.rs:114](src/verifier.rs#L114)); everything else is non-racy.
+  [src/verifier.rs:114](src/verifier.rs#L114)); **`#@` (`Region`) is racy** — a
+  region only becomes accessible once its declaration executes, so its order
+  relative to other harts' raw accesses is observable and collapsing it would
+  skip the (invalid) access-before-declaration interleavings; everything else
+  is non-racy.
 - Conditional branches are resolved *concretely* from the symbolic register
   ranges using `compare`/`compare_scalar` (`RangeOrdering`/`RangeScalarOrdering`);
   `csrr … mhartid` is special-cased (hart 0 vs non-zero). A taken jump records
@@ -230,11 +244,36 @@ searched by chronological backtracking:
   what bounds the `h^r` blow-up); only when *all* harts' next steps are racy does
   the tree fork into one branch+leaf per hart, enqueuing every interleaving.
 
+**Runtime-accessed byte ranges (dead-data analysis).** While replaying a path,
+`find_state_load`/`find_state_store` record every load/store's
+`(label, offset.start .. offset.stop + len)` into `State.accessed`
+(an `AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>`), using the full
+symbolic offset span so an under-determined access never under-records. The
+`Lat` arm maps the generated descriptor tags (`_a`, …) to the symbols codegen
+emits (`__<label>_type` / `__<label>_subtypes`) via `State.descriptor_labels`,
+so descriptor reads are recorded under names codegen can look up. Each of the
+three `find_state` call sites (`check_store`, `check_load`, `queue_up`) merges
+`state.accessed` into `Explorerer.accessed` (`merge_accessed`); since replays
+cover whole path prefixes and set-union is idempotent, the repeated replays are
+harmless, and like `touched` the union only ever grows (entries from abandoned
+configurations remain) — an **over-approximation**, which is the sound direction
+for dead-data elimination. **Replays exclude the instruction being processed**,
+so `check_store`/`check_load` additionally record the *current* instruction's
+own bytes directly into `Explorerer.accessed` (via `record_access_into`) when
+its check passes — without this, an access whose successors all halt (`#?`) is
+never interior to any replay and its bytes would be wrongly elided (pinned by
+the `ten` test). Raw (`I64`-addressed) accesses are *not* recorded: they target
+heap/MMIO, not generated storage (soundness of trimming therefore **assumes raw
+regions never alias generated storage** — see §10). This bookkeeping must never
+feed back into exploration control flow.
+
 **Outputs.** A successful proof yields `ValidPathResult`
 ([src/verifier.rs:1335](src/verifier.rs#L1335)):
 `configuration: TypeConfiguration` (inferred type+locality per variable),
-`touched: BTreeSet<NonNull<AstNode>>` (every reachable node), and
-`jumped: BTreeSet<NonNull<AstNode>>` (branches that ever take their jump).
+`touched: BTreeSet<NonNull<AstNode>>` (every reachable node),
+`jumped: BTreeSet<NonNull<AstNode>>` (branches that ever take their jump), and
+`accessed: AccessedRanges` (runtime-accessed bytes per region — drives
+dead-data elimination in codegen, [§4.8](#48-code-generation--emit_executable-srccodegenrs)).
 
 `Explorerer` owns the whole tree and frees it in a manual `Drop`
 ([src/verifier.rs:1267](src/verifier.rs#L1267)).
@@ -275,17 +314,30 @@ This module has **no `unsafe`** and no raw pointers (despite the name,
   `Global { label }` or `Thread { label, hart }`.
 - **Memory** is `MemoryMap` ([src/verifier_types.rs:1260](src/verifier_types.rs#L1260)):
   a `BTreeMap<MemoryLabel, MemoryValue>` (`.bss`/`.data`) plus a `Vec` of raw
-  `MemorySection`s with `Section` descriptors. Reads/writes are byte-granular,
-  addressed by `Slice { base, offset, len }`. A partial overwrite of a wide
-  scalar **splits** it into a `List` of `U8` ranges with the written value
-  spliced in (`MemoryValue::set`,
+  `MemorySection`s with `Section` descriptors (system-configured + `#@`-declared).
+  Reads/writes are byte-granular, addressed by `Slice { base, offset, len }`. A
+  partial overwrite of a wide scalar **splits** it into a `List` of `U8` ranges
+  with the written value spliced in (`MemoryValue::set`,
   [src/verifier_types.rs:871](src/verifier_types.rs#L871)). Raw `I64`-addressed
   stores resolve a `Section`, honour `volatile` (the store is dropped) and
-  `permissions`.
-- **Machine state** is `State { registers: Vec<RegisterValues>, memory, configuration }`
+  `permissions`. Non-volatile raw stores maintain a **backing** of
+  `MemorySection`s serving two purposes: tracking stored *values* (for future
+  content assertions — raw *loads* do not consult it yet; they return a
+  full-range value of the loaded width in `find_state_load`) and tracking
+  *which bytes are touched*. A store therefore always fills its **maximal
+  span** `address.start .. address.stop + len`: backings overlapping the span
+  are erased (absent backing reads as fully-unknown — the sound union of "old
+  value or new value", allocation-free even for huge symbolic spans), then an
+  exactly-addressed store whose value width matches `len` records the new
+  bytes. Never silently drop a ranged store — that would leave stale "known"
+  values behind.
+- **Machine state** is `State { registers: Vec<RegisterValues>, memory,
+  configuration, accessed, descriptor_labels }`
   ([src/verifier_types.rs:1503](src/verifier_types.rs#L1503)), one
   `RegisterValues` per hart. `State::new` seeds each configured variable with a
-  full-range value (one `.bss` entry per hart for thread-locals).
+  full-range value (one `.bss` entry per hart for thread-locals). `accessed` /
+  `descriptor_labels` are the dead-data bookkeeping described in
+  [§4.3](#43-verification--explorerer) (`State::record_access`).
 - **`TypeConfiguration`** ([src/verifier_types.rs:1598](src/verifier_types.rs#L1598))
   = `BTreeMap<Label, (LabelLocality, Type)>`. `LabelLocality::Thread(BTreeSet<u8>)`
   records exactly which harts need a copy of a thread-local. `insert` enforces
@@ -344,14 +396,26 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
 - Emits the `.global _start` / `_start:` entry the linker needs (the input has no
   explicit entry — execution begins at the first instruction, where verification
   began).
-- Lowers the directives: `#$` (define) → kept as a comment; `#& reg, label`
-  (lat) → `la reg, __<label>_type` (load the generated descriptor's address);
-  `#!` (fail) → `ebreak`; `#?` (unreachable / end) → jump to a `__halt: wfi; j
-  __halt` loop appended after `.text`.
+- Lowers the directives: `#$` (define) and `#@` (region) → kept as comments
+  (both are compile-time metadata); `#& reg, label` (lat) → `la reg,
+  __<label>_type` (load the generated descriptor's address); `#!` (fail) →
+  `ebreak`; `#?` (unreachable / end) → jump to a `__halt: wfi; j __halt` loop
+  appended after `.text`.
 - Emits `.data` — the runtime **type descriptors** read via `#&`, as 25-byte
   records `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]` (the
   same layout §4.5 builds in `set_type`; deliberately unpadded so the programs
-  can stride them by 25).
+  can stride them by 25) — **minus the bytes the program never accesses at
+  runtime** (next bullet).
+- **Dead-data elimination.** `emit_executable` takes the proof's
+  `accessed: AccessedRanges` and emits only runtime-accessed descriptor bytes
+  (`Coverage` / `emit_descriptor_record`): a live field is emitted with its
+  value; a dead field below the region's last live byte becomes `.zero` padding
+  (the 25-byte stride is hardcoded in the programs, so interior offsets must
+  hold); trailing dead bytes are **omitted**. Concretely, in `three` every
+  record's locality byte (offset 24) vanishes — `__welcome_type` is 24 bytes
+  and `__welcome_subtypes` is 33 (`.dword`, `.zero 17` padding, `.dword`) —
+  because the programs only consult locality through the verifier at compile
+  time. Information only read at compile time does not exist in the output.
 - Emits `.bss` — zero-initialized storage for every inferred variable, sized by
   `size(type)`.
 
@@ -363,21 +427,25 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
   `-Ttext=0x80000000 -e _start`. The 25-byte (unaligned) descriptor records rely
   on QEMU emulating misaligned `ld`.
 
-The `four`/`five`/`six`/`three` integration tests do this **automatically**: each
-lowers its output to `target/gen/<name>.s` and, via the `run_program`/`run_in_qemu`
-helpers in `tests/common/mod.rs`, assembles + links + boots it under WSL,
-asserting **no CPU fault** (and that `three` writes `H` to the UART). The toolchain
-and QEMU are **required** — the tests **fail** (not skip) if WSL / the toolchain /
-QEMU are absent; point `RISCV_BIN` at the toolchain `bin/` (default
+The `four`/`five`/`six`/`three`/`seven` integration tests do this
+**automatically**: each pins the exact emitted program, lowers it to
+`target/gen/<name>.s` and, via the `run_program`/`run_in_qemu` helpers in
+`tests/common/mod.rs`, assembles + links + boots it under WSL, asserting **no
+CPU fault** (and that `three` writes `H` to the UART). The toolchain and QEMU
+are **required** — the tests **fail** (not skip) if WSL / the toolchain / QEMU
+are absent; point `RISCV_BIN` at the toolchain `bin/` (default
 `$HOME/riscv-toolchain/riscv/bin`). [scripts/build-run.sh](scripts/build-run.sh)
 does the same by hand from the generated files.
 
 ## 5. The language dialect (as actually parsed)
 
 - **Directives**: `#!` `Fail`, `#?` `Unreachable`, `#$ <label> <locality> <type>`
-  `Define`, `#& <reg>, <label>` `Lat`. `#@`/`section` is in the design notes but
-  **not parsed**. Plain `#…` comments and inline `# …` comments are stripped.
-- **Instructions** (`Instruction` enum, [src/ast.rs:176](src/ast.rs#L176), 24
+  `Define`, `#& <reg>, <label>` `Lat`, `#@ <start> <end> <perms>` `Region`
+  (declare an accessible memory region: bounds are immediates or registers,
+  `end` exclusive, perms `r`/`w`/`rw`; executed in program order, so an
+  allocator can declare each allocation as it makes it). Plain `#…` comments and
+  inline `# …` comments are stripped.
+- **Instructions** (`Instruction` enum, [src/ast.rs:176](src/ast.rs#L176), 25
   variants): `csrr`, `bnez`, `j`, `wfi`, labels (`foo:`), `.global`, `.data`,
   `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `addi`, `blt`, `lb`,
   `beqz`, `sb`, `bge`, `ld`, `bne`, `beq`, plus the directives above.
@@ -417,41 +485,73 @@ helpers:
 - `normalize(s)` — collapses `\r\n` → `\n` so the `\n`-based expected strings
   compare regardless of the platform line ending `print_ast` emits.
 - `verify_and_optimize(name, sections, harts)` — the whole pipeline (parse →
-  compress → verify → `remove_untouched`/`remove_branches`) → `(ast, configuration)`.
-- `run_program(name, ast, configuration)` / `run_in_qemu(name, asm)` — lower the
-  optimized program with `emit_executable`, then assemble + link + **boot it in
-  QEMU under WSL**, asserting no CPU fault and returning the captured UART output.
-  The toolchain + QEMU are **required**: these panic (fail the test) if WSL / the
-  toolchain / QEMU are missing (see §4.8).
+  compress → verify → `remove_untouched`/`remove_branches`) →
+  `(ast, configuration, accessed)`.
+- `run_program(name, ast, configuration, accessed)` / `run_in_qemu(name, asm)` —
+  lower the optimized program with `emit_executable`, assert **no
+  compile-time-only data leaked** (no `.byte` locality directives survive in the
+  generated `.data`/`.bss` — none of these programs read locality at runtime),
+  then assemble + link + **boot it in QEMU under WSL**, asserting no CPU fault
+  and returning the captured UART output. The toolchain + QEMU are **required**:
+  these panic (fail the test) if WSL / the toolchain / QEMU are missing (see §4.8).
 
 A trace line is `h<hart>/<harts> | <instruction> | <config> | q<n> t<n> j<n>`
 (the instruction being processed this step, and the resulting configuration /
 queue / touched / jumped state).
 
-Each test verifies via `trace_valid_path`, asserts the inferred `configuration`,
-runs `remove_untouched` / `remove_branches`, asserts `normalize(print_ast(ast))`
-after each, and finally `run_program`s the result (boots it in QEMU). The
-**incremental** assertions differ by test:
+Each test verifies via `trace_valid_path`, asserts the inferred `configuration`
+and the `accessed` byte ranges, runs `remove_untouched` / `remove_branches`,
+asserts `normalize(print_ast(ast))` after each, asserts the **exact emitted
+program** (`emit_executable`), and finally `run_program`s the result (boots it
+in QEMU). The **incremental** assertions differ by test:
 - `five` — racy store of `0` to `value` (type `_`, inferred). Asserts the **full
-  93-step trace** (`assert_trace`): the type search `Gu8 → Gi8 → Gu16 → Gi16 →
+  82-step trace** (`assert_trace`): the type search `Gu8 → Gi8 → Gu16 → Gi16 →
   Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   interleavings fanning the queue out to 6 and draining to 0.
 - `six` — same program as `five` but with explicit `#$ value global u32`, so the
-  annotation is *checked*, never searched. Asserts the **full 57-step trace**.
-- `four` — racy increment of `value` (type `_`); its interleaving fan-out is 614
+  annotation is *checked*, never searched. Asserts the **full 54-step trace**.
+- `four` — racy increment of `value` (type `_`); its interleaving fan-out is 603
   steps (too many to assert line-for-line, so `five`/`six` pin the per-step
   shape). Asserts the exact step **count**, the `config_timeline`
   (`Gu8 → … → Gu32`) and the optimized output.
-- `three` — full UART "Hello, World!" with list-type checking; ~20475 steps.
+- `three` — full UART "Hello, World!" with list-type checking; 20464 steps.
   Asserts the AST round-trips to [assets/three_ast.s](assets/three_ast.s), the
   exact step **count**, the `config_timeline` (value search, then `welcome`'s
-  `[u8 u8]` joins), and
-  `{ value: (Global, U32), welcome: (Thread({0}), List([U8, U8])) }`.
-- `error` ([assets/error.s](assets/error.s)) — loads from a raw (non-label)
-  address, which the verifier does not model. Asserts that `trace_valid_path`
-  returns `Err(CompilerError::Unsupported(_))` (rather than panicking) **and**
-  that the trace's last line is the failing `lw` step — the error-path analogue
-  of the success tests.
+  `[u8 u8]` joins),
+  `{ value: (Global, U32), welcome: (Thread({0}), List([U8, U8])) }`, the exact
+  `accessed` ranges (descriptor reads at offsets 0/8/16 of `__welcome_type` and
+  0/25 of `__welcome_subtypes` — never a locality byte), and the **exact
+  generated program** including the dead-data-eliminated `.data` (24-byte
+  `__welcome_type`, 33-byte `__welcome_subtypes` with `.zero 17` padding, no
+  `.byte` anywhere).
+- `seven` ([assets/seven.s](assets/seven.s)) — `#@` region declarations
+  (immediate bounds accessed at a non-zero offset, and register bounds exactly
+  as wide as the store that hits them — the latter would panic in
+  `MemoryMap::set` if it re-checked with the value's width instead of the
+  instruction's) with racy raw stores/loads inside them; 1021 steps (`#@` is
+  racy, so its interleavings against the accesses are explored). Asserts the
+  round-trip (including both `#@` forms), empty `configuration`/`accessed`, the
+  exact emitted program (no `.data`/`.bss` at all), and boots it in QEMU.
+- `eight` ([assets/eight.s](assets/eight.s)) — loads from a raw address no `#@`
+  region or section describes. Asserts the exact 2-step prefix trace and that
+  the terminal outcome is **`Invalid`**: every memory access must be verifiable
+  as safe.
+- `nine` ([assets/nine.s](assets/nine.s)) — a 4-byte store into a 2-byte `#@`
+  region. Asserts the exact 3-step prefix trace and the **`Invalid`** outcome,
+  pinning the *direction* of the section bounds check (`required_size <=
+  s.size`; with the operands swapped this would wrongly verify).
+- `ten` ([assets/ten.s](assets/ten.s)) — a descriptor load whose only successor
+  is `#?` (a path-terminal access, never interior to any replay). Asserts the
+  full 4-step trace, that `accessed` still contains the load's bytes (the
+  check-time record in `check_load` — without it dead-data elimination would
+  emit a descriptor the program reads but that has no bytes), the exact emitted
+  program (`__value_type` keeps its 8 live bytes, drops the other 17), and
+  boots it in QEMU.
+- `error` ([assets/error.s](assets/error.s)) — a `.global` directive, which the
+  verifier does not model (programs have no explicit entry). Asserts that
+  `trace_valid_path` returns `Err(CompilerError::Unsupported(_))` (rather than
+  panicking) **and** that the trace's last line is the failing step — the
+  error-path analogue of the success tests.
 
 Because exploration is deterministic (see the determinism note in
 [§4.3](#43-verification--explorerer)), the step counts and full traces are stable
@@ -475,12 +575,14 @@ real programs far under this bound. `8` is the count of scalar types in
 | Type | Location | Purpose |
 |------|----------|---------|
 | `AstNode` / `AstValue` / `Span` | [ast.rs:7](src/ast.rs#L7) | Intrusive AST list node, value, source span. |
-| `Instruction` | [ast.rs:176](src/ast.rs#L176) | 24-variant tagged union of supported instructions/directives. |
+| `Instruction` | [ast.rs:176](src/ast.rs#L176) | 25-variant tagged union of supported instructions/directives. |
+| `Region` / `RegionBound` / `RegionPermissions` | [ast.rs](src/ast.rs) | The `#@` directive: region bounds (immediate/register) + `r`/`w`/`rw`. |
 | `Type` / `FlatType` / `Locality` | [ast.rs:332](src/ast.rs#L332) / [276](src/ast.rs#L276) / [313](src/ast.rs#L313) | Compile-time types; `FlatType` is the runtime type-number encoding. |
 | `Explorerer` | [verifier.rs:119](src/verifier.rs#L119) | The verification state machine. |
 | `VerifierNode` / `VerifierLeafNode` | [verifier.rs:82](src/verifier.rs#L82) / [99](src/verifier.rs#L99) | Execution-tree interior / frontier nodes. |
 | `ExplorePathResult` | [verifier.rs:1293](src/verifier.rs#L1293) | `Valid` / `Invalid` / `Continue(self)`. |
-| `ValidPathResult` | [verifier.rs:1335](src/verifier.rs#L1335) | `{ configuration, touched, jumped }` — feeds the optimizer. |
+| `ValidPathResult` | [verifier.rs:1335](src/verifier.rs#L1335) | `{ configuration, touched, jumped, accessed }` — feeds the optimizer + codegen. |
+| `AccessedRanges` | [verifier_types.rs](src/verifier_types.rs) | `BTreeMap<Label, BTreeSet<(u64, u64)>>` — runtime-accessed bytes per region; drives dead-data elimination. |
 | `InnerVerifierConfiguration` / `Section` / `Permissions` | [verifier.rs:40](src/verifier.rs#L40) / [46](src/verifier.rs#L46) / [53](src/verifier.rs#L53) | Per-system input: harts + memory map. |
 | `MemoryValue` | [verifier_types.rs:661](src/verifier_types.rs#L661) | Universal symbolic value (ranges / list / ptr / csr). |
 | `MemoryLabel` / `MemoryPtr` | [verifier_types.rs:1235](src/verifier_types.rs#L1235) / [1189](src/verifier_types.rs#L1189) | Label-tagged symbolic memory & pointers. |
@@ -545,6 +647,14 @@ real programs far under this bound. `8` is the count of scalar types in
   exploration rarely backtracked at the root, but it corrupted the heap once
   first-line encounters made root rebuilds frequent. Now fixed — keep node and
   leaf deallocations on their own layouts.)
+- **`accessed` is bookkeeping, never control flow.** The dead-data ranges
+  (`State.accessed` → `Explorerer.accessed`) must stay an over-approximating
+  union: record with the full symbolic offset span (`offset.start ..
+  offset.stop + len`), merge at every `find_state` call site, and never branch
+  on the contents during exploration (that would couple step order to
+  bookkeeping and could break determinism). When adding a new load/store form,
+  add its `record_access` call — a missed record means codegen may elide a live
+  byte, which produces a *wrong program*, not a test failure.
 - **`From<MemoryValue> for Type` vs `From<&MemoryValue> for Type`** disagree for
   `Ptr` (`I64` by value, `U64` by reference) — be deliberate about which you call.
 - **`Locality` discriminants are reversed** vs declaration order
@@ -562,15 +672,37 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
   integration tests.
 - State caching so `find_state` doesn't replay the path every step
   ([verifier.rs:98](src/verifier.rs#L98), [879](src/verifier.rs#L879)).
-- Raw-`I64`-address **loads** are unimplemented (`check_load` /
-  `find_state_load` `todo!()`), though stores are.
+- Raw-`I64`-address **loads** always read as a full-range (unknown) value of
+  the loaded width — stored values are not tracked through heap memory, so a
+  program cannot yet *branch* on a value it stored to a `#@` region (the
+  comparison is indeterminate → `Unsupported`).
+- Register-defined `#@` bounds use plain interval arithmetic (`end - start`),
+  which loses the correlation between the two bounds: regions with genuinely
+  under-determined bases verify conservatively (or hit the indeterminate
+  section comparison). Relational tracking is future work — today an
+  allocator's `#@ t0 t1 rw` works when the bounds are path-exact.
+- Dead-data elimination only trims the **descriptor** regions; `.bss` variable
+  storage is still emitted at full `size(type)` even if only some bytes are
+  accessed. The mechanism (per-label `accessed` ranges) already covers variable
+  labels, so extending it is codegen-only work.
+- **Raw regions are assumed disjoint from generated storage.** Raw (`#@` /
+  section) accesses are not recorded in `accessed`, and nothing verifies a
+  declared region does not physically overlap the linker-placed `.data`/`.bss`
+  (whose layout additionally shifts with dead-data elimination). A raw store
+  into that overlap would invalidate bytes the model treats as label-only.
+  Either verify declared regions against the emitted address range or document
+  the obligation per program.
+- **Nested-list descriptors cannot be emitted.** `set_type` models them (one
+  generated tag per `List` node) and the `Lat` arm conflates all subtype tags
+  under one `__<label>_subtypes` accessed-key (sound, over-records), but
+  codegen's `leaf_record_fields` emits `.dword 0` for a nested record's
+  subtypes pointer — a verified program that follows it would dereference 0 at
+  runtime. Emitting nested descriptors (or rejecting them in codegen) is open.
 - Multi-element list slice get/set returns `ListMultiple` (unimplemented;
   `covers` is collected but never applied).
-- `.ascii` parsing (`new_ascii`) is entirely `todo!()`; `#@`/section is unparsed.
+- `.ascii` parsing (`new_ascii`) is entirely `todo!()`.
 - `wfi` is modeled as racy (over-approximation → some valid programs rejected,
   slower exploration); interrupt state is unmodeled.
-- No emission of *linkable* RISC-V assembly, and no QEMU execution wiring (the
-  motivating next step — see [README.md](README.md) and [language.md](language.md)).
 - `partial`/`sequential`/`typed`/`racy-groups` compiler modes and the
   list/union exploration CLI args (`list_depth`, `list_width`, `union_depth`) in
   [language.md](language.md) are designed but not implemented.

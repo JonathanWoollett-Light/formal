@@ -129,6 +129,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
         ['#', '?'] => Instruction::Unreachable(Unreachable),
         ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
         ['#', '&', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
+        ['#', '@', ' ', rem @ ..] => Instruction::Region(new_region(rem)),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -199,6 +200,7 @@ pub enum Instruction {
     Define(Define),
     Lat(Lat),
     Beq(Beq),
+    Region(Region),
 }
 
 impl Instruction {
@@ -268,6 +270,7 @@ impl fmt::Display for Instruction {
             Unreachable(unreachable) => write!(f, "{unreachable}"),
             Define(cast) => write!(f, "{cast}"),
             Beq(beq) => write!(f, "{beq}"),
+            Region(region) => write!(f, "{region}"),
         }
     }
 }
@@ -570,6 +573,88 @@ fn new_locality(src: &[char]) -> Locality {
         ['t', 'h', 'r', 'e', 'a', 'd'] => Locality::Thread,
         ['g', 'l', 'o', 'b', 'a', 'l'] => Locality::Global,
         x @ _ => todo!("{x:?}"),
+    }
+}
+
+/// Declares a memory region the program may access: `#@ <start> <end> <perms>`.
+///
+/// `start`/`end` bound the region's addresses (`end` exclusive, so a heap
+/// allocator declares `#@ <base> <base + size> rw` for each allocation it makes)
+/// and may be immediates or registers — a register bound takes the register's
+/// (possibly under-determined, symbolic) value when the declaration executes.
+/// `perms` is `r` (read), `w` (write) or `rw`. Every raw-address memory access
+/// must fall within a declared region (or a section described by the system
+/// configuration) to verify.
+#[derive(Debug, Clone)]
+pub struct Region {
+    pub start: RegionBound,
+    pub end: RegionBound,
+    pub permissions: RegionPermissions,
+}
+
+impl fmt::Display for Region {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#@ {} {} {}", self.start, self.end, self.permissions)
+    }
+}
+
+/// One bound of a [`Region`]: a literal address or a register holding one.
+#[derive(Debug, Clone)]
+pub enum RegionBound {
+    Immediate(Immediate),
+    Register(Register),
+}
+
+impl fmt::Display for RegionBound {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Immediate(immediate) => write!(f, "{immediate}"),
+            Self::Register(register) => write!(f, "{register}"),
+        }
+    }
+}
+
+/// The access permissions a [`Region`] grants.
+#[derive(Debug, Clone, Copy)]
+pub enum RegionPermissions {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl fmt::Display for RegionPermissions {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Read => write!(f, "r"),
+            Self::Write => write!(f, "w"),
+            Self::ReadWrite => write!(f, "rw"),
+        }
+    }
+}
+
+fn new_region(src: &[char]) -> Region {
+    // Three space-separated fields: `<start> <end> <perms>`.
+    let mut fields = src.split(|c| *c == ' ').filter(|f| !f.is_empty());
+    let start = new_region_bound(fields.next().unwrap());
+    let end = new_region_bound(fields.next().unwrap());
+    let permissions = match fields.next().unwrap() {
+        ['r'] => RegionPermissions::Read,
+        ['w'] => RegionPermissions::Write,
+        ['r', 'w'] => RegionPermissions::ReadWrite,
+        x => todo!("{x:?}"),
+    };
+    Region {
+        start,
+        end,
+        permissions,
+    }
+}
+
+fn new_region_bound(src: &[char]) -> RegionBound {
+    // Registers start with a letter (`t0`…); immediates with a digit or `-`.
+    match src.first() {
+        Some(c) if c.is_ascii_alphabetic() => RegionBound::Register(new_register(src).unwrap()),
+        _ => RegionBound::Immediate(new_immediate(src).unwrap()),
     }
 }
 

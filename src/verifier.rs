@@ -172,6 +172,12 @@ pub struct Explorerer {
     pub touched: BTreeSet<NonNull<AstNode>>,
     // All the branch nodes that jump.
     pub jumped: BTreeSet<NonNull<AstNode>>,
+    /// The byte ranges of each memory region the program accesses at **runtime**,
+    /// unioned over every replayed path (see [`AccessedRanges`]). Like `touched`,
+    /// this only ever grows (entries from since-abandoned configurations remain),
+    /// so it over-approximates the final program's accesses — sound for dead-data
+    /// elimination, which must never drop a byte any path could read.
+    pub accessed: AccessedRanges,
     // When a variable is 1st encountered in a path it is added here with an iterator over all the
     // possible types, then a type is set in the configuration by calling `.next` on this iterator.
     //
@@ -265,6 +271,7 @@ impl Explorerer {
             touched,
             queue,
             jumped,
+            accessed: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
             counter: 0,
@@ -277,10 +284,23 @@ impl Explorerer {
             touched,
             queue,
             jumped,
+            accessed: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
         };
         Ok(x)
+    }
+
+    /// Merges the accessed-ranges a replayed [`State`] recorded into the union
+    /// kept across all explored paths (see [`AccessedRanges`]). Set union is
+    /// idempotent, so merging the same replayed prefix repeatedly is harmless.
+    fn merge_accessed(&mut self, state: &State) {
+        for (label, ranges) in &state.accessed {
+            self.accessed
+                .entry(label.clone())
+                .or_default()
+                .extend(ranges.iter().copied());
+        }
     }
 
     // Advance the verifier by one instruction.
@@ -319,6 +339,7 @@ impl Explorerer {
                 configuration: self.configuration.clone(),
                 touched: self.touched.clone(),
                 jumped: self.jumped.clone(),
+                accessed: self.accessed.clone(),
             }));
         };
 
@@ -370,7 +391,10 @@ impl Explorerer {
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
             | Instruction::Beq(_)
-            | Instruction::J(_) => {}
+            | Instruction::J(_)
+            // `#@` cannot itself be invalid; its effect (declaring a section) is
+            // applied during state replay in `find_state`.
+            | Instruction::Region(_) => {}
             Instruction::Define(Define {
                 label,
                 locality,
@@ -767,7 +791,7 @@ impl Explorerer {
     }
 
     unsafe fn check_store(
-        self,
+        mut self,
         leaf_ptr: *mut VerifierLeafNode,
         branch: impl Borrow<VerifierNode>,
         to: impl Borrow<Register>,
@@ -776,6 +800,7 @@ impl Explorerer {
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
         // Collect the state.
         let state = find_state(leaf_ptr, &self.configuration)?;
+        self.merge_accessed(&state);
 
         // Check the destination is valid.
         match state.registers[branch.borrow().hart as usize].get(to) {
@@ -809,6 +834,26 @@ impl Explorerer {
                         // Else we found the label and we can validate that the loading
                         // of a word with the given offset is within the address space.
                         // So we continue exploration.
+                        //
+                        // Record this store's own bytes directly: `find_state` replays
+                        // exclude the instruction being processed, so a store whose
+                        // successors all halt (`#?`) would otherwise never enter
+                        // `accessed` — and dead-data elimination would elide bytes the
+                        // emitted program still writes at runtime.
+                        let start_offset = from_offset
+                            .clone()
+                            .add(&MemoryValueU64::from(
+                                u64::try_from(offset.borrow().value.value)
+                                    .internal("store: negative offset")?,
+                            ))
+                            .internal("store: offset overflow")?;
+                        record_access_into(
+                            &state.descriptor_labels,
+                            &mut self.accessed,
+                            from_label,
+                            &start_offset,
+                            type_size,
+                        );
                         Ok(ControlFlow::Continue(self))
                     }
                 }
@@ -818,13 +863,10 @@ impl Explorerer {
                 let start = x
                     .add(&MemoryValueI64::from(offset.borrow().value.value))
                     .internal("store: address overflow")?;
-                let sections = &branch
-                    .borrow()
-                    .root
-                    .as_ref()
-                    .internal("store: null root")?
-                    .configuration
-                    .sections;
+                // Validate against the replayed state's sections: they start as the
+                // system-configured ones and grow as the path executes `#@` region
+                // declarations.
+                let sections = &state.memory.sections;
 
                 // Find a section that the store would be within.
                 let mut section_opt = None;
@@ -836,7 +878,9 @@ impl Explorerer {
                             i64::try_from(type_size).internal("store: type size overflow")?,
                         ))
                         .internal("store: section size overflow")?;
-                    let within = match (start.compare(&s.address), s.size.compare(&required_size)) {
+                    // Within iff the access starts at/after the section and the bytes
+                    // it needs (`required_size`) do not exceed the section's size.
+                    let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
                         (
                             RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
                             RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
@@ -877,7 +921,7 @@ impl Explorerer {
 
     /// Verifies a load is valid for a given configuration.
     unsafe fn check_load(
-        self,
+        mut self,
         leaf_ptr: *mut VerifierLeafNode,
         branch: impl Borrow<VerifierNode>,
         from: impl Borrow<Register>,
@@ -886,6 +930,7 @@ impl Explorerer {
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
         // Collect the state.
         let state = find_state(leaf_ptr, &self.configuration)?;
+        self.merge_accessed(&state);
 
         // Check the destination is valid.
         match state.registers[branch.borrow().hart as usize].get(from) {
@@ -919,8 +964,83 @@ impl Explorerer {
                         // Else, we found the label and we can validate that the loading
                         // of a word with the given offset is within the address space.
                         // So we continue exploration.
+                        //
+                        // Record this load's own bytes directly: `find_state` replays
+                        // exclude the instruction being processed, so a load whose
+                        // successors all halt (`#?`) would otherwise never enter
+                        // `accessed` — and dead-data elimination would elide bytes the
+                        // emitted program still reads at runtime.
+                        let start_offset = from_offset
+                            .clone()
+                            .add(&MemoryValueU64::from(
+                                u64::try_from(offset_value).internal("load: negative offset")?,
+                            ))
+                            .internal("load: offset overflow")?;
+                        record_access_into(
+                            &state.descriptor_labels,
+                            &mut self.accessed,
+                            from_label,
+                            &start_offset,
+                            type_size,
+                        );
                         Ok(ControlFlow::Continue(self))
                     }
+                }
+            }
+            // For accesses to main memory (raw addresses), every access must be
+            // verifiable as safe: the load must fall within a described section —
+            // one from the system configuration or one declared by `#@`.
+            Some(MemoryValue::I64(x)) => {
+                let start = x
+                    .add(&MemoryValueI64::from(offset.borrow().value.value))
+                    .internal("load: address overflow")?;
+                let sections = &state.memory.sections;
+
+                // Find a section that the load would be within.
+                let mut section_opt = None;
+                for s in sections {
+                    let required_size = start
+                        .sub(&s.address)
+                        .internal("load: section offset underflow")?
+                        .add(&MemoryValueI64::from(
+                            i64::try_from(type_size).internal("load: type size overflow")?,
+                        ))
+                        .internal("load: section size overflow")?;
+                    // Within iff the load starts at/after the section and the bytes
+                    // it needs (`required_size`) do not exceed the section's size.
+                    let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
+                        (
+                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
+                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                        ) => true,
+                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                        pair => {
+                            return Err(CompilerError::Unsupported(format!(
+                                "load: indeterminate section comparison {pair:?}"
+                            )))
+                        }
+                    };
+                    if within {
+                        section_opt = Some(s);
+                        break;
+                    }
+                }
+
+                // Check this section supports reading.
+                if let Some(section) = section_opt {
+                    match section.permissions {
+                        Permissions::ReadWrite | Permissions::Read => {
+                            Ok(ControlFlow::Continue(self))
+                        }
+                        Permissions::Write => {
+                            info!("reached invalid path due to attempt to read write-only memory");
+                            Ok(ControlFlow::Break(self.outer_invalid_path()?))
+                        }
+                    }
+                } else {
+                    info!("reached invalid path due to attempt to read undescribed memory");
+                    Ok(ControlFlow::Break(self.outer_invalid_path()?))
                 }
             }
             x => Err(CompilerError::Unsupported(format!("load from {x:?}"))),
@@ -937,13 +1057,13 @@ impl Explorerer {
         &mut self,
         leaf_ptr: *mut VerifierLeafNode,
     ) -> Result<(), CompilerError> {
-        let queue = &mut self.queue;
-        let configuration = &mut self.configuration;
-        let jumped = &mut self.jumped;
         // TOOD We duplicate so much work doing `find_state` in a bunch of places and
         // multiple times when the state hasn't change, we should avoid doing this call
         // here (and remove it in other places too).
-        let state = find_state(leaf_ptr, configuration)?;
+        let state = find_state(leaf_ptr, &self.configuration)?;
+        self.merge_accessed(&state);
+        let queue = &mut self.queue;
+        let jumped = &mut self.jumped;
         let leaf = leaf_ptr.as_mut().internal("queue_up: null leaf")?;
 
         // Search the verifier tree for the fronts of all harts.
@@ -994,6 +1114,11 @@ impl Explorerer {
                 | Instruction::Fail(_)
                 | Instruction::Beq(_)
                 | Instruction::J(_) => Some(Err((hart, node))),
+                // `#@` is racy: a region only becomes accessible once its declaration
+                // executes, so its order relative to other harts' raw accesses is
+                // observable — collapsing it would skip the (invalid) interleavings
+                // where another hart's access precedes the declaration it needs.
+                Instruction::Region(_) => Some(Ok((hart, node))),
                 // Possibly racy.
                 // If the label is thread local its not racy.
                 Instruction::Sb(Sb { to: register, .. })
@@ -1308,7 +1433,8 @@ impl Explorerer {
                     | Instruction::Ld(_)
                     | Instruction::Lw(_)
                     | Instruction::Lb(_)
-                    | Instruction::Fail(_) => {
+                    | Instruction::Fail(_)
+                    | Instruction::Region(_) => {
                         followup(node_ref.next.internal("queue_up: instruction has no next")?, hart)?
                     }
                     // See note on `wfi`.
@@ -1523,6 +1649,11 @@ pub struct ValidPathResult {
     pub touched: BTreeSet<NonNull<AstNode>>,
     // All the branch nodes that jump.
     pub jumped: BTreeSet<NonNull<AstNode>>,
+    /// The byte ranges of each memory region the program accesses at runtime
+    /// (see [`AccessedRanges`]). Drives dead-data elimination in codegen: a
+    /// descriptor byte outside every range here is only read at compile time
+    /// (by the verifier) and its value need not exist in the output program.
+    pub accessed: AccessedRanges,
 }
 
 impl From<&LabelLocality> for Locality {
@@ -1766,6 +1897,24 @@ unsafe fn find_state(
                     .get(label)
                     .internal("find_state: lat label missing from configuration")?;
                 let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
+                // Map the generated descriptor tags (`_a`, …) to the symbols codegen
+                // emits for the same records, so runtime reads of descriptor bytes are
+                // recorded (in `state.accessed`) under names codegen can look up —
+                // this is what lets it elide descriptor bytes never read at runtime.
+                state.descriptor_labels.insert(
+                    <&Label>::from(&loc).clone(),
+                    Label {
+                        tag: format!("__{label}_type"),
+                    },
+                );
+                for subtag in subtypes.0.keys() {
+                    state.descriptor_labels.insert(
+                        subtag.clone(),
+                        Label {
+                            tag: format!("__{label}_subtypes"),
+                        },
+                    );
+                }
                 let ptr = MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
                     tag: loc.clone(),
                     offset: MemoryValueU64::ZERO,
@@ -1845,6 +1994,29 @@ unsafe fn find_state(
             // TODO Some interrupt state is likely affected here so this needs to be added.
             Instruction::Wfi(_) => {}
             Instruction::Unreachable(_) => {}
+            // `#@ <start> <end> <perms>` — declare a memory region the program may
+            // access. Takes effect when executed (so e.g. a heap allocator declares
+            // each allocation as it makes it), extending the sections that raw-address
+            // accesses are validated against in `check_store`/`check_load`. Bounds may
+            // be immediates or registers; a register bound contributes its full
+            // symbolic range. `end` is exclusive (`size = end - start`).
+            Instruction::Region(Region {
+                start,
+                end,
+                permissions,
+            }) => {
+                let start_value = region_bound_value(&state, hartu, start)?;
+                let end_value = region_bound_value(&state, hartu, end)?;
+                let region_size = end_value
+                    .sub(&start_value)
+                    .internal("region: end - start underflowed")?;
+                state.memory.sections.push(Section {
+                    address: start_value,
+                    size: region_size,
+                    permissions: Permissions::from(*permissions),
+                    volatile: false,
+                });
+            }
             x => return Err(CompilerError::Unsupported(format!("instruction during state reconstruction: {x:?}"))),
         }
         current = match &current.as_ref().internal("find_state: null node")?.next {
@@ -1875,6 +2047,33 @@ unsafe fn find_state(
     Ok(state)
 }
 
+impl From<RegionPermissions> for Permissions {
+    fn from(p: RegionPermissions) -> Permissions {
+        match p {
+            RegionPermissions::Read => Permissions::Read,
+            RegionPermissions::Write => Permissions::Write,
+            RegionPermissions::ReadWrite => Permissions::ReadWrite,
+        }
+    }
+}
+
+/// Evaluates one bound of a `#@` region declaration to its symbolic address.
+fn region_bound_value(
+    state: &State,
+    hartu: usize,
+    bound: &RegionBound,
+) -> Result<MemoryValueI64, CompilerError> {
+    match bound {
+        RegionBound::Immediate(immediate) => Ok(MemoryValueI64::from(immediate.value)),
+        RegionBound::Register(register) => match state.registers[hartu].get(register) {
+            Some(MemoryValue::I64(x)) => Ok(x.clone()),
+            x => Err(CompilerError::Unsupported(format!(
+                "region bound from register value {x:?}"
+            ))),
+        },
+    }
+}
+
 fn find_state_store(
     state: &mut State,
     hartu: usize,
@@ -1885,11 +2084,13 @@ fn find_state_store(
 ) -> Result<(), CompilerError> {
     let to_value = state.registers[hartu]
         .get(to)
-        .internal("store: destination register has no value")?;
+        .internal("store: destination register has no value")?
+        .clone();
     let from_value = state.registers[hartu]
         .get(from)
-        .internal("store: source register has no value")?;
-    match to_value {
+        .internal("store: source register has no value")?
+        .clone();
+    match &to_value {
         MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
             tag: to_label,
             offset: to_offset,
@@ -1910,25 +2111,33 @@ fn find_state_store(
                 .internal("store: offset overflow")?;
             debug_assert!(final_offset.lte(&sizeof));
             debug_assert_eq!(locality, <&Locality>::from(to_label));
+            let store_offset = to_offset
+                .clone()
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.borrow().value.value)
+                        .internal("store: negative offset")?,
+                ))
+                .internal("store: offset overflow")?;
+            // Record the bytes this store can touch at runtime (dead-data analysis).
+            state.record_access(to_label, &store_offset, len);
             let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                 tag: to_label.clone(),
-                offset: to_offset
-                    .clone()
-                    .add(&MemoryValueU64::from(
-                        u64::try_from(offset.borrow().value.value)
-                            .internal("store: negative offset")?,
-                    ))
-                    .internal("store: offset overflow")?,
+                offset: store_offset,
             }));
             state
                 .memory
-                .set(&MemoryValue::Ptr(memloc), &len, from_value.clone())
+                .set(&MemoryValue::Ptr(memloc), &len, from_value)
                 .internal("store: memory set failed")?;
         }
         MemoryValue::I64(x) => {
+            // The store's address is the register value plus the instruction offset
+            // (`sw t1, 8(t3)` stores at t3+8) — `check_store` validated that address.
+            let address = x
+                .add(&MemoryValueI64::from(offset.borrow().value.value))
+                .internal("store: address overflow")?;
             state
                 .memory
-                .set(&MemoryValue::I64(*x), &len, from_value.clone())
+                .set(&MemoryValue::I64(address), &len, from_value)
                 .internal("store: memory set failed")?;
         }
         x => return Err(CompilerError::Unsupported(format!("store to {x:?}"))),
@@ -1946,8 +2155,9 @@ fn find_state_load(
 ) -> Result<(), CompilerError> {
     let from_value = state.registers[hartu]
         .get(from)
-        .internal("load: source register has no value")?;
-    match from_value {
+        .internal("load: source register has no value")?
+        .clone();
+    match &from_value {
         MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
             tag: from_label,
             offset: from_offset,
@@ -1981,7 +2191,28 @@ fn find_state_load(
                     .internal("load: offset overflow")?,
                 len,
             };
+            // Record the bytes this load can touch at runtime (dead-data analysis).
+            state.record_access(&memloc.base, &memloc.offset, len);
             let value = state.memory.get(&memloc).internal("load: memory get failed")?;
+            state.registers[hartu]
+                .insert(to.borrow().clone(), value)
+                .internal("load: register insert failed")?;
+        }
+        // A raw-address load — a region described by the system configuration or
+        // declared with `#@` (validated by `check_load`). The backing memory is
+        // not modelled precisely, so the loaded value is the full range of the
+        // loaded width: a sound over-approximation of whatever was stored there.
+        MemoryValue::I64(_) => {
+            let value = match len {
+                1 => MemoryValue::from(Type::I8),
+                4 => MemoryValue::from(Type::I32),
+                8 => MemoryValue::from(Type::I64),
+                _ => {
+                    return Err(CompilerError::Unsupported(format!(
+                        "load of width {len} from a raw address"
+                    )))
+                }
+            };
             state.registers[hartu]
                 .insert(to.borrow().clone(), value)
                 .internal("load: register insert failed")?;

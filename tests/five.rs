@@ -41,6 +41,7 @@ fn five() {
         configuration,
         touched,
         jumped,
+        accessed,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -168,9 +169,42 @@ fn five() {
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
 
-    // Lower to runnable RISC-V and boot it in QEMU (requires the toolchain + QEMU).
-    // It does racy arithmetic on the inferred `value` and halts in `wfi` — no
-    // output — so success is simply "ran with no CPU fault".
-    let serial = unsafe { run_program("five", ast, &configuration) };
+    // The program accesses exactly the four bytes of the inferred `value: u32` at
+    // runtime (the `sw`/`lw` pair) — this is what drives dead-data elimination.
+    assert_eq!(
+        accessed,
+        vec![(Label::from("value"), [(0, 4)].into_iter().collect())]
+            .into_iter()
+            .collect()
+    );
+
+    // Pin the exact lowered program: the optimized instructions plus the entry and
+    // halt loop, `.bss` storage for `value`, and **no `.data` at all** — nothing
+    // here is read through a runtime type descriptor, so no compile-time
+    // information (e.g. locality data) exists in the output.
+    let asm = emit_executable(ast, &configuration, &accessed);
+    let expected = ".global _start
+_start:
+    #$ value global _
+    la t0, value
+    li t1, 0
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    li t2, 0
+__halt:
+    wfi
+    j __halt
+
+.section .bss
+    .balign 8
+value:
+    .zero 4
+";
+    assert_eq!(normalize(asm), expected);
+
+    // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
+    // the inferred `value` and halts in `wfi` — no output — so success is simply
+    // "ran with no CPU fault".
+    let serial = unsafe { run_program("five", ast, &configuration, &accessed) };
     assert_eq!(serial, "", "five produces no UART output");
 }

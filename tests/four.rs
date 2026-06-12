@@ -39,6 +39,7 @@ fn four() {
         configuration,
         touched,
         jumped,
+        accessed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path.
@@ -106,9 +107,43 @@ fn four() {
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
 
-    // Lower to runnable RISC-V and boot it in QEMU (requires the toolchain + QEMU).
-    // It does racy arithmetic on the inferred `value` and halts in `wfi` — no
-    // output — so success is simply "ran with no CPU fault".
-    let serial = unsafe { run_program("four", ast, &configuration) };
+    // The program accesses exactly the four bytes of the inferred `value: u32` at
+    // runtime (the racy `sw`/`lw` increment).
+    assert_eq!(
+        accessed,
+        vec![(Label::from("value"), [(0, 4)].into_iter().collect())]
+            .into_iter()
+            .collect()
+    );
+
+    // Pin the exact lowered program: optimized instructions, entry + halt loop,
+    // `.bss` storage for `value`, and no `.data` (no compile-time-only data).
+    let asm = emit_executable(ast, &configuration, &accessed);
+    let expected = ".global _start
+_start:
+    #$ value global _
+    la t0, value
+    li t1, 0
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    addi t1, t1, 1
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    li t2, 4
+__halt:
+    wfi
+    j __halt
+
+.section .bss
+    .balign 8
+value:
+    .zero 4
+";
+    assert_eq!(normalize(asm), expected);
+
+    // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
+    // the inferred `value` and halts in `wfi` — no output — so success is simply
+    // "ran with no CPU fault".
+    let serial = unsafe { run_program("four", ast, &configuration, &accessed) };
     assert_eq!(serial, "", "four produces no UART output");
 }

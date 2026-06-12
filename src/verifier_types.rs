@@ -1306,7 +1306,11 @@ impl MemoryMap {
                     .map_err(SetMemoryMapError::Value)
             }
             MemoryValue::I64(start) => {
-                let type_size = size(&Type::from(&value));
+                // The bytes this store needs are the *instruction's* width (`len`),
+                // not the width of the value in the register — `sw` from a register
+                // holding an I64 stores 4 bytes, and re-checking with 8 here would
+                // fail to find the (already-validated) section and panic.
+                let type_size = *len;
                 // Find the section that the store would be within.
                 // We can unwrap since we have found this exact section under `check_store` before.
                 let section = self
@@ -1318,7 +1322,10 @@ impl MemoryMap {
                             .unwrap()
                             .add(&MemoryValueI64::from(i64::try_from(type_size).unwrap()))
                             .unwrap();
-                        match (start.compare(&s.address), s.size.compare(&required_size)) {
+                        // Within iff the store starts at/after the section and the
+                        // bytes it needs do not exceed the section's size (mirrors
+                        // `check_store`, which validated this access already).
+                        match (start.compare(&s.address), required_size.compare(&s.size)) {
                             (
                                 RangeOrdering::Greater
                                 | RangeOrdering::Equal
@@ -1349,25 +1356,40 @@ impl MemoryMap {
                         .is_none());
                     Ok(())
                 } else {
-                    // TODO This implementation means that every non-volatile memory section is fully stored
-                    // even if most of it will never be accessed by a program. This is super inefficient for
-                    // the compiler as it will massively bloat memory usage. Instead it should only store
-                    // values for the main memory which is actually used.
-                    let offset =
-                        &MemoryValueU64::try_from(start.sub(&section.address).unwrap()).unwrap();
-                    // Get memory section.
-                    let memory = self
-                        .memory
-                        .iter_mut()
-                        .find(|m| match m.address.compare(&section.address) {
-                            RangeOrdering::Equal | RangeOrdering::Matches => true,
-                            _ => false,
-                        })
-                        .unwrap();
-                    memory
-                        .value
-                        .set(offset, len, value)
-                        .map_err(SetMemoryMapError::MemoryValue)
+                    // The backing memory tracks raw memory for two purposes: the
+                    // *values* stored (so later loads can assert on content — loads do
+                    // not consult it yet, they return full-range values, see
+                    // `find_state_load`) and *which bytes* are touched (the basis for
+                    // eliding memory never accessed at runtime). Both demand that a
+                    // store whose address is a range fills its whole maximal span:
+                    // every byte in `start.start .. start.stop + len` may or may not
+                    // have been overwritten, so any backing previously recorded there
+                    // no longer holds a known value. Absent backing reads as
+                    // fully-unknown, so "fill the span with unknown" is implemented by
+                    // *erasing* the overlapping backings — the same semantics (the
+                    // sound union of "old value or new value", narrowable later),
+                    // allocation-free even for huge spans.
+                    let span_start = start.start;
+                    let span_end = start
+                        .stop
+                        .saturating_add(i64::try_from(*len).unwrap());
+                    self.memory.retain(|m| {
+                        let m_start = m.address.start;
+                        let m_end = m_start
+                            .saturating_add(i64::try_from(size(&Type::from(&m.value))).unwrap());
+                        m_end <= span_start || m_start >= span_end
+                    });
+                    // An exactly-addressed store whose value matches the stored width
+                    // then records the new bytes. (Recording a register value *wider*
+                    // than `len` would claim knowledge of bytes the store never wrote,
+                    // so those stores leave the span as the erased unknown instead.)
+                    if start.exact().is_some() && size(&Type::from(&value)) == *len {
+                        self.memory.push(MemorySection {
+                            address: start.clone(),
+                            value,
+                        });
+                    }
+                    Ok(())
                 }
             }
             _ => todo!(),
@@ -1499,12 +1521,62 @@ pub struct SubSlice {
     pub len: u64,
 }
 
+/// The byte ranges of each memory region the program accesses (loads/stores) **at
+/// runtime**, unioned over every explored path. Keyed by the region's label:
+/// variable labels (e.g. `value`) for their `.bss` storage, and the symbols codegen
+/// emits (`__<label>_type` / `__<label>_subtypes`) for the runtime type descriptors
+/// read via `#&`. Each entry is a `(start, end)` byte range (`end` exclusive)
+/// covering every offset one access *could* touch (offsets are symbolic ranges).
+///
+/// This is what makes dead-data elimination possible: a descriptor byte that
+/// appears in no range here is only ever read at *compile time* (by the verifier),
+/// so codegen need not emit its value — see `emit_executable`.
+pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
+
 #[derive(Debug, Clone)]
 pub struct State {
     // Each hart has its own registers.
     pub registers: Vec<RegisterValues>,
     pub memory: MemoryMap,
     pub configuration: TypeConfiguration,
+    /// Runtime-accessed byte ranges per region label, recorded while replaying the
+    /// path (see [`AccessedRanges`]). Merged into `Explorerer::accessed` after each
+    /// replay; the union is idempotent, so replaying the same prefix many times
+    /// (which `find_state` does) is harmless.
+    pub accessed: AccessedRanges,
+    /// Maps the generated descriptor tags (`_a`, `_b`, …) allocated by
+    /// `MemoryMap::set_type` to the symbols codegen emits for the same records
+    /// (`__<label>_type` / `__<label>_subtypes`), so descriptor accesses are
+    /// recorded in `accessed` under the name codegen can look up.
+    pub descriptor_labels: BTreeMap<Label, Label>,
+}
+impl State {
+    /// Records that bytes `offset.start .. offset.stop + len` of the region behind
+    /// `base` may be accessed at runtime. Uses the full symbolic span of `offset`
+    /// (not just its exact value) so an under-determined access never under-records.
+    pub fn record_access(&mut self, base: &MemoryLabel, offset: &MemoryValueU64, len: u64) {
+        record_access_into(&self.descriptor_labels, &mut self.accessed, base, offset, len);
+    }
+}
+
+/// The recording primitive behind [`State::record_access`], split out so the
+/// verifier can also record an access into a *different* accumulator than the
+/// replayed state's own (it records the instruction currently being checked
+/// directly into `Explorerer::accessed` — replays exclude that instruction, and a
+/// path-terminal access would otherwise never be recorded at all).
+pub fn record_access_into(
+    descriptor_labels: &BTreeMap<Label, Label>,
+    accessed: &mut AccessedRanges,
+    base: &MemoryLabel,
+    offset: &MemoryValueU64,
+    len: u64,
+) {
+    let label = <&Label>::from(base);
+    let key = descriptor_labels.get(label).unwrap_or(label).clone();
+    accessed
+        .entry(key)
+        .or_default()
+        .insert((offset.start, offset.stop.saturating_add(len)));
 }
 impl State {
     pub fn new(system: &InnerVerifierConfiguration, configuration: &TypeConfiguration) -> Self {
@@ -1544,6 +1616,8 @@ impl State {
                 .collect(),
             memory,
             configuration: configuration.clone(),
+            accessed: Default::default(),
+            descriptor_labels: Default::default(),
         }
     }
 }

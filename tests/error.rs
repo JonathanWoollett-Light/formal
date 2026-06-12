@@ -3,10 +3,11 @@ mod common;
 use common::*;
 use formal::*;
 
-/// When the verifier hits a construct it cannot handle (here, a load from a raw
-/// non-label address), it must return a [`CompilerError`] instead of panicking,
-/// so the test gets both the error *and* the trace of steps leading up to it
-/// rather than a dead test binary.
+/// When the verifier hits a construct it cannot handle (here, a `.global`
+/// directive — programs have no explicit entry point, so the verifier does not
+/// model it), it must return a [`CompilerError`] instead of panicking, so the
+/// test gets both the error *and* the trace of steps leading up to it rather
+/// than a dead test binary.
 #[test]
 fn unsupported_construct_returns_error_with_trace() {
     let ast = setup_test("error");
@@ -36,7 +37,7 @@ fn unsupported_construct_returns_error_with_trace() {
     assert!(!trace.is_empty(), "expected a non-empty trace");
     let last = trace.last().expect("non-empty trace");
     assert!(
-        last.contains("lw t1, 0(t0)") && last.contains("error"),
-        "expected the final trace line to be the failing load; got: {last}"
+        last.contains(".global _start") && last.contains("error"),
+        "expected the final trace line to be the failing directive; got: {last}"
     );
 }

@@ -89,6 +89,66 @@ In future it might be worth using a custom version of `NonNull` that counts the 
 4. Remove memory writes that are never read.
    This will require documenting volatile memory for mmio.
 
+## dead compile-time data
+
+Information which is only accessed at compile time can be removed from the
+output code. An example: an `if` on whether a variable is thread-local is fully
+resolved by the verifier, so the branch is inlined away — and then, if nothing
+else reads the locality at runtime, the locality byte does not need to be
+written into the `.data` section at all.
+
+Knowing whether something is "accessed" is the verifier's job: it records,
+across every proven path, the byte ranges each load/store can touch at runtime
+(`ValidPathResult::accessed`). An access whose offset is under-determined fills
+its whole *maximal* span — a store at `(0..4)..(6..10)` marks `0..10` — in both
+of the roles memory tracking plays: what an access *could touch* (so nothing
+that might be read at runtime is ever trimmed) and what a location *might hold*
+(an uncertainly-addressed store leaves every byte in its span unknown — "old
+value or new value" — rather than leaving a stale known value behind). Codegen
+then emits only the accessed bytes — a dead byte that a later access's offset
+depends on (the programs stride type-descriptor records by their full 25 bytes)
+survives as zero padding, and trailing dead bytes are dropped. Today this is
+implemented for the runtime type descriptors read via `lat`: none of the
+example programs read a descriptor's locality byte at runtime, so no locality
+data exists in their generated `.data`/`.bss`.
+
+The longer-term picture is that a variable not given an exact address exists at
+a *symbolic* address. An access either provably stays within the variable (and
+the verifier knows exactly which bytes), or it cannot be verified — in which
+case it must be assumed to touch anything, and nothing can be removed. If the
+program takes the symbolic address (e.g. via `lat`) and reads some bytes after
+it in a way that cannot be resolved at compile time, those bytes are accessed
+and must be emitted; if every consumer of those bytes is resolved at compile
+time (like the inlined locality `if`), they are not.
+
+## section (`#@`)
+
+`#@ <start> <end> <perms>` defines memory to the verifier: from `start` up to
+(but excluding) `end` the program has the given access, `r` read, `w` write,
+`rw` both. E.g. `#@ 100 200 rw`.
+
+The bounds may also be registers, i.e. symbolic or otherwise variable runtime
+definitions: a memory allocator does `#@ <base> <base + size> rw` just before
+returning each pointer it allocates, so the defined memory carries the (range)
+uncertainty of the verifier's view of those registers. The existing scalar
+range matching is reused to check accesses against the declared ranges. The
+declaration takes effect when *executed* (in each hart's program order), so
+memory becomes accessible exactly when its allocator hands it out — which also
+makes `#@` *racy*: the verifier must explore the interleavings where another
+hart's access lands before the declaration it needs (and reject them).
+
+Every memory access must be verifiable as safe — either an access through a
+symbolic variable (whose storage the compiler itself places in `.data`/`.bss`)
+or a raw access to memory that has been marked with `#@` (or described by the
+system configuration, e.g. MMIO). A raw access outside every declared region
+makes the program invalid.
+
+Two current caveats: overlapping regions are matched first-declared-first (a
+read-only region declared before an overlapping read-write one shadows it), and
+nothing yet verifies a declared region does not physically overlap the
+`.data`/`.bss` the compiler itself generates — declaring such a region is
+unsound and currently the programmer's obligation to avoid.
+
 ## assembly reference
 
 keyword|assembly symbol

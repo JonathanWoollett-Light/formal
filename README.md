@@ -22,8 +22,9 @@ optimize the program.
 >   layout it generates the `.data`/`.bss` sections and lowers the verification
 >   directives, producing a program the RISC-V GNU toolchain assembles + links
 >   into an ELF that boots under `qemu-system-riscv64` (see
->   [Running in QEMU](#running-in-qemu)). The `codegen` test writes these to
->   `target/gen/*.s`.
+>   [Running in QEMU](#running-in-qemu)). The integration tests write these to
+>   `target/gen/*.s`, and **dead-data elimination** keeps compile-time-only
+>   information (e.g. type-descriptor locality bytes) out of the output.
 > - The binary entry point ([src/main.rs](src/main.rs)) parses, compresses and
 >   prints the AST, then hits `todo!()`; it does not yet run the verifier or
 >   codegen, so `cargo run` panics — that wiring lives in the tests for now (see
@@ -43,7 +44,7 @@ carry type/verification information. The currently-parsed directives are:
 | `#?` | `unreachable` | A point (typically program end) that during compilation if the verifier reaches, it halts, assuming the hart which reached this point turns off (prcatically this may be the hart entering a closed loop at the end of the program). |
 | `#$ <label> <locality> <type>` | `define` | Declare a variable's locality and/or type. `_` = "infer". |
 | `#& <reg>, <label>` | `lat` | Load the address of a label's **runtime type descriptor**. |
-| `#@` | `section` | Reserved (designed, not yet implemented). |
+| `#@ <start> <end> <perms>` | `section` | Declare a memory region the program may access (`end` exclusive; perms `r`/`w`/`rw`). Bounds may be immediates or registers — an allocator declares `#@ <base> <base+size> rw` for each allocation it makes. Every raw-address access must fall inside a declared region. |
 
 `<locality>` is `global`, `thread`, or `_`. `<type>` is a scalar
 (`u8`/`i8`/`u16`/`i16`/`u32`/`i32`/`u64`/`i64`), a list `[u8 u8 ...]`, a union
@@ -135,12 +136,21 @@ layout. This is the language's core idea: you write assembly with the data layou
 *left implicit*, and the verifier figures out the types/locality and writes the
 data section for you.
 
-The integration tests do this end to end: each of `four`/`five`/`six`/`three`
-verifies, optimizes, lowers to runnable RISC-V (written to `target/gen/<name>.s`),
-then **assembles, links, and boots it in QEMU**, asserting it runs without a CPU
-fault (`three` additionally asserts the UART receives `H`). The RISC-V GNU
-toolchain and `qemu-system-riscv64` (under WSL) are **required** — the tests
-*fail* if they are missing, not skip:
+The generated sections also benefit from **dead-data elimination**: the proof
+records exactly which bytes the program loads/stores at runtime, and codegen
+emits only those. Information that is only consulted at *compile time* — e.g.
+each runtime type descriptor's locality byte, which the example programs never
+read — does not exist in the output (interior dead bytes survive only as `.zero`
+padding where a later record's offset depends on them; trailing dead bytes are
+dropped entirely).
+
+The integration tests do this end to end: each of `four`/`five`/`six`/`three`/
+`seven` verifies, optimizes, lowers to runnable RISC-V (written to
+`target/gen/<name>.s`), pins the exact emitted program (including the absence of
+the dead locality data), then **assembles, links, and boots it in QEMU**,
+asserting it runs without a CPU fault (`three` additionally asserts the UART
+receives `H`). The RISC-V GNU toolchain and `qemu-system-riscv64` (under WSL)
+are **required** — the tests *fail* if they are missing, not skip:
 
 ```sh
 cargo test                    # verify + lower + boot each program in QEMU
