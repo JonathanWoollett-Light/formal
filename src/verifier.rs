@@ -178,6 +178,16 @@ pub struct Explorerer {
     /// so it over-approximates the final program's accesses — sound for dead-data
     /// elimination, which must never drop a byte any path could read.
     pub accessed: AccessedRanges,
+    /// Per-node pointer-arithmetic transitions, unioned over every replayed path
+    /// (see [`AccessTransitions`]); drives the instruction rewriting of layout
+    /// compaction in codegen. Grows like `accessed`.
+    pub transitions: AccessTransitions,
+    /// Regions accessed through an under-determined (range) offset: codegen must
+    /// keep their padded layout (see [`AccessTransitions`]). Grows like `accessed`.
+    pub uncompactable: BTreeSet<Label>,
+    /// Nodes that must keep their original immediate (they also executed with a
+    /// raw address, scalar operand, or range offset). Grows like `accessed`.
+    pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
     // When a variable is 1st encountered in a path it is added here with an iterator over all the
     // possible types, then a type is set in the configuration by calling `.next` on this iterator.
     //
@@ -272,6 +282,9 @@ impl Explorerer {
             queue,
             jumped,
             accessed: Default::default(),
+            transitions: Default::default(),
+            uncompactable: Default::default(),
+            pinned_nodes: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
             counter: 0,
@@ -285,14 +298,18 @@ impl Explorerer {
             queue,
             jumped,
             accessed: Default::default(),
+            transitions: Default::default(),
+            uncompactable: Default::default(),
+            pinned_nodes: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
         };
         Ok(x)
     }
 
-    /// Merges the accessed-ranges a replayed [`State`] recorded into the union
-    /// kept across all explored paths (see [`AccessedRanges`]). Set union is
+    /// Merges the accessed-ranges, pointer transitions and uncompactable set a
+    /// replayed [`State`] recorded into the unions kept across all explored
+    /// paths (see [`AccessedRanges`]/[`AccessTransitions`]). Set union is
     /// idempotent, so merging the same replayed prefix repeatedly is harmless.
     fn merge_accessed(&mut self, state: &State) {
         for (label, ranges) in &state.accessed {
@@ -301,6 +318,15 @@ impl Explorerer {
                 .or_default()
                 .extend(ranges.iter().copied());
         }
+        for (node, edges) in &state.transitions {
+            self.transitions
+                .entry(*node)
+                .or_default()
+                .extend(edges.iter().cloned());
+        }
+        self.uncompactable
+            .extend(state.uncompactable.iter().cloned());
+        self.pinned_nodes.extend(state.pinned_nodes.iter().copied());
     }
 
     // Advance the verifier by one instruction.
@@ -340,6 +366,9 @@ impl Explorerer {
                 touched: self.touched.clone(),
                 jumped: self.jumped.clone(),
                 accessed: self.accessed.clone(),
+                transitions: self.transitions.clone(),
+                uncompactable: self.uncompactable.clone(),
+                pinned_nodes: self.pinned_nodes.clone(),
             }));
         };
 
@@ -864,6 +893,16 @@ impl Explorerer {
                             &start_offset,
                             type_size,
                         );
+                        record_transition_into(
+                            &state.descriptor_labels,
+                            &mut self.transitions,
+                            &mut self.uncompactable,
+                            &mut self.pinned_nodes,
+                            branch.borrow().node,
+                            from_label,
+                            from_offset,
+                            &start_offset,
+                        );
                         Ok(ControlFlow::Continue(self))
                     }
                 }
@@ -913,6 +952,12 @@ impl Explorerer {
                 if let Some(section) = section_opt {
                     match section.permissions {
                         Permissions::ReadWrite | Permissions::Write => {
+                            // Raw execution of this node: it must keep its
+                            // original immediate even if another execution is a
+                            // pointer access into a compacted region. (Replays
+                            // exclude the checked instruction, so a terminal raw
+                            // access pins here or never.)
+                            self.pinned_nodes.insert(branch.borrow().node);
                             Ok(ControlFlow::Continue(self))
                         }
                         Permissions::Read => {
@@ -993,6 +1038,16 @@ impl Explorerer {
                             &start_offset,
                             type_size,
                         );
+                        record_transition_into(
+                            &state.descriptor_labels,
+                            &mut self.transitions,
+                            &mut self.uncompactable,
+                            &mut self.pinned_nodes,
+                            branch.borrow().node,
+                            from_label,
+                            from_offset,
+                            &start_offset,
+                        );
                         Ok(ControlFlow::Continue(self))
                     }
                 }
@@ -1041,6 +1096,8 @@ impl Explorerer {
                 if let Some(section) = section_opt {
                     match section.permissions {
                         Permissions::ReadWrite | Permissions::Read => {
+                            // Raw execution pins the node (see the store arm).
+                            self.pinned_nodes.insert(branch.borrow().node);
                             Ok(ControlFlow::Continue(self))
                         }
                         Permissions::Write => {
@@ -1664,6 +1721,19 @@ pub struct ValidPathResult {
     /// descriptor byte outside every range here is only read at compile time
     /// (by the verifier) and its value need not exist in the output program.
     pub accessed: AccessedRanges,
+    /// Per-node pointer-arithmetic transitions (see [`AccessTransitions`]).
+    /// Drives layout compaction in codegen: unaccessed bytes are *removed* (not
+    /// padded) and every instruction that computes an address past them has its
+    /// immediate rewritten to the compacted offset.
+    pub transitions: AccessTransitions,
+    /// Regions that must keep the padded layout (accessed through an
+    /// under-determined offset no single immediate rewrite can re-point).
+    pub uncompactable: BTreeSet<Label>,
+    /// Nodes that must keep their original immediate: they also executed with
+    /// a raw address, scalar operand, or range offset — executions invisible to
+    /// `transitions` that a rewrite would silently corrupt. Compaction demotes
+    /// any region that would require rewriting a pinned node.
+    pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
 }
 
 impl From<&LabelLocality> for Locality {
@@ -1967,19 +2037,19 @@ unsafe fn find_state(
                     .internal("find_state: la register insert failed")?;
             }
             Instruction::Sw(Sw { to, from, offset }) => {
-                find_state_store(&mut state, hartu, to, from, offset, 4)?;
+                find_state_store(&mut state, vnode.node, hartu, to, from, offset, 4)?;
             }
             Instruction::Sb(Sb { to, from, offset }) => {
-                find_state_store(&mut state, hartu, to, from, offset, 1)?;
+                find_state_store(&mut state, vnode.node, hartu, to, from, offset, 1)?;
             }
             Instruction::Ld(Ld { to, from, offset }) => {
-                find_state_load(&mut state, hartu, to, from, offset, 8)?;
+                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 8)?;
             }
             Instruction::Lw(Lw { to, from, offset }) => {
-                find_state_load(&mut state, hartu, to, from, offset, 4)?;
+                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 4)?;
             }
             Instruction::Lb(Lb { to, from, offset }) => {
-                find_state_load(&mut state, hartu, to, from, offset, 1)?;
+                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 1)?;
             }
             Instruction::Addi(Addi { out, lhs, rhs }) => {
                 let lhs_value = state.registers[hartu]
@@ -1987,7 +2057,30 @@ unsafe fn find_state(
                     .cloned()
                     .internal("find_state: addi lhs register has no value")?;
                 let rhs_value = MemoryValue::from(*rhs);
-                let out_value = lhs_value + rhs_value;
+                let out_value = lhs_value.clone() + rhs_value;
+                // Pointer arithmetic: record the transition for layout compaction
+                // (this node's immediate is what codegen rewrites when the bytes
+                // between `from` and `to` move).
+                if let (
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                        tag,
+                        offset: from_offset,
+                    }))),
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                        offset: to_offset, ..
+                    }))),
+                ) = (&lhs_value, &out_value)
+                {
+                    let (tag, from_offset, to_offset) =
+                        (tag.clone(), from_offset.clone(), to_offset.clone());
+                    state.record_transition(vnode.node, &tag, &from_offset, &to_offset);
+                } else {
+                    // A scalar / raw-address execution of this node: its
+                    // immediate is a plain number compaction must never rewrite
+                    // (another execution of the same node may be a recorded
+                    // pointer transition on a compacted region).
+                    state.pinned_nodes.insert(vnode.node);
+                }
                 state.registers[hartu]
                     .insert(*out, out_value)
                     .internal("find_state: addi register insert failed")?;
@@ -2086,6 +2179,7 @@ fn region_bound_value(
 
 fn find_state_store(
     state: &mut State,
+    node: NonNull<AstNode>,
     hartu: usize,
     to: impl Borrow<Register>,
     from: impl Borrow<Register>,
@@ -2128,8 +2222,11 @@ fn find_state_store(
                         .internal("store: negative offset")?,
                 ))
                 .internal("store: offset overflow")?;
-            // Record the bytes this store can touch at runtime (dead-data analysis).
+            // Record the bytes this store can touch at runtime (dead-data analysis)
+            // and the pointer→target transition (layout compaction rewrites this
+            // node's offset immediate when the bytes between them move).
             state.record_access(to_label, &store_offset, len);
+            state.record_transition(node, to_label, to_offset, &store_offset);
             let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                 tag: to_label.clone(),
                 offset: store_offset,
@@ -2140,6 +2237,10 @@ fn find_state_store(
                 .internal("store: memory set failed")?;
         }
         MemoryValue::I64(x) => {
+            // A raw-address execution: invisible to `transitions`, so the node
+            // must keep its original immediate (another execution of the same
+            // node may be a pointer access into a compacted region).
+            state.pinned_nodes.insert(node);
             // The store's address is the register value plus the instruction offset
             // (`sw t1, 8(t3)` stores at t3+8) — `check_store` validated that address.
             let address = x
@@ -2157,6 +2258,7 @@ fn find_state_store(
 
 fn find_state_load(
     state: &mut State,
+    node: NonNull<AstNode>,
     hartu: usize,
     to: impl Borrow<Register>,
     from: impl Borrow<Register>,
@@ -2201,8 +2303,11 @@ fn find_state_load(
                     .internal("load: offset overflow")?,
                 len,
             };
-            // Record the bytes this load can touch at runtime (dead-data analysis).
+            // Record the bytes this load can touch at runtime (dead-data analysis)
+            // and the pointer→target transition (layout compaction rewrites this
+            // node's offset immediate when the bytes between them move).
             state.record_access(&memloc.base, &memloc.offset, len);
+            state.record_transition(node, &memloc.base, from_offset, &memloc.offset);
             let value = state.memory.get(&memloc).internal("load: memory get failed")?;
             state.registers[hartu]
                 .insert(to.borrow().clone(), value)
@@ -2213,6 +2318,9 @@ fn find_state_load(
         // not modelled precisely, so the loaded value is the full range of the
         // loaded width: a sound over-approximation of whatever was stored there.
         MemoryValue::I64(_) => {
+            // Raw execution: the node must keep its original immediate (see the
+            // store arm).
+            state.pinned_nodes.insert(node);
             let value = match len {
                 1 => MemoryValue::from(Type::I8),
                 4 => MemoryValue::from(Type::I32),

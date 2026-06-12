@@ -136,13 +136,18 @@ layout. This is the language's core idea: you write assembly with the data layou
 *left implicit*, and the verifier figures out the types/locality and writes the
 data section for you.
 
-The generated sections also benefit from **dead-data elimination**: the proof
-records exactly which bytes the program loads/stores at runtime, and codegen
-emits only those. Information that is only consulted at *compile time* — e.g.
-each runtime type descriptor's locality byte, which the example programs never
-read — does not exist in the output (interior dead bytes survive only as `.zero`
-padding where a later record's offset depends on them; trailing dead bytes are
-dropped entirely).
+The generated sections also benefit from **dead-data elimination with layout
+compaction**: the proof records exactly which bytes the program loads/stores at
+runtime — and which instruction computes which offset — so codegen emits only
+the accessed bytes and **rewrites the program's address arithmetic in
+lockstep**. Information that is only consulted at *compile time* — e.g. each
+runtime type descriptor's locality byte, which the example programs never read
+— simply does not exist in the output: unaccessed bytes are removed (not
+padded), and an instruction whose offset spanned removed bytes has that gap
+subtracted from its immediate (`uart_hello`'s descriptor-walking loop strides
+`addi t0, t0, 8` instead of the source's 25). Where no single rewritten
+immediate can satisfy every execution of an instruction, the region falls back
+to `.zero` padding instead — always sound, just less compact.
 
 The integration tests do this end to end: each of `racy_increment`/`racy_store_inferred`/`racy_store_annotated`/`uart_hello`/
 `heap_regions` verifies, optimizes, lowers to runnable RISC-V (written to

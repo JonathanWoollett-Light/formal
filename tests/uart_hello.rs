@@ -48,6 +48,9 @@ fn uart_hello() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path. (Its full
@@ -230,14 +233,15 @@ fn uart_hello() {
         .collect()
     );
 
-    // Pin the exact lowered program. The headline is the `.data` section: the
-    // descriptor bytes the program never reads at runtime are **not stored** —
-    // each record's trailing locality byte vanishes (the program checks types via
-    // `#&` at offsets 0/8/16 only), and the interior dead bytes of the subtypes
-    // array survive only as `.zero` padding because the program strides the
-    // records by their full 25 bytes. No `.byte` (locality) directive remains
-    // anywhere in `.data`/`.bss`.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    // Pin the exact lowered program. The headline is layout compaction: the
+    // descriptor bytes the program never reads at runtime are **removed** — each
+    // record's locality byte and the subtypes records' unread ptr/length fields
+    // simply don't exist in `.data` — and the instructions that strode the old
+    // 25-byte records are rewritten in lockstep (`addi t0, t0, 25` becomes
+    // `addi t0, t0, 8`, the compacted stride). `__welcome_type` is 24 bytes and
+    // `__welcome_subtypes` 16, with no `.zero` padding and no `.byte` (locality)
+    // directive anywhere in `.data`/`.bss`.
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ value global _
@@ -265,7 +269,7 @@ _check_item:
     beq t5, t2, _no_items
     ld t3, 0(t0)
     li t4, 0
-    addi t0, t0, 25
+    addi t0, t0, 8
     addi t5, t5, 1
     j _check_item
 _no_items:
@@ -296,7 +300,6 @@ __welcome_type:
     .dword 2                # length
 __welcome_subtypes:
     .dword 0
-    .zero 17                # never accessed at runtime (padding)
     .dword 0
 
 .section .bss
@@ -312,7 +315,7 @@ welcome:
     // Boot it in QEMU (requires the toolchain + QEMU). Hart 0 writes the message
     // ("H\0") to the UART, so success is "ran with no CPU fault and the UART
     // received 'H'".
-    let serial = unsafe { run_program("uart_hello", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("uart_hello", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert!(
         serial.contains('H'),
         "uart_hello should write 'H' to the UART; got {serial:?}"

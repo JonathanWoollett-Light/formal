@@ -4,9 +4,10 @@
 //! helpers appear unused from any single test binary's perspective.
 #![allow(dead_code)]
 
-use formal::verifier_types::{AccessedRanges, TypeConfiguration};
+use formal::verifier_types::{AccessTransitions, AccessedRanges, TypeConfiguration};
 use formal::*;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::BTreeSet;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
@@ -186,6 +187,7 @@ pub unsafe fn verify_and_optimize(
         touched,
         jumped,
         accessed,
+        ..
     } = expect_valid(&trace, result);
     remove_untouched(&mut ast, &touched);
     remove_branches(&mut ast, &jumped);
@@ -359,8 +361,18 @@ pub unsafe fn run_program(
     ast: Option<NonNull<AstNode>>,
     configuration: &TypeConfiguration,
     accessed: &AccessedRanges,
+    transitions: &AccessTransitions,
+    uncompactable: &BTreeSet<Label>,
+    pinned_nodes: &BTreeSet<NonNull<AstNode>>,
 ) -> String {
-    let asm = emit_executable(ast, configuration, accessed);
+    let asm = emit_executable(
+        ast,
+        configuration,
+        accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
+    );
 
     // The emitted program must be self-contained.
     assert!(asm.contains(".global _start"), "{name}: no entry point\n{asm}");

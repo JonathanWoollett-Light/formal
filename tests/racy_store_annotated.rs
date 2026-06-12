@@ -39,6 +39,9 @@ fn racy_store_annotated() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -148,7 +151,7 @@ fn racy_store_annotated() {
 
     // Pin the exact lowered program: optimized instructions, entry + halt loop,
     // `.bss` storage for `value`, and no `.data` (no compile-time-only data).
-    let asm = emit_executable(ast, &configuration, &accessed);
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ value global u32
@@ -173,6 +176,6 @@ value:
     // program halts in `wfi` with no output, so success is simply "ran with no CPU
     // fault". (Were the verifier complete, this would lower to an empty program
     // that falls straight into the halt loop.)
-    let serial = unsafe { run_program("racy_store_annotated", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("racy_store_annotated", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "racy_store_annotated produces no UART output");
 }

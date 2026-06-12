@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
       "PowerShell(cargo build 2>&1)",
       "PowerShell(cargo run 2>&1)",
@@ -86,7 +87,24 @@
       "Bash(wsl -e bash -lc \"qemu-system-riscv64 --version | head -1\")",
       "Bash(FORMAL_PROGRESS=1 cargo test --test three)",
       "Bash(awk 'NR % 8 == 1')",
-      "Bash(grep -rn '`three`\\\\|`four`\\\\|`five`\\\\|`six`\\\\|`seven`\\\\|`eight`\\\\|`nine`\\\\|`ten`\\\\|three\\\\.s\\\\|four\\\\.s\\\\|five\\\\.s\\\\|six\\\\.s\\\\|seven\\\\.s\\\\|eight\\\\.s\\\\|nine\\\\.s\\\\|ten\\\\.s\\\\|error\\\\.s' tests/)"
+      "Bash(grep -rn '`three`\\\\|`four`\\\\|`five`\\\\|`six`\\\\|`seven`\\\\|`eight`\\\\|`nine`\\\\|`ten`\\\\|three\\\\.s\\\\|four\\\\.s\\\\|five\\\\.s\\\\|six\\\\.s\\\\|seven\\\\.s\\\\|eight\\\\.s\\\\|nine\\\\.s\\\\|ten\\\\.s\\\\|error\\\\.s' tests/)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- src/verifier_types.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- src/verifier_types.rs src/verifier.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- src/codegen.rs tests/common/mod.rs assets/partial_variable_access.s)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- tests/ assets/)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- tests/terminal_access.rs tests/partial_variable_access.rs tests/locality_runtime_read.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- tests/vague_access.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- tests/vague_access.rs tests/offset_widened_inference.rs tests/heap_regions.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff -- tests/racy_increment.rs tests/descriptor_read_union.rs tests/uart_hello.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal show HEAD:tests/vague_access.rs)",
+      "PowerShell(cargo check --tests 2>&1)",
+      "PowerShell(cargo check --all-targets 2>$null; echo \"exit: $LASTEXITCODE\")",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff src/verifier.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff src/verifier_types.rs)",
+      "PowerShell(git -C C:\\\\Users\\\\jonat\\\\Documents\\\\formal diff src/codegen.rs)",
+      "PowerShell(cargo test --manifest-path C:\\\\Users\\\\jonat\\\\Documents\\\\formal\\\\Cargo.toml --test repro_mixed -- --nocapture)",
+      "PowerShell(cargo test --test zzz_mixed_repro -- --nocapture)",
+      "Bash(grep -vE '^\\(one|two|uart_hello|uart_hello_ast|racy_increment|racy_store_inferred|racy_store_annotated|heap_regions|raw_access_undeclared|region_overrun|terminal_access|unsupported_construct|partial_variable_access|descriptor_read_union|locality_runtime_read|conflicting_defines|annotated_store_overflow|offset_widened_inference|region_read_only|region_write_only|region_declared_late|vague_access\\)\\\\.s$')"
     ]
   }
 }

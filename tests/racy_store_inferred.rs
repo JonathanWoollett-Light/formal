@@ -42,6 +42,9 @@ fn racy_store_inferred() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -182,7 +185,7 @@ fn racy_store_inferred() {
     // halt loop, `.bss` storage for `value`, and **no `.data` at all** — nothing
     // here is read through a runtime type descriptor, so no compile-time
     // information (e.g. locality data) exists in the output.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ value global _
@@ -205,6 +208,6 @@ value:
     // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
     // the inferred `value` and halts in `wfi` — no output — so success is simply
     // "ran with no CPU fault".
-    let serial = unsafe { run_program("racy_store_inferred", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("racy_store_inferred", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "racy_store_inferred produces no UART output");
 }

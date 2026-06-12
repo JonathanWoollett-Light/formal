@@ -57,6 +57,9 @@ fn heap_regions() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to validate every interleaving of the
@@ -91,7 +94,7 @@ fn heap_regions() {
     // Pin the exact lowered program: `#@` survives only as a comment, execution
     // falls into the appended halt loop, and there is no `.data`/`.bss` — the
     // regions are heap, not generated storage.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #@ 0x80100000 0x80100008 rw
@@ -113,6 +116,6 @@ __halt:
     // Boot it in QEMU (requires the toolchain + QEMU). The stores land in RAM
     // (0x80100004/0x80200000 on the `virt` machine), the loads read them back,
     // and the program halts — no output, no CPU fault.
-    let serial = unsafe { run_program("heap_regions", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("heap_regions", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "heap_regions produces no UART output");
 }

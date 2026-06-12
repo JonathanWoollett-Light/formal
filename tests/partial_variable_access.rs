@@ -6,12 +6,11 @@ use formal::*;
 use std::collections::BTreeSet;
 
 /// Only bytes 0 and 2 of a 4-byte list variable are accessed at runtime. The
-/// recorded ranges are exactly those two bytes (the precision dead-data
-/// trimming will rely on), while the `.bss` storage is still emitted at the
-/// type's full 4 bytes — bytes that are merely *unaccessed* are never trimmed
-/// from live variable storage.
+/// recorded ranges are exactly those two bytes, and layout compaction emits
+/// exactly those two: the unaccessed bytes 1 and 3 are removed from `.bss` and
+/// the byte-2 access is re-pointed at compacted offset 1.
 #[test]
-fn partial_access_records_exact_bytes_and_keeps_full_storage() {
+fn partial_access_compacts_storage_to_accessed_bytes() {
     let mut ast = setup_test("partial_variable_access");
 
     let explorerer = unsafe {
@@ -37,6 +36,9 @@ fn partial_access_records_exact_bytes_and_keeps_full_storage() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps (everything is thread-local, so the
@@ -73,16 +75,16 @@ fn partial_access_records_exact_bytes_and_keeps_full_storage() {
         remove_branches(&mut ast, &jumped);
     }
 
-    // `.bss` storage stays at the full type size: only *compile-time-only*
-    // descriptor bytes are subject to dead-data elimination today.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    // `.bss` storage compacts to the two accessed bytes — the unaccessed bytes
+    // 1 and 3 are removed and the byte-2 access is re-pointed at offset 1.
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ data _ [u8 u8 u8 u8]
     la t0, data
     li t1, 7
     sb t1, 0(t0)
-    lb t2, 2(t0)
+    lb t2, 1(t0)
 __halt:
     wfi
     j __halt
@@ -90,11 +92,11 @@ __halt:
 .section .bss
     .balign 8
 data:
-    .zero 4
+    .zero 2
 ";
     assert_eq!(normalize(asm), expected);
 
     // Boot it in QEMU (requires the toolchain + QEMU) — no output, no fault.
-    let serial = unsafe { run_program("partial_variable_access", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("partial_variable_access", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "partial_variable_access produces no UART output");
 }

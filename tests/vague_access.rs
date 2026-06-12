@@ -40,17 +40,19 @@ fn vague_offset_records_maximal_span() {
 }
 
 /// The codegen side of the same property: a recorded range that only
-/// *partially* overlaps a descriptor field keeps the **whole** field (there is
-/// no sub-field elision), and every dead byte below the range survives as
-/// padding — so an under-determined access can never lose bytes it might
-/// touch.
+/// *partially* overlaps a descriptor field keeps the **whole** field — there is
+/// no sub-field elision (a `.dword` holding a relocation cannot be split), so
+/// an under-determined access can never lose bytes it might touch.
 #[test]
 fn partially_covered_field_is_emitted_whole() {
     let ast = setup_test("vague_access");
 
     // Hand-built proof outputs: `x: u8`, and a (vague) access spanning bytes
     // 20..25 of its descriptor — cutting *into* the length field (16..24) and
-    // covering the locality byte (24..25).
+    // covering the locality byte (24..25). A range-shaped access also marks its
+    // region uncompactable (the verifier records both together), so the region
+    // keeps the padded layout: both touched fields are emitted whole at their
+    // original offsets behind `.zero` padding.
     let configuration = TypeConfiguration(
         vec![(Label::from("x"), (LabelLocality::Global, Type::U8))]
             .into_iter()
@@ -59,8 +61,16 @@ fn partially_covered_field_is_emitted_whole() {
     let accessed: AccessedRanges = vec![(Label::from("__x_type"), BTreeSet::from([(20, 25)]))]
         .into_iter()
         .collect();
+    let uncompactable = BTreeSet::from([Label::from("__x_type")]);
 
-    let asm = emit_executable(ast, &configuration, &accessed);
+    let asm = emit_executable(
+        ast,
+        &configuration,
+        &accessed,
+        &Default::default(),
+        &uncompactable,
+        &Default::default(),
+    );
     let expected = ".global _start
 _start:
     #$ x global u8
@@ -78,7 +88,6 @@ __x_type:
 .section .bss
     .balign 8
 x:
-    .zero 1
 ";
     assert_eq!(normalize(asm), expected);
 }

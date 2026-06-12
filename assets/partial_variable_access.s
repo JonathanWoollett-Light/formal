@@ -1,7 +1,7 @@
     # Only bytes 0 and 2 of the 4-byte list are accessed at runtime: the
-    # verifier records exactly those ranges (the basis for dead-data trimming),
-    # while `.bss` storage is still emitted at the full type size - bytes that
-    # are merely *unaccessed* are never trimmed from live storage.
+    # verifier records exactly those ranges, and layout compaction emits
+    # exactly those bytes - the unaccessed bytes 1 and 3 are removed from
+    # `.bss` and the byte-2 access is re-pointed at its compacted offset.
     #$ data _ [u8 u8 u8 u8]
     la t0, data
     li t1, 7

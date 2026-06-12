@@ -270,6 +270,25 @@ heap/MMIO, not generated storage (soundness of trimming therefore **assumes raw
 regions never alias generated storage** — see §10). This bookkeeping must never
 feed back into exploration control flow.
 
+Alongside `accessed`, the same sites record **pointer transitions**
+(`State.transitions`, an `AccessTransitions = BTreeMap<NonNull<AstNode>,
+BTreeSet<(Label, from, to)>>`): per AST node, which old byte offset a pointer
+held before the instruction and which offset it produced (`addi`) or
+dereferenced (loads/stores, `to = from + insn offset`). These drive the
+instruction rewriting of **layout compaction** in codegen ([§4.8](#48-code-generation--emit_executable-srccodegenrs)).
+A transition whose offsets are only known as a *range* instead inserts the label
+into `State.uncompactable` — no single rewritten immediate can re-point it, so
+the region keeps the padded layout. And any **non-pointer execution** of an
+`addi`/load/store node (a raw `I64` address, a scalar operand, or a range
+offset) inserts the node into `State.pinned_nodes`: that execution is invisible
+to the transition records, so the node must keep its *original* immediate —
+compaction demotes any region that would require rewriting it (pinned by the
+`mixed_pointer_raw` test, where one `sb` stores through a pointer on one loop
+iteration and a raw `#@` address on the next). All three are merged into the
+`Explorerer` unions exactly like `accessed` (including the check-time
+self-record for path-terminal accesses), and like `accessed` must never
+influence exploration.
+
 **Outputs.** A successful proof yields `ValidPathResult`
 ([src/verifier.rs:1335](src/verifier.rs#L1335)):
 `configuration: TypeConfiguration` (inferred type+locality per variable),
@@ -404,22 +423,35 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
   __<label>_type` (load the generated descriptor's address); `#!` (fail) →
   `ebreak`; `#?` (unreachable / end) → jump to a `__halt: wfi; j __halt` loop
   appended after `.text`.
-- Emits `.data` — the runtime **type descriptors** read via `#&`, as 25-byte
-  records `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]` (the
-  same layout §4.5 builds in `set_type`; deliberately unpadded so the programs
-  can stride them by 25) — **minus the bytes the program never accesses at
-  runtime** (next bullet).
-- **Dead-data elimination.** `emit_executable` takes the proof's
-  `accessed: AccessedRanges` and emits only runtime-accessed descriptor bytes
-  (`Coverage` / `emit_descriptor_record`): a live field is emitted with its
-  value; a dead field below the region's last live byte becomes `.zero` padding
-  (the 25-byte stride is hardcoded in the programs, so interior offsets must
-  hold); trailing dead bytes are **omitted**. Concretely, in `uart_hello` every
-  record's locality byte (offset 24) vanishes — `__welcome_type` is 24 bytes
-  and `__welcome_subtypes` is 33 (`.dword`, `.zero 17` padding, `.dword`) —
-  because the programs only consult locality through the verifier at compile
-  time. Information only read at compile time does not exist in the output.
-- Emits `.bss` — zero-initialized storage for every inferred variable, sized by
+- Emits `.data` — the runtime **type descriptors** read via `#&`, as records of
+  `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]` (the source
+  layout §4.5 builds in `set_type`, 25 bytes/record) — **minus the bytes the
+  program never accesses at runtime** (next bullet).
+- **Dead-data elimination & layout compaction.** `emit_executable` takes the
+  proof's `accessed: AccessedRanges` + `transitions: AccessTransitions` +
+  `uncompactable` and (in `solve_layouts`) builds a per-region `Layout`: the
+  runtime-accessed bytes (field-granular for descriptors — a `.dword` holding a
+  relocation cannot be split — byte-granular for variables) and a mapping `f`
+  from old offsets to emitted offsets. Unaccessed bytes are **removed**, and
+  every instruction whose recorded transitions span a removed gap has its
+  immediate rewritten to `f(to) - f(from)` during lowering (`patch_immediate`).
+  A single immediate must satisfy *every* recorded execution of its node; a
+  fixpoint (iterated in AST order, deterministic) demotes the regions of any
+  disagreeing node — or of a **pinned** node (one that also executed with a raw
+  address/scalar operand, so it must keep its original immediate), or where the
+  instruction has no rewritable immediate, or any region the verifier marked
+  `uncompactable` — back to the **padded** layout: interior dead bytes below the last live byte become
+  `.zero`, trailing dead bytes are dropped, immediates untouched. Concretely, in
+  `uart_hello` `__welcome_type` emits 24 bytes and `__welcome_subtypes` **16**
+  (two `.dword`s — each record's unread ptr/length/locality fields are gone)
+  while the program's stride loop is rewritten `addi t0, t0, 25` →
+  `addi t0, t0, 8`. Information only read at compile time does not exist in the
+  output. *Caveat:* compaction can move an access to a different alignment;
+  QEMU `virt` emulates misaligned access, stricter hardware may need an
+  alignment-preserving layout (future work).
+- Emits `.bss` — zero-initialized storage for every inferred variable,
+  compacted to its runtime-accessed bytes (a never-accessed variable emits just
+  its label); regions with an under-determined access keep the full
   `size(type)`.
 
 **Toolchain gotchas** (see [scripts/build-run.sh](scripts/build-run.sh)):
@@ -524,9 +556,9 @@ in QEMU). The **incremental** assertions differ by test:
   `{ value: (Global, U32), welcome: (Thread({0}), List([U8, U8])) }`, the exact
   `accessed` ranges (descriptor reads at offsets 0/8/16 of `__welcome_type` and
   0/25 of `__welcome_subtypes` — never a locality byte), and the **exact
-  generated program** including the dead-data-eliminated `.data` (24-byte
-  `__welcome_type`, 33-byte `__welcome_subtypes` with `.zero 17` padding, no
-  `.byte` anywhere).
+  generated program** including the compacted `.data` (24-byte
+  `__welcome_type`, **16-byte** `__welcome_subtypes`, no `.zero` padding, no
+  `.byte` anywhere) and the rewritten stride (`addi t0, t0, 8`).
 - `heap_regions` ([assets/heap_regions.s](assets/heap_regions.s)) — `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them — the latter would panic in
@@ -562,16 +594,25 @@ prefix):
 - `vague_access` — `record_access` with a *range* offset fills the maximal span
   (a 4-byte store at offset `0..=6` records `(0, 10)`), and a recorded range
   that only partially overlaps a descriptor field emits the **whole** field
-  (no sub-field elision) — the soundness contract of dead-data elimination.
+  (no sub-field elision) under the padded (`uncompactable`) layout — the
+  soundness contract of dead-data elimination, and the only remaining pin of
+  the `.zero`-padding fallback.
+- `mixed_pointer_raw` — one `sb` node stores through a `value` pointer on
+  iteration 1 and a raw `#@` address on iteration 2; the raw execution pins the
+  node, so despite `value` having a single accessed byte the emitted program
+  keeps `sb t3, 4(t1)` and full-size storage (compaction backs off rather than
+  silently re-point the raw store). 52 steps; boots.
 - `partial_variable_access` — accesses only bytes 0 and 2 of a `[u8 u8 u8 u8]`;
-  `accessed` records exactly `(0,1)`/`(2,3)` while `.bss` storage keeps the
-  full 4 bytes (unaccessed live storage is never trimmed). 14 steps; boots.
+  `accessed` records exactly `(0,1)`/`(2,3)` and `.bss` compacts to those two
+  bytes, the byte-2 access re-pointed to offset 1. 14 steps; boots.
 - `descriptor_read_union` — hart 0 reads a descriptor's type-number, hart 1 its
-  length; `accessed` is the union, so both fields are emitted with interior
-  `.zero 8` padding between them and an empty subtypes array. 43 steps; boots.
+  length; `accessed` is the union, so both fields are emitted (back to back —
+  the unread field between them is removed and the length read re-pointed
+  16 → 8) plus an empty subtypes array. 43 steps; boots.
 - `locality_runtime_read` — the inverse of the elision rule: `lb` of the
-  locality byte (offset 24) at runtime keeps the `.byte 1` in `.data` behind
-  `.zero 24` padding (bypasses `run_program`'s no-`.byte` assert). Boots.
+  locality byte (offset 24) at runtime keeps the `.byte 1` — as the *only*
+  emitted descriptor byte, the read re-pointed to offset 0 (bypasses
+  `run_program`'s no-`.byte` assert). Boots.
 - `offset_widened_inference` — a 4-byte store at offset 2 forces the type
   search through `u8…i32` to `u64` (the offset participates in inference);
   `accessed` is exactly `(2, 6)`. 29 steps; boots.
@@ -611,8 +652,9 @@ real programs far under this bound. `8` is the count of scalar types in
 | `Explorerer` | [verifier.rs:119](src/verifier.rs#L119) | The verification state machine. |
 | `VerifierNode` / `VerifierLeafNode` | [verifier.rs:82](src/verifier.rs#L82) / [99](src/verifier.rs#L99) | Execution-tree interior / frontier nodes. |
 | `ExplorePathResult` | [verifier.rs:1293](src/verifier.rs#L1293) | `Valid` / `Invalid` / `Continue(self)`. |
-| `ValidPathResult` | [verifier.rs:1335](src/verifier.rs#L1335) | `{ configuration, touched, jumped, accessed }` — feeds the optimizer + codegen. |
+| `ValidPathResult` | [verifier.rs:1335](src/verifier.rs#L1335) | `{ configuration, touched, jumped, accessed, transitions, uncompactable, pinned_nodes }` — feeds the optimizer + codegen. |
 | `AccessedRanges` | [verifier_types.rs](src/verifier_types.rs) | `BTreeMap<Label, BTreeSet<(u64, u64)>>` — runtime-accessed bytes per region; drives dead-data elimination. |
+| `AccessTransitions` | [verifier_types.rs](src/verifier_types.rs) | Per-node `(label, from, to)` pointer transitions; drives layout compaction's instruction rewriting. |
 | `InnerVerifierConfiguration` / `Section` / `Permissions` | [verifier.rs:40](src/verifier.rs#L40) / [46](src/verifier.rs#L46) / [53](src/verifier.rs#L53) | Per-system input: harts + memory map. |
 | `MemoryValue` | [verifier_types.rs:661](src/verifier_types.rs#L661) | Universal symbolic value (ranges / list / ptr / csr). |
 | `MemoryLabel` / `MemoryPtr` | [verifier_types.rs:1235](src/verifier_types.rs#L1235) / [1189](src/verifier_types.rs#L1189) | Label-tagged symbolic memory & pointers. |
@@ -677,14 +719,18 @@ real programs far under this bound. `8` is the count of scalar types in
   exploration rarely backtracked at the root, but it corrupted the heap once
   first-line encounters made root rebuilds frequent. Now fixed — keep node and
   leaf deallocations on their own layouts.)
-- **`accessed` is bookkeeping, never control flow.** The dead-data ranges
-  (`State.accessed` → `Explorerer.accessed`) must stay an over-approximating
-  union: record with the full symbolic offset span (`offset.start ..
-  offset.stop + len`), merge at every `find_state` call site, and never branch
+- **`accessed`/`transitions` are bookkeeping, never control flow.** The
+  dead-data ranges and pointer transitions (`State.accessed`/`.transitions` →
+  `Explorerer`) must stay over-approximating unions: record with the full
+  symbolic offset span, merge at every `find_state` call site, and never branch
   on the contents during exploration (that would couple step order to
-  bookkeeping and could break determinism). When adding a new load/store form,
-  add its `record_access` call — a missed record means codegen may elide a live
-  byte, which produces a *wrong program*, not a test failure.
+  bookkeeping and could break determinism). When adding a new load/store or
+  pointer-arithmetic form, add **both** its `record_access` and
+  `record_transition` calls — a missed access record means codegen may elide a
+  live byte, and a missed transition means compaction may move bytes without
+  re-pointing the instruction: both produce a *wrong program*, not a test
+  failure. (Recording a transition with a non-exact offset safely demotes the
+  region to the padded layout instead.)
 - **`From<MemoryValue> for Type` vs `From<&MemoryValue> for Type`** disagree for
   `Ptr` (`I64` by value, `U64` by reference) — be deliberate about which you call.
 - **`Locality` discriminants are reversed** vs declaration order
@@ -711,10 +757,9 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
   under-determined bases verify conservatively (or hit the indeterminate
   section comparison). Relational tracking is future work — today an
   allocator's `#@ t0 t1 rw` works when the bounds are path-exact.
-- Dead-data elimination only trims the **descriptor** regions; `.bss` variable
-  storage is still emitted at full `size(type)` even if only some bytes are
-  accessed. The mechanism (per-label `accessed` ranges) already covers variable
-  labels, so extending it is codegen-only work.
+- Layout compaction ignores **alignment**: removing bytes can move an access to
+  a misaligned address (QEMU emulates this; stricter RISC-V hardware traps). An
+  alignment-preserving mode would keep gaps `mod` the access width.
 - **Raw regions are assumed disjoint from generated storage.** Raw (`#@` /
   section) accesses are not recorded in `accessed`, and nothing verifies a
   declared region does not physically overlap the linker-placed `.data`/`.bss`

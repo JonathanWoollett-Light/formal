@@ -37,6 +37,9 @@ fn descriptor_reads_union_across_harts() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps.
@@ -74,9 +77,11 @@ fn descriptor_reads_union_across_harts() {
         remove_branches(&mut ast, &jumped);
     }
 
-    // Both read fields are emitted, the unread field between them is padding,
-    // and the never-read subtypes array contributes zero bytes.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    // Both read fields are emitted back to back — the unread subtypes-ptr field
+    // between them is removed and hart 1's length read re-pointed from offset 16
+    // to 8 — and the never-read subtypes array and `welcome` storage contribute
+    // zero bytes.
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ welcome _ [u8 u8]
@@ -89,7 +94,7 @@ _start:
 _other:
     la t1, __welcome_type  # #& t1, welcome
     li t5, 0
-    ld t2, 16(t1)
+    ld t2, 8(t1)
 _wait:
     wfi
     j __halt  # unreachable (program end)
@@ -100,19 +105,17 @@ __halt:
 .section .data
 __welcome_type:
     .dword 8                # List
-    .zero 8                # never accessed at runtime (padding)
     .dword 2                # length
 __welcome_subtypes:
 
 .section .bss
     .balign 8
 welcome:
-    .zero 2
 ";
     assert_eq!(normalize(asm), expected);
 
     // Boot it in QEMU (requires the toolchain + QEMU): QEMU's single hart takes
     // the hart-0 path, reads the emitted type-number, and halts — no output.
-    let serial = unsafe { run_program("descriptor_read_union", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("descriptor_read_union", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "descriptor_read_union produces no UART output");
 }

@@ -34,6 +34,9 @@ fn path_terminal_access_is_recorded() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -69,9 +72,10 @@ fn path_terminal_access_is_recorded() {
         remove_branches(&mut ast, &jumped);
     }
 
-    // The emitted descriptor keeps the 8 bytes the program loads at runtime
-    // (and only those — the ptr/length/locality fields are compile-time-only).
-    let asm = emit_executable(ast, &configuration, &accessed);
+    // The emitted descriptor keeps the 8 bytes the program loads at runtime and
+    // nothing else: the ptr/length/locality fields are compile-time-only and are
+    // removed by layout compaction, as is `value`'s never-accessed storage.
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ value global u32
@@ -89,12 +93,11 @@ __value_type:
 .section .bss
     .balign 8
 value:
-    .zero 4
 ";
     assert_eq!(normalize(asm), expected);
 
     // Boot it in QEMU (requires the toolchain + QEMU): the load reads the
     // emitted descriptor bytes and the program halts — no output, no fault.
-    let serial = unsafe { run_program("terminal_access", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("terminal_access", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "terminal_access produces no UART output");
 }

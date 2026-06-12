@@ -11,6 +11,7 @@ use std::iter::once;
 use std::iter::repeat;
 use std::iter::Peekable;
 use std::ops::Add;
+use std::ptr::NonNull;
 use thiserror::Error;
 use tracing::error;
 
@@ -1533,6 +1534,21 @@ pub struct SubSlice {
 /// so codegen need not emit its value — see `emit_executable`.
 pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
 
+/// For each instruction node, the pointer-arithmetic transitions it performs per
+/// region: `(label, from, to)` records that one execution of the node turned a
+/// pointer at byte `from` of `label` into one at byte `to` (`addi`), or
+/// dereferenced byte `to` through a pointer at byte `from` (loads/stores, where
+/// `to = from + instruction offset`).
+///
+/// This is what makes **layout compaction** possible: under a compacted layout
+/// `f` (unaccessed bytes removed rather than padded), codegen rewrites the
+/// node's immediate to `f(to) - f(from)` — and a single immediate must satisfy
+/// *every* recorded execution of that node, else the involved regions fall back
+/// to the padded layout. Keyed by node pointer; only ever queried per-node
+/// during deterministic AST-order walks, so the pointer ordering is never
+/// observable (same rule as `touched`/`jumped`).
+pub type AccessTransitions = BTreeMap<NonNull<AstNode>, BTreeSet<(Label, u64, u64)>>;
+
 #[derive(Debug, Clone)]
 pub struct State {
     // Each hart has its own registers.
@@ -1549,6 +1565,20 @@ pub struct State {
     /// (`__<label>_type` / `__<label>_subtypes`), so descriptor accesses are
     /// recorded in `accessed` under the name codegen can look up.
     pub descriptor_labels: BTreeMap<Label, Label>,
+    /// Per-node pointer-arithmetic transitions recorded while replaying the path
+    /// (see [`AccessTransitions`]); drives instruction rewriting for layout
+    /// compaction. Merged into `Explorerer::transitions` like `accessed`.
+    pub transitions: AccessTransitions,
+    /// Regions touched through an offset the verifier only knows as a *range*:
+    /// no single rewritten immediate can re-point such an access, so these
+    /// regions keep the padded (identity) layout.
+    pub uncompactable: BTreeSet<Label>,
+    /// Nodes that must keep their **original** immediate: they also executed
+    /// with a raw (`I64`) address, a scalar operand, or a range offset — an
+    /// execution invisible to `transitions` that a rewritten immediate would
+    /// silently corrupt. Compaction demotes any region that would require
+    /// rewriting a pinned node.
+    pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
 }
 impl State {
     /// Records that bytes `offset.start .. offset.stop + len` of the region behind
@@ -1556,6 +1586,29 @@ impl State {
     /// (not just its exact value) so an under-determined access never under-records.
     pub fn record_access(&mut self, base: &MemoryLabel, offset: &MemoryValueU64, len: u64) {
         record_access_into(&self.descriptor_labels, &mut self.accessed, base, offset, len);
+    }
+
+    /// Records that `node` turned a pointer at byte `from` of the region behind
+    /// `base` into one addressing byte `to` (see [`AccessTransitions`]). An
+    /// under-determined (`from`/`to` not exact) transition instead marks the
+    /// region uncompactable — its layout must stay padded.
+    pub fn record_transition(
+        &mut self,
+        node: NonNull<AstNode>,
+        base: &MemoryLabel,
+        from: &MemoryValueU64,
+        to: &MemoryValueU64,
+    ) {
+        record_transition_into(
+            &self.descriptor_labels,
+            &mut self.transitions,
+            &mut self.uncompactable,
+            &mut self.pinned_nodes,
+            node,
+            base,
+            from,
+            to,
+        );
     }
 }
 
@@ -1577,6 +1630,38 @@ pub fn record_access_into(
         .entry(key)
         .or_default()
         .insert((offset.start, offset.stop.saturating_add(len)));
+}
+
+/// The recording primitive behind [`State::record_transition`], split out so the
+/// verifier can also record the instruction currently being *checked* directly
+/// into `Explorerer::transitions` (replays exclude that instruction — the same
+/// path-terminal asymmetry as `record_access_into`).
+#[allow(clippy::too_many_arguments)]
+pub fn record_transition_into(
+    descriptor_labels: &BTreeMap<Label, Label>,
+    transitions: &mut AccessTransitions,
+    uncompactable: &mut BTreeSet<Label>,
+    pinned_nodes: &mut BTreeSet<NonNull<AstNode>>,
+    node: NonNull<AstNode>,
+    base: &MemoryLabel,
+    from: &MemoryValueU64,
+    to: &MemoryValueU64,
+) {
+    let label = <&Label>::from(base);
+    let key = descriptor_labels.get(label).unwrap_or(label).clone();
+    match (from.exact(), to.exact()) {
+        (Some(from), Some(to)) => {
+            transitions.entry(node).or_default().insert((key, from, to));
+        }
+        // No single rewritten immediate can re-point an access whose offset is
+        // only known as a range: the region keeps its padded layout AND the
+        // node keeps its original immediate (its other executions may target
+        // regions that do compact).
+        _ => {
+            uncompactable.insert(key);
+            pinned_nodes.insert(node);
+        }
+    }
 }
 impl State {
     pub fn new(system: &InnerVerifierConfiguration, configuration: &TypeConfiguration) -> Self {
@@ -1618,6 +1703,9 @@ impl State {
             configuration: configuration.clone(),
             accessed: Default::default(),
             descriptor_labels: Default::default(),
+            transitions: Default::default(),
+            uncompactable: Default::default(),
+            pinned_nodes: Default::default(),
         }
     }
 }

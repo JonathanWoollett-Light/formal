@@ -40,6 +40,9 @@ fn racy_increment() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path.
@@ -118,7 +121,7 @@ fn racy_increment() {
 
     // Pin the exact lowered program: optimized instructions, entry + halt loop,
     // `.bss` storage for `value`, and no `.data` (no compile-time-only data).
-    let asm = emit_executable(ast, &configuration, &accessed);
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ value global _
@@ -144,6 +147,6 @@ value:
     // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
     // the inferred `value` and halts in `wfi` — no output — so success is simply
     // "ran with no CPU fault".
-    let serial = unsafe { run_program("racy_increment", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("racy_increment", ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes) };
     assert_eq!(serial, "", "racy_increment produces no UART output");
 }

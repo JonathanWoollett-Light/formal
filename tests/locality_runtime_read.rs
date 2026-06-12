@@ -36,6 +36,9 @@ fn runtime_locality_read_keeps_the_byte() {
         touched,
         jumped,
         accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -59,27 +62,26 @@ fn runtime_locality_read_keeps_the_byte() {
         remove_branches(&mut ast, &jumped);
     }
 
-    // The locality byte is emitted; the 24 unread bytes before it are padding.
-    let asm = emit_executable(ast, &configuration, &accessed);
+    // The locality byte is the *only* emitted descriptor byte — compaction
+    // removes the 24 unread bytes before it and re-points the `lb` at offset 0.
+    let asm = emit_executable(ast, &configuration, &accessed, &transitions, &uncompactable, &pinned_nodes);
     let expected = ".global _start
 _start:
     #$ x global u8
     la t0, __x_type  # #& t0, x
     li t5, 0
-    lb t1, 24(t0)
+    lb t1, 0(t0)
 __halt:
     wfi
     j __halt
 
 .section .data
 __x_type:
-    .zero 24                # never accessed at runtime (padding)
     .byte 1
 
 .section .bss
     .balign 8
 x:
-    .zero 1
 ";
     assert_eq!(normalize(&asm), expected);
 

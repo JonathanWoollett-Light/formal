@@ -104,13 +104,21 @@ its whole *maximal* span — a store at `(0..4)..(6..10)` marks `0..10` — in b
 of the roles memory tracking plays: what an access *could touch* (so nothing
 that might be read at runtime is ever trimmed) and what a location *might hold*
 (an uncertainly-addressed store leaves every byte in its span unknown — "old
-value or new value" — rather than leaving a stale known value behind). Codegen
-then emits only the accessed bytes — a dead byte that a later access's offset
-depends on (the programs stride type-descriptor records by their full 25 bytes)
-survives as zero padding, and trailing dead bytes are dropped. Today this is
-implemented for the runtime type descriptors read via `lat`: none of the
-example programs read a descriptor's locality byte at runtime, so no locality
-data exists in their generated `.data`/`.bss`.
+value or new value" — rather than leaving a stale known value behind).
+
+Codegen then emits only the accessed bytes, **removing** the dead ones rather
+than padding them. Removing a byte shifts everything after it, so the verifier
+also records which instruction computed which offset
+(`ValidPathResult::transitions`), and codegen rewrites each such instruction's
+immediate by subtracting the removed bytes between its pointer and its target:
+a loop striding 25-byte descriptor records whose middle 17 bytes are never read
+is rewritten to stride 8, and an access behind a removed gap has the gap
+subtracted from its offset. One rewritten immediate must work for *every*
+execution of that instruction the verifier saw; if it cannot (or an offset is
+only known as a range), the region falls back to zero padding — sound, just
+less compact. This applies to the `lat` type descriptors and to `.bss` variable
+storage alike: none of the example programs read a descriptor's locality byte
+at runtime, so no locality data exists in their generated output at all.
 
 The longer-term picture is that a variable not given an exact address exists at
 a *symbolic* address. An access either provably stays within the variable (and
