@@ -1,0 +1,3 @@
+- In the future the verifier will need to be re-written for HPC, it is probably
+    best to do this from scratch (I like this philopshy) but should copy good
+    features from things like [https://legion.stanford.edu/]

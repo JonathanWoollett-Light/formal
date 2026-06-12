@@ -27,7 +27,10 @@
       "Bash(awk -F: '$1>=930 && $1<=1320')",
       "Bash(echo \"=== build errors: $\\(cargo build 2>&1)",
       "Bash(cargo test *)",
-      "Bash(awk '/^error:/{getline l; if \\(l ~ /verifier.rs/\\) print l}')"
+      "Bash(awk '/^error:/{getline l; if \\(l ~ /verifier.rs/\\) print l}')",
+      "Read(//c/Program Files/qemu/**)",
+      "Bash(qemu-system-riscv64 --version)",
+      "Bash(wsl -e bash -lc 'which riscv64-unknown-elf-as riscv64-linux-gnu-as as 2>/dev/null; qemu-system-riscv64 --version 2>/dev/null | head -1')"
     ]
   }
 }
