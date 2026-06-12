@@ -4,8 +4,9 @@
 #
 # The crate verifies + optimizes each example program and lowers it to a complete,
 # runnable RISC-V program (with the `.data`/`.bss` sections the verifier inferred)
-# under `target/gen/<name>.s` via the `codegen` test. This script turns those into
-# ELF executables with the RISC-V GNU toolchain and boots them under QEMU.
+# under `target/gen/<name>.s` — written when you run `cargo test` (the four/five/
+# six/three tests also boot these in QEMU themselves). This script rebuilds and
+# boots them by hand with the RISC-V GNU toolchain + QEMU.
 #
 # Prerequisites (run under WSL on Windows):
 #   - The RISC-V GNU toolchain (`riscv64-unknown-elf-as` / `-ld`). Point $RISCV at
@@ -15,7 +16,7 @@
 #   - `qemu-system-riscv64` on PATH (or set $QEMU).
 #
 # Usage (from the repo root):
-#   cargo test --test codegen      # regenerate target/gen/*.s
+#   cargo test                     # verify, lower, and write target/gen/*.s
 #   ./scripts/build-run.sh
 set -euo pipefail
 
@@ -27,7 +28,7 @@ LD="${LD:-$RISCV/riscv64-unknown-elf-ld}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 
 if [ ! -d "$GEN" ]; then
-    echo "No $GEN — generate the assembly first: cargo test --test codegen" >&2
+    echo "No $GEN — generate it first: cargo test" >&2
     exit 1
 fi
 

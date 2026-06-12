@@ -202,4 +202,15 @@ fn three() {
         #?\n\
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
+
+    // Lower to runnable RISC-V — instructions plus the generated `.data`/`.bss`
+    // for the inferred layout (`value: u32`, `welcome: [u8 u8]`, and `welcome`'s
+    // runtime type descriptor) — and boot it in QEMU (requires the toolchain +
+    // QEMU). Hart 0 writes the message ("H\0") to the UART, so success is "ran with
+    // no CPU fault and the UART received 'H'".
+    let serial = unsafe { run_program("three", ast, &configuration) };
+    assert!(
+        serial.contains('H'),
+        "three should write 'H' to the UART; got {serial:?}"
+    );
 }

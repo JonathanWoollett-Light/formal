@@ -162,6 +162,156 @@ pub fn normalize(s: impl Into<String>) -> String {
     s.into().replace("\r\n", "\n")
 }
 
+/// The result of building and booting a generated program in QEMU.
+pub struct QemuOutcome {
+    /// Bytes the program wrote to the UART (the QEMU `virt` 16550 at 0x10000000).
+    pub serial: String,
+    /// Number of guest CPU exceptions/faults QEMU logged — `0` means it ran cleanly.
+    pub faults: usize,
+    /// The head of QEMU's `guest_errors` log (for diagnostics on failure).
+    pub fault_log: String,
+}
+
+fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
+    s.split_once(begin)
+        .and_then(|(_, rest)| rest.split_once(end))
+        .map(|(mid, _)| mid)
+        .unwrap_or("")
+}
+
+/// Writes the generated program `asm` to `target/gen/<name>.s`, then — under WSL —
+/// assembles + links it with the RISC-V GNU toolchain and boots it in
+/// `qemu-system-riscv64 -machine virt`, returning the captured UART output and
+/// CPU-fault count.
+///
+/// **The toolchain and QEMU are required**: this panics (failing the test) if WSL,
+/// the RISC-V GNU toolchain, or `qemu-system-riscv64` are unavailable, or if
+/// assembling/linking the generated program fails. The tests are meant to verify
+/// the output actually boots, so a missing toolchain is a failure, not a skip.
+///
+/// The toolchain `bin/` directory defaults to `$HOME/riscv-toolchain/riscv/bin`
+/// (a stable [riscv-gnu-toolchain] release extracted into WSL) and can be
+/// overridden with the `RISCV_BIN` environment variable.
+///
+/// [riscv-gnu-toolchain]: https://github.com/riscv-collab/riscv-gnu-toolchain/releases
+pub fn run_in_qemu(name: &str, asm: &str) -> QemuOutcome {
+    use std::process::Command;
+
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let gen = format!("{dir}/target/gen");
+    std::fs::create_dir_all(&gen).expect("create target/gen");
+    std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
+
+    let bin = std::env::var("RISCV_BIN").unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
+    // `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp`. The
+    // program halts in a `wfi` loop, so `timeout` bounds the run; the UART output
+    // is captured to a file and the CPU faults to the `guest_errors` log.
+    let script = format!(
+        r#"set -e
+BIN="{bin}"
+AS="$BIN/riscv64-unknown-elf-as"
+LD="$BIN/riscv64-unknown-elf-ld"
+command -v qemu-system-riscv64 >/dev/null 2>&1 || {{ echo "===MISSING===qemu-system-riscv64 is not on the WSL PATH (install QEMU in WSL)"; exit 0; }}
+{{ [ -x "$AS" ] && [ -x "$LD" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (riscv64-unknown-elf-as/ld) was not found at $BIN (set RISCV_BIN, or extract a riscv-gnu-toolchain release there)"; exit 0; }}
+G="$(wslpath '{gen}')"
+"$AS" -o "$G/{name}.o" "$G/{name}.s"
+"$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
+rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
+timeout 3 qemu-system-riscv64 -machine virt -bios none -display none -monitor none \
+    -serial "file:$G/{name}.serial" -kernel "$G/{name}.elf" \
+    -d guest_errors -D "$G/{name}.qemu.log" >/dev/null 2>&1 || true
+echo "===SERIAL_BEGIN==="
+cat "$G/{name}.serial" 2>/dev/null
+echo ""
+echo "===SERIAL_END==="
+FAULTS="$(grep -c riscv_cpu_do_interrupt "$G/{name}.qemu.log" 2>/dev/null || true)"
+echo "===FAULTS===${{FAULTS:-0}}"
+echo "===LOG==="
+head -c 2000 "$G/{name}.qemu.log" 2>/dev/null || true
+echo ""
+echo "===END==="
+"#
+    );
+
+    let output = Command::new("wsl")
+        .arg("-e")
+        .arg("bash")
+        .arg("-lc")
+        .arg(&script)
+        .output()
+        .expect(
+            "failed to invoke WSL — WSL with the RISC-V GNU toolchain and \
+             qemu-system-riscv64 is required to build and boot the generated program",
+        );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if let Some((_, rest)) = stdout.split_once("===MISSING===") {
+        let reason = rest.lines().next().unwrap_or("").trim();
+        panic!(
+            "`{name}`: cannot build/boot the generated program — {reason}.\n\
+             QEMU (`qemu-system-riscv64`) and the RISC-V GNU toolchain are REQUIRED to \
+             run these tests; install them under WSL (point `RISCV_BIN` at the toolchain \
+             `bin/`)."
+        );
+    }
+    assert!(
+        stdout.contains("===END==="),
+        "assembling/linking the generated `{name}` program failed:\n\
+         --- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+
+    let serial = between(&stdout, "===SERIAL_BEGIN===", "===SERIAL_END===")
+        .trim_matches('\n')
+        .to_string();
+    let faults = between(&stdout, "===FAULTS===", "===LOG===")
+        .trim()
+        .parse()
+        .unwrap_or(usize::MAX);
+    let fault_log = between(&stdout, "===LOG===", "===END===").trim().to_string();
+
+    QemuOutcome {
+        serial,
+        faults,
+        fault_log,
+    }
+}
+
+/// Lowers the verified + optimized program to runnable RISC-V (`emit_executable`),
+/// checks it is self-contained (entry, halt loop, storage for every inferred
+/// variable), then builds and boots it in QEMU, asserting it ran **without any CPU
+/// fault**, and returns the captured UART output for the caller to assert on.
+///
+/// Requires the toolchain + QEMU (see [`run_in_qemu`]); panics if they are absent.
+///
+/// # Safety
+/// `ast` must be a live AST (typically the optimized output of the pipeline).
+pub unsafe fn run_program(
+    name: &str,
+    ast: Option<NonNull<AstNode>>,
+    configuration: &TypeConfiguration,
+) -> String {
+    let asm = emit_executable(ast, configuration);
+
+    // The emitted program must be self-contained.
+    assert!(asm.contains(".global _start"), "{name}: no entry point\n{asm}");
+    assert!(asm.contains("__halt:"), "{name}: no halt loop\n{asm}");
+    for label in configuration.0.keys() {
+        assert!(
+            asm.contains(&format!("{label}:")),
+            "{name}: no generated storage for `{label}`\n{asm}"
+        );
+    }
+
+    let outcome = run_in_qemu(name, &asm);
+    assert_eq!(
+        outcome.faults, 0,
+        "{name}: program faulted in QEMU ({} CPU exception(s)):\n{}",
+        outcome.faults, outcome.fault_log
+    );
+    outcome.serial
+}
+
 /// Extracts the sequence of distinct, consecutive `configuration` strings from a
 /// [`trace_valid_path`] trace — i.e. the type-inference timeline. A reset to
 /// `Config: []` marks a backtrack to re-try a variable's next candidate type.

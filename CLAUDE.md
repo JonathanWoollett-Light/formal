@@ -76,7 +76,7 @@ behind `#[cfg(debug_assertions)]`.
 | [src/optimizer.rs](src/optimizer.rs) | `remove_untouched` and `remove_branches` post-proof optimizations. |
 | [src/codegen.rs](src/codegen.rs) | `emit_executable` — lowers the verified+optimized AST + inferred layout into runnable RISC-V (generated `.data`/`.bss` + lowered directives). |
 | [src/draw.rs](src/draw.rs) | `draw_tree` — ASCII rendering of a `VerifierNode` tree (debug/diagnostic). |
-| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six.rs`, `error.rs`, `codegen.rs` (one binary each). |
+| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six.rs`, `error.rs` (one binary each). Each of `three/four/five/six` also lowers its output and **boots it in QEMU**. |
 | [scripts/build-run.sh](scripts/build-run.sh) | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU. |
 | [assets/](assets/) | Example programs `*.s`; `three_ast.s` is the golden parsed/compressed form of `three.s`. |
 | [language.md](language.md) | Design notes (placement, racy-ness, list/union exploration, complexity, toolchain). |
@@ -361,9 +361,16 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
   `gp` (it is 0), so the address is garbage and the first store faults.
 - QEMU `virt` with `-bios none -kernel` loads at `0x80000000`, so link with
   `-Ttext=0x80000000 -e _start`. The 25-byte (unaligned) descriptor records rely
-  on QEMU emulating misaligned `ld`. The `codegen` integration test writes the
-  programs to `target/gen/*.s`; the script assembles, links and boots them
-  (`three` prints `H`).
+  on QEMU emulating misaligned `ld`.
+
+The `four`/`five`/`six`/`three` integration tests do this **automatically**: each
+lowers its output to `target/gen/<name>.s` and, via the `run_program`/`run_in_qemu`
+helpers in `tests/common/mod.rs`, assembles + links + boots it under WSL,
+asserting **no CPU fault** (and that `three` writes `H` to the UART). The toolchain
+and QEMU are **required** — the tests **fail** (not skip) if WSL / the toolchain /
+QEMU are absent; point `RISCV_BIN` at the toolchain `bin/` (default
+`$HOME/riscv-toolchain/riscv/bin`). [scripts/build-run.sh](scripts/build-run.sh)
+does the same by hand from the generated files.
 
 ## 5. The language dialect (as actually parsed)
 
@@ -409,15 +416,22 @@ helpers:
   the first diverging step index.
 - `normalize(s)` — collapses `\r\n` → `\n` so the `\n`-based expected strings
   compare regardless of the platform line ending `print_ast` emits.
+- `verify_and_optimize(name, sections, harts)` — the whole pipeline (parse →
+  compress → verify → `remove_untouched`/`remove_branches`) → `(ast, configuration)`.
+- `run_program(name, ast, configuration)` / `run_in_qemu(name, asm)` — lower the
+  optimized program with `emit_executable`, then assemble + link + **boot it in
+  QEMU under WSL**, asserting no CPU fault and returning the captured UART output.
+  The toolchain + QEMU are **required**: these panic (fail the test) if WSL / the
+  toolchain / QEMU are missing (see §4.8).
 
 A trace line is `h<hart>/<harts> | <instruction> | <config> | q<n> t<n> j<n>`
 (the instruction being processed this step, and the resulting configuration /
 queue / touched / jumped state).
 
-Each test verifies via `trace_valid_path`, then asserts the inferred
-`configuration`, runs `remove_untouched` / `remove_branches`, and asserts
-`normalize(print_ast(ast))` after each. The **incremental** assertions differ by
-test:
+Each test verifies via `trace_valid_path`, asserts the inferred `configuration`,
+runs `remove_untouched` / `remove_branches`, asserts `normalize(print_ast(ast))`
+after each, and finally `run_program`s the result (boots it in QEMU). The
+**incremental** assertions differ by test:
 - `five` — racy store of `0` to `value` (type `_`, inferred). Asserts the **full
   93-step trace** (`assert_trace`): the type search `Gu8 → Gi8 → Gu16 → Gi16 →
   Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy

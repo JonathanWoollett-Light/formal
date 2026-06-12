@@ -167,4 +167,10 @@ fn five() {
         li t2, 0\n\
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
+
+    // Lower to runnable RISC-V and boot it in QEMU (requires the toolchain + QEMU).
+    // It does racy arithmetic on the inferred `value` and halts in `wfi` — no
+    // output — so success is simply "ran with no CPU fault".
+    let serial = unsafe { run_program("five", ast, &configuration) };
+    assert_eq!(serial, "", "five produces no UART output");
 }

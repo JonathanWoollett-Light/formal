@@ -76,14 +76,16 @@ See [assets/](assets/) for the full set of example programs
 
 ## Prerequisites
 
-- **Rust** (stable toolchain, edition 2021) and Cargo — https://rustup.rs.
-- *(Optional, for the eventual assembly/QEMU workflow)*:
-  - The **RISC-V GNU toolchain** (`as`, `ld`, `objcopy`). On Windows the
-    simplest route is WSL — see
-    https://github.com/riscv-collab/riscv-gnu-toolchain/releases and download
-    `riscv64-elf-ubuntu-24.04-gcc`.
-  - **QEMU** with `qemu-system-riscv64`. QEMU installs natively on Windows, so
-    WSL is not strictly required to *run* the emulator.
+- **Rust** (stable toolchain, edition 2021) and Cargo — https://rustup.rs — to
+  build the crate.
+- **Required to run the test suite** (the integration tests assemble + boot each
+  program's output, and *fail* if these are missing):
+  - The **RISC-V GNU toolchain** (`riscv64-unknown-elf-as`/`-ld`), run under WSL.
+    Download a stable release from
+    https://github.com/riscv-collab/riscv-gnu-toolchain/releases (e.g.
+    `riscv64-elf-ubuntu-24.04-gcc`) and extract it into WSL; point `RISCV_BIN` at
+    its `bin/` (default `$HOME/riscv-toolchain/riscv/bin`).
+  - **QEMU** with `qemu-system-riscv64` on the WSL PATH.
 
 ## Building
 
@@ -133,16 +135,27 @@ layout. This is the language's core idea: you write assembly with the data layou
 *left implicit*, and the verifier figures out the types/locality and writes the
 data section for you.
 
-Regenerate the assembly (written to `target/gen/<name>.s`) and build + boot it:
+The integration tests do this end to end: each of `four`/`five`/`six`/`three`
+verifies, optimizes, lowers to runnable RISC-V (written to `target/gen/<name>.s`),
+then **assembles, links, and boots it in QEMU**, asserting it runs without a CPU
+fault (`three` additionally asserts the UART receives `H`). The RISC-V GNU
+toolchain and `qemu-system-riscv64` (under WSL) are **required** — the tests
+*fail* if they are missing, not skip:
 
 ```sh
-cargo test --test codegen     # writes target/gen/{four,five,six,three}.s
-./scripts/build-run.sh        # assemble + link + run in QEMU (run under WSL)
+cargo test                    # verify + lower + boot each program in QEMU
+RISCV_BIN=/path/to/riscv/bin cargo test   # point at the toolchain explicitly
+```
+
+You can also rebuild + boot the generated files by hand:
+
+```sh
+./scripts/build-run.sh        # assemble + link + run target/gen/*.s in QEMU (WSL)
 ```
 
 [scripts/build-run.sh](scripts/build-run.sh) drives the RISC-V GNU toolchain and
 QEMU; point `$RISCV` at the toolchain `bin/` directory (or put the tools on
-PATH). The essential steps it runs per program are:
+PATH). The essential steps it (and the tests) run per program are:
 
 ```sh
 riscv64-unknown-elf-as -o program.o program.s

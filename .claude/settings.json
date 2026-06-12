@@ -38,7 +38,15 @@
       "Bash(echo \"build errors: $\\(cargo build 2>&1)",
       "Bash(sed -n '110,122p' tests/common/mod.rs)",
       "Bash(rm -f target/tmp/*.count target/tmp/*.configs target/tmp/*.parsed)",
-      "Bash(grep -vE 'warning|^\\\\s|Compiling|Finished|-->|^$|note:')"
+      "Bash(grep -vE 'warning|^\\\\s|Compiling|Finished|-->|^$|note:')",
+      "Bash(grep -o '`' comparison.md)",
+      "Bash(awk '/^## Bottom line/{f=1} f&&/^\\\\|/{n=gsub\\(/\\\\|/,\"|\"\\); print n\" pipes: \"substr\\($0,1,40\\)}' comparison.md)",
+      "Bash(sed -n '/Its type inference is .complete/,+3p' comparison.md)",
+      "Bash(grep -n 'codegen.rs\\\\|codegen` test\\\\|`codegen`\\\\|build-run.sh\\\\|Integration tests:' CLAUDE.md)",
+      "Bash(grep -n 'codegen\\\\|QEMU\\\\|`error`\\\\|`three` —\\\\|run_program\\\\|boot')",
+      "Bash(sed -i 's|cargo test --test codegen      # regenerate target/gen/\\\\*.s|cargo test                     # verify, lower, and write target/gen/*.s|; s|generate the assembly first: cargo test --test codegen|generate it first: cargo test|' scripts/build-run.sh)",
+      "Bash(grep -c 'test codegen\\\\|codegen` test' scripts/build-run.sh)",
+      "Bash(RISCV_BIN=/nonexistent/bin cargo test --test six)"
     ]
   }
 }

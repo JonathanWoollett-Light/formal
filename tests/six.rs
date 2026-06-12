@@ -136,4 +136,12 @@ fn six() {
         li t2, 0\n\
     ";
     assert_eq!(normalize(print_ast(ast)), expected);
+
+    // Lower to runnable RISC-V and boot it in QEMU (requires the toolchain + QEMU).
+    // The verifier does not (yet) detect that all of `six` is dead code, so we boot
+    // whatever it emits; the program halts in `wfi` with no output, so success is
+    // simply "ran with no CPU fault". (Were the verifier complete, this would lower
+    // to an empty program that falls straight into the halt loop.)
+    let serial = unsafe { run_program("six", ast, &configuration) };
+    assert_eq!(serial, "", "six produces no UART output");
 }
