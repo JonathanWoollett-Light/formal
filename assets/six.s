@@ -1,5 +1,3 @@
-.global _start
-_start:
     # Do racy arithmetic on a variables without a defined type.
     # Use global locality so the load/stores are racy.
     # It would otherwise default to thread local.

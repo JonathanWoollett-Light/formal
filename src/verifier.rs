@@ -159,8 +159,9 @@ pub struct Explorerer {
     /// Program configurations that have been found to be invalid.
     #[cfg(debug_assertions)]
     pub excluded: BTreeSet<TypeConfiguration>,
-    /// Pointer to the 2nd element in the AST (e.g. it skips the 1st which is `.global _start`).
-    pub second_ptr: NonNull<AstNode>,
+    /// Pointer to the first AST node — verification (and execution) starts from the
+    /// first line of the program (there is no explicit `.global`/`_start:` entry).
+    pub start_ptr: NonNull<AstNode>,
     /// The different systems configurations to verify.
     pub systems: Vec<*mut VerifierConfiguration>,
     // The current program configuration (e.g. variable types).
@@ -205,33 +206,10 @@ impl Explorerer {
             ));
         }
 
-        // Intial misc stuff
-        let first = ast.internal("new: the AST is empty")?.as_ref();
-        let second_ptr = first
-            .next
-            .internal("new: the AST has no node after `.global`")?;
-        let second = second_ptr.as_ref();
-        match &first.as_ref().this {
-            Instruction::Global(Global { tag: start_tag }) => match &second.as_ref().this {
-                Instruction::Label(LabelInstruction { tag }) => {
-                    if start_tag != tag {
-                        return Err(CompilerError::Internal(format!(
-                            "new: start label `{tag}` does not match `.global {start_tag}`"
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(CompilerError::Internal(
-                        "new: the second node must be the start label".to_string(),
-                    ))
-                }
-            },
-            _ => {
-                return Err(CompilerError::Internal(
-                    "new: the first node must be the `.global` start label definition".to_string(),
-                ))
-            }
-        }
+        // Execution starts from the first line of the program (like Python — there
+        // is no explicit `.global`/`_start:` entry; the runnable entry point is added
+        // later, by codegen, to the program the verifier emits).
+        let start_ptr = ast.internal("new: the AST is empty")?;
 
         // To avoid retracing paths we record type combinations that have been found to be invalid.
         #[cfg(debug_assertions)]
@@ -267,51 +245,12 @@ impl Explorerer {
         let jumped = BTreeSet::new();
 
         // For each system configuration depending on the number of harts we set up an initial node
-        // for each hart, the ordering of these initial nodes doesn't matter (as they are all `_start`).
+        // for each hart, the ordering of these initial nodes doesn't matter (as they all point at
+        // the first instruction).
         let queue = systems
             .iter()
             .copied()
-            .map(|root| -> Result<*mut VerifierLeafNode, CompilerError> {
-                let harts = (*root).configuration.harts;
-                // All harts are intiailized as `_start`.
-                let mut prev = PrevVerifierNode::Root(root);
-                let mut hart_fronts = BTreeMap::new();
-                for hart in (0..=harts).rev() {
-                    let nonull = Box::into_raw(Box::new(VerifierNode {
-                        prev,
-                        root,
-                        hart,
-                        node: second_ptr,
-                        next: InnerNextVerifierNode::Leaf(null_mut()),
-                    }));
-
-                    // `root`/`branch` came from `Box::into_raw`, so are never null.
-                    match &prev {
-                        PrevVerifierNode::Root(root) => {
-                            debug_assert!((**root).next.is_null());
-                            (**root).next = nonull;
-                        }
-                        PrevVerifierNode::Branch(branch) => {
-                            debug_assert!(matches!((**branch).next, InnerNextVerifierNode::Leaf(leaf) if leaf.is_null()));
-                            (**branch).next = InnerNextVerifierNode::Branch(vec![nonull]);
-                        }
-                    }
-                    prev = PrevVerifierNode::Branch(nonull);
-                    hart_fronts.insert(hart, nonull);
-                }
-                let PrevVerifierNode::Branch(prev) = prev else {
-                    return Err(CompilerError::Internal(
-                        "new: no `_start` node was created for a system".to_string(),
-                    ));
-                };
-                let leaf = Box::into_raw(Box::new(VerifierLeafNode {
-                    prev,
-                    variable_encounters: BTreeMap::new(),
-                    hart_fronts,
-                }));
-
-                Ok(leaf)
-            })
+            .map(|root| build_initial_chain(root, start_ptr, BTreeMap::new()))
             .collect::<Result<VecDeque<_>, CompilerError>>()?;
 
         // We return the explorer and it's contained state.
@@ -320,7 +259,7 @@ impl Explorerer {
             hash: sha2::Sha256::new(),
             last_out: None,
             systems,
-            second_ptr,
+            start_ptr,
             excluded,
             configuration,
             touched,
@@ -333,7 +272,7 @@ impl Explorerer {
         #[cfg(not(debug_assertions))]
         let x = Self {
             systems,
-            second_ptr,
+            start_ptr,
             configuration,
             touched,
             queue,
@@ -634,64 +573,69 @@ impl Explorerer {
         self.queue = unchanged;
 
         // Iterate across leafs we need to deallocate.
+        let start_ptr = self.start_ptr;
         for (encounter_ptr, variable_encounters) in encounters {
-            // We can `unwrap` here since every path will have `_start` nodes for every heart that
-            // will prevent an encounter ever following a root.
             let encounter_ref = encounter_ptr
                 .as_ref()
                 .internal("invalid_path: null encounter node")?;
-            // Store previous node.
-            let current = *encounter_ref
-                .prev
-                .branch()
-                .internal("invalid_path: encounter follows root")?;
             let root = encounter_ref.root;
+            // If the variable was first encountered at the very first instruction, its
+            // encounter node is part of the initial chain (all harts still at the
+            // start), so there is no preceding per-hart structure to walk back through —
+            // the replacement is a fresh initial chain. Otherwise re-attach a leaf after
+            // the encounter's predecessor node.
+            let current_opt = if encounter_ref.node == start_ptr {
+                None
+            } else {
+                encounter_ref.prev.branch().copied()
+            };
             let harts = root.as_ref().internal("invalid_path: null root")?.configuration.harts;
 
-            // De-allocate the 1st encounter for this variable.
+            // De-allocate the 1st encounter for this variable and its subtree.
             let mut stack = vec![encounter_ptr];
             while let Some(next) = stack.pop() {
                 match &next.as_ref().internal("invalid_path: null node")?.next {
-                    InnerNextVerifierNode::Branch(branches) => {
-                        stack.extend(branches);
-                    }
+                    InnerNextVerifierNode::Branch(branches) => stack.extend(branches),
                     InnerNextVerifierNode::Leaf(leaf) => {
-                        dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>());
+                        dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>())
                     }
                 }
-                dealloc(next.cast(), Layout::new::<VerifierLeafNode>());
+                // `next` is a `VerifierNode` (not a leaf) — free it with its own layout.
+                dealloc(next.cast(), Layout::new::<VerifierNode>());
             }
 
-            // Get new hart fronts
-            let mut prev = current;
-            let mut hart_fronts = BTreeMap::new();
-            loop {
-                let branch_ptr = prev;
-                let branch_ref = branch_ptr.as_ref().internal("invalid_path: null node")?;
-                hart_fronts.entry(branch_ref.hart).or_insert(branch_ptr);
-                if hart_fronts.len() == harts as usize {
-                    break;
+            let new_leaf = match current_opt {
+                // Re-attach a fresh leaf after the encounter's predecessor node.
+                Some(current) => {
+                    // Recompute the hart fronts by walking back until every hart is seen.
+                    let mut prev = current;
+                    let mut hart_fronts = BTreeMap::new();
+                    loop {
+                        let branch_ref = prev.as_ref().internal("invalid_path: null node")?;
+                        hart_fronts.entry(branch_ref.hart).or_insert(prev);
+                        if hart_fronts.len() == harts as usize {
+                            break;
+                        }
+                        prev = *branch_ref
+                            .prev
+                            .branch()
+                            .internal("invalid_path: node follows root before all harts seen")?;
+                    }
+                    let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
+                        prev: current,
+                        variable_encounters,
+                        hart_fronts,
+                    }));
+                    current
+                        .as_mut()
+                        .internal("invalid_path: null current node")?
+                        .next = InnerNextVerifierNode::Leaf(new_leaf);
+                    new_leaf
                 }
-                // We can `unwrap` here since it should be guranteed that every path has a node for
-                // every hart which will ensure `hart_fronts.len() == harts as usize` before hitting
-                // the root.
-                prev = *branch_ref
-                    .prev
-                    .branch()
-                    .internal("invalid_path: node follows root before all harts seen")?;
-            }
-
-            // Set new leaf node.
-            // The `encounter.prev` will never be a root since the `_start` nodes follow the root.
-            let new_leaf = Box::into_raw(Box::new(VerifierLeafNode {
-                prev: current,
-                variable_encounters,
-                hart_fronts,
-            }));
-            current
-                .as_mut()
-                .internal("invalid_path: null current node")?
-                .next = InnerNextVerifierNode::Leaf(new_leaf);
+                // The encounter was the very first instruction — rebuild the initial
+                // chain from the root.
+                None => build_initial_chain(root, start_ptr, variable_encounters)?,
+            };
             self.queue.push_back(new_leaf);
         }
         Ok(())
@@ -1608,6 +1552,54 @@ pub enum InvalidExplanation {
     Lb,
     #[error("todo")]
     Fail,
+}
+
+/// Builds the initial verifier chain for one system: a `start_ptr` node per hart
+/// (`root -> hart_{h-1} -> … -> hart_0 -> leaf`), returning the leaf with the given
+/// `variable_encounters`. Used to seed exploration in [`Explorerer::new`] and to
+/// recreate it in `invalid_path` when a backtracked variable was first encountered
+/// at the very first instruction — so its encounter node directly followed the root
+/// and there is no predecessor node to re-attach to. Overwrites `root.next`.
+unsafe fn build_initial_chain(
+    root: *mut VerifierConfiguration,
+    start_ptr: NonNull<AstNode>,
+    variable_encounters: BTreeMap<Label, *mut VerifierNode>,
+) -> Result<*mut VerifierLeafNode, CompilerError> {
+    let harts = root
+        .as_ref()
+        .internal("build_initial_chain: null root")?
+        .configuration
+        .harts;
+    let mut prev = PrevVerifierNode::Root(root);
+    let mut hart_fronts = BTreeMap::new();
+    for hart in (0..harts).rev() {
+        let nonull = Box::into_raw(Box::new(VerifierNode {
+            prev,
+            root,
+            hart,
+            node: start_ptr,
+            next: InnerNextVerifierNode::Leaf(null_mut()),
+        }));
+        // `root`/`branch` came from `Box::into_raw`, so are never null.
+        match &prev {
+            PrevVerifierNode::Root(root) => (**root).next = nonull,
+            PrevVerifierNode::Branch(branch) => {
+                (**branch).next = InnerNextVerifierNode::Branch(vec![nonull])
+            }
+        }
+        prev = PrevVerifierNode::Branch(nonull);
+        hart_fronts.insert(hart, nonull);
+    }
+    let PrevVerifierNode::Branch(prev) = prev else {
+        return Err(CompilerError::Internal(
+            "build_initial_chain: no node was created (0 harts)".to_string(),
+        ));
+    };
+    Ok(Box::into_raw(Box::new(VerifierLeafNode {
+        prev,
+        variable_encounters,
+        hart_fronts,
+    })))
 }
 
 // Get the number of harts of this sub-tree and record the path.

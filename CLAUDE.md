@@ -74,8 +74,10 @@ behind `#[cfg(debug_assertions)]`.
 | [src/verifier.rs](src/verifier.rs) | The `Explorerer` state machine — the heart of verification. |
 | [src/verifier_types.rs](src/verifier_types.rs) | Symbolic value & memory model, `State`, `TypeConfiguration`, runtime type reflection. No `unsafe`. |
 | [src/optimizer.rs](src/optimizer.rs) | `remove_untouched` and `remove_branches` post-proof optimizations. |
+| [src/codegen.rs](src/codegen.rs) | `emit_executable` — lowers the verified+optimized AST + inferred layout into runnable RISC-V (generated `.data`/`.bss` + lowered directives). |
 | [src/draw.rs](src/draw.rs) | `draw_tree` — ASCII rendering of a `VerifierNode` tree (debug/diagnostic). |
-| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six.rs` (one binary each). |
+| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six.rs`, `error.rs`, `codegen.rs` (one binary each). |
+| [scripts/build-run.sh](scripts/build-run.sh) | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU. |
 | [assets/](assets/) | Example programs `*.s`; `three_ast.s` is the golden parsed/compressed form of `three.s`. |
 | [language.md](language.md) | Design notes (placement, racy-ness, list/union exploration, complexity, toolchain). |
 
@@ -84,7 +86,7 @@ behind `#[cfg(debug_assertions)]`.
 The pipeline, as orchestrated in [src/main.rs](src/main.rs) and the tests, is:
 
 ```
-new_ast (parse)  →  compress  →  Explorerer / next_step (verify)  →  remove_untouched / remove_branches (optimize)  →  print_ast (serialize)
+new_ast (parse)  →  compress  →  Explorerer / next_step (verify)  →  remove_untouched / remove_branches (optimize)  →  print_ast (serialize) / emit_executable (codegen)
 ```
 
 ### 4.1 Parsing — `new_ast` ([src/ast.rs:65](src/ast.rs#L65))
@@ -149,11 +151,20 @@ path from the root (`find_state`, [src/verifier.rs:1435](src/verifier.rs#L1435))
 This is the acknowledged O(n)-per-step inefficiency (TODO at
 [src/verifier.rs:98](src/verifier.rs#L98)).
 
-**Initialization** (`Explorerer::new`, [src/verifier.rs:164](src/verifier.rs#L164)):
-asserts every system has `harts > 0`, asserts node[0] is `.global <tag>` and
-node[1] is the matching `<tag>:` label, then seeds each system with an initial
-chain of one `_start` `VerifierNode` per hart, terminated by a
-`VerifierLeafNode` pushed onto `queue`. `configuration` starts empty.
+**Initialization** (`Explorerer::new`): requires every system has `harts > 0`,
+then seeds each system (via `build_initial_chain`) with an initial chain of one
+`VerifierNode` per hart — all pointing at `start_ptr`, **the first AST node** —
+terminated by a `VerifierLeafNode` pushed onto `queue`. There is no `.global`/
+`_start:` entry: verification (and execution) starts from the first line, like
+Python (the runnable entry is added later by codegen). `configuration` starts
+empty.
+
+> Because the first instruction can itself be a variable's first encounter (its
+> encounter node is then in the initial chain, with the root as predecessor),
+> `invalid_path` detects `encounter.node == start_ptr` and, instead of walking
+> back to a predecessor that doesn't exist, rebuilds the whole initial chain with
+> `build_initial_chain`. (With an explicit `_start:` label this never happened —
+> the label buffered the root from any encounter.)
 
 **One step** (`next_step`, [src/verifier.rs:291](src/verifier.rs#L291)):
 1. If `queue` is empty → **`Valid`**: every reachable path under the current
@@ -322,6 +333,38 @@ their directive forms. On Windows it emits `\r\n`. This canonical form is what
 the `three` test compares against [assets/three_ast.s](assets/three_ast.s) — note
 e.g. `(t0)` is normalized to `0(t0)`.
 
+### 4.8 Code generation — `emit_executable` ([src/codegen.rs](src/codegen.rs))
+
+Lowers the verified + optimized AST plus the inferred `TypeConfiguration` into a
+**complete, runnable RISC-V program** (a `String`). This is the language's core
+idea realized: the input leaves the memory layout implicit, the verifier infers
+it, and codegen materializes it. It does **not** go through `print_ast` (which
+emits the dialect verbatim for the test assertions); it walks the AST itself:
+
+- Emits the `.global _start` / `_start:` entry the linker needs (the input has no
+  explicit entry — execution begins at the first instruction, where verification
+  began).
+- Lowers the directives: `#$` (define) → kept as a comment; `#& reg, label`
+  (lat) → `la reg, __<label>_type` (load the generated descriptor's address);
+  `#!` (fail) → `ebreak`; `#?` (unreachable / end) → jump to a `__halt: wfi; j
+  __halt` loop appended after `.text`.
+- Emits `.data` — the runtime **type descriptors** read via `#&`, as 25-byte
+  records `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]` (the
+  same layout §4.5 builds in `set_type`; deliberately unpadded so the programs
+  can stride them by 25).
+- Emits `.bss` — zero-initialized storage for every inferred variable, sized by
+  `size(type)`.
+
+**Toolchain gotchas** (see [scripts/build-run.sh](scripts/build-run.sh)):
+- Link with **`--no-relax`**. Otherwise the linker relaxes `la value` into
+  `addi t0, gp, …` (global-pointer-relative), but a bare-metal program has no
+  `gp` (it is 0), so the address is garbage and the first store faults.
+- QEMU `virt` with `-bios none -kernel` loads at `0x80000000`, so link with
+  `-Ttext=0x80000000 -e _start`. The 25-byte (unaligned) descriptor records rely
+  on QEMU emulating misaligned `ld`. The `codegen` integration test writes the
+  programs to `target/gen/*.s`; the script assembles, links and boots them
+  (`three` prints `H`).
+
 ## 5. The language dialect (as actually parsed)
 
 - **Directives**: `#!` `Fail`, `#?` `Unreachable`, `#$ <label> <locality> <type>`
@@ -481,11 +524,13 @@ real programs far under this bound. `8` is the count of scalar types in
   the expected values from the new behaviour), never by loosening the assertions.
   These are stable contracts only because exploration is deterministic — keep it
   that way (see the determinism note in [§4.3](#43-verification--explorerer)).
-- **Suspected layout-mismatch bug**: in `invalid_path`
-  ([src/verifier.rs](src/verifier.rs), the `dealloc(next.cast(), …)` after the
-  encounter-subtree DFS) a `*mut VerifierNode` is freed using
-  `Layout::new::<VerifierLeafNode>()`. If the two structs differ in size/align
-  this is UB. Worth auditing before relying on long-running exploration.
+- **Manual `dealloc` layouts must match the type.** `invalid_path`'s
+  encounter-subtree DFS frees `VerifierNode`s and `VerifierLeafNode`s with
+  *different* sizes — each must use its own `Layout`. (A prior bug freed a
+  `*mut VerifierNode` with `Layout::new::<VerifierLeafNode>()`; benign while
+  exploration rarely backtracked at the root, but it corrupted the heap once
+  first-line encounters made root rebuilds frequent. Now fixed — keep node and
+  leaf deallocations on their own layouts.)
 - **`From<MemoryValue> for Type` vs `From<&MemoryValue> for Type`** disagree for
   `Ptr` (`I64` by value, `U64` by reference) — be deliberate about which you call.
 - **`Locality` discriminants are reversed** vs declaration order

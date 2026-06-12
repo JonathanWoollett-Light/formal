@@ -4,6 +4,7 @@
 //! helpers appear unused from any single test binary's perspective.
 #![allow(dead_code)]
 
+use formal::verifier_types::TypeConfiguration;
 use formal::*;
 use std::ptr::NonNull;
 
@@ -120,6 +121,38 @@ pub fn expect_valid(
             );
         }
     }
+}
+
+/// Runs the full pipeline for `name` — parse, compress, verify (over the given
+/// hart counts), then `remove_untouched` + `remove_branches` — and returns the
+/// optimized AST plus the inferred `TypeConfiguration`. Panics if verification
+/// does not reach a valid path.
+///
+/// # Safety
+/// As [`Explorerer::new`] / the optimizer: operates on the raw-pointer AST.
+pub unsafe fn verify_and_optimize(
+    name: &str,
+    sections: Vec<Section>,
+    harts: &[u8],
+) -> (Option<NonNull<AstNode>>, TypeConfiguration) {
+    let mut ast = setup_test(name);
+    let systems = harts
+        .iter()
+        .map(|&harts| InnerVerifierConfiguration {
+            sections: sections.clone(),
+            harts,
+        })
+        .collect::<Vec<_>>();
+    let explorerer = Explorerer::new(ast, &systems).expect("failed to construct the verifier");
+    let (trace, result) = trace_valid_path(explorerer);
+    let ValidPathResult {
+        configuration,
+        touched,
+        jumped,
+    } = expect_valid(&trace, result);
+    remove_untouched(&mut ast, &touched);
+    remove_branches(&mut ast, &jumped);
+    (ast, configuration)
 }
 
 /// Normalizes line endings so the expected strings (written with `\n`) compare

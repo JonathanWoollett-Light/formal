@@ -18,10 +18,16 @@ optimize the program.
 > - The verifier is driven through the integration tests in [tests/](tests/),
 >   which pass (`cargo test`): they parse, verify and optimize the example
 >   programs and assert the inferred types and optimized output.
+> - The pipeline can now **emit runnable RISC-V**: from the inferred memory
+>   layout it generates the `.data`/`.bss` sections and lowers the verification
+>   directives, producing a program the RISC-V GNU toolchain assembles + links
+>   into an ELF that boots under `qemu-system-riscv64` (see
+>   [Running in QEMU](#running-in-qemu)). The `codegen` test writes these to
+>   `target/gen/*.s`.
 > - The binary entry point ([src/main.rs](src/main.rs)) parses, compresses and
->   prints the AST, then hits `todo!()`; it does not yet run the verifier or emit
->   linkable assembly, so `cargo run` panics — see [Running](#running) below.
-> - There is no wiring yet to assemble the output and boot it in QEMU.
+>   prints the AST, then hits `todo!()`; it does not yet run the verifier or
+>   codegen, so `cargo run` panics — that wiring lives in the tests for now (see
+>   [Running](#running) below).
 >
 > For the design intent and a precise description of how compilation works, see
 > [CLAUDE.md](CLAUDE.md) and [language.md](language.md).
@@ -34,7 +40,7 @@ carry type/verification information. The currently-parsed directives are:
 | Directive | Keyword | Meaning |
 |-----------|---------|---------|
 | `#!` | `fail` | An assertion that must be proven **unreachable**. |
-| `#?` | `unreachable` | A point (typically program end) that must be unreachable. |
+| `#?` | `unreachable` | A point (typically program end) that during compilation if the verifier reaches, it halts, assuming the hart which reached this point turns off (prcatically this may be the hart entering a closed loop at the end of the program). |
 | `#$ <label> <locality> <type>` | `define` | Declare a variable's locality and/or type. `_` = "infer". |
 | `#& <reg>, <label>` | `lat` | Load the address of a label's **runtime type descriptor**. |
 | `#@` | `section` | Reserved (designed, not yet implemented). |
@@ -45,11 +51,11 @@ carry type/verification information. The currently-parsed directives are:
 are infinitely many), so they must be given with `#$`.
 
 A minimal example ([assets/four.s](assets/four.s)) — racy increment of a global,
-then an assertion that its value stays below 4:
+then an assertion that its value stays below 4. Execution starts from the first
+line (like Python — there is no explicit `.global`/`_start:` entry; the runnable
+entry point is added by codegen to the program the crate emits):
 
 ```asm
-.global _start
-_start:
     #$ value global _      # `value` is global; let the verifier infer the type
     la t0, value
     li t1, 0
@@ -117,24 +123,41 @@ the exact per-step trace (instruction, hart, configuration and
 queue/touched/jumped counts at every step), and `four`/`three` assert the exact
 step count and type-inference timeline.
 
-## Assembling and running RISC-V in QEMU
+<a id="running-in-qemu"></a>
+## Running in QEMU
 
-Once `formal` emits linkable assembly (not yet wired up), the intended workflow,
-using the RISC-V GNU toolchain (run under WSL on Windows), is:
+The crate lowers each verified + optimized program into a complete, runnable
+RISC-V program — the optimized instructions (with the verification directives
+lowered) plus the `.data`/`.bss` sections generated from the **inferred** memory
+layout. This is the language's core idea: you write assembly with the data layout
+*left implicit*, and the verifier figures out the types/locality and writes the
+data section for you.
+
+Regenerate the assembly (written to `target/gen/<name>.s`) and build + boot it:
 
 ```sh
-# Assemble source to an ELF object file
-riscv64-unknown-elf/bin/as -o program.o program.s
-# Link the object into an ELF executable
-riscv64-unknown-elf/bin/ld -o program.elf program.o
-# (Optional) convert the ELF to a raw binary
-riscv64-unknown-elf/bin/objcopy -O binary program.elf program.bin
-# Boot it under the emulator (you will usually load the ELF)
-qemu-system-riscv64 ... program.elf
+cargo test --test codegen     # writes target/gen/{four,five,six,three}.s
+./scripts/build-run.sh        # assemble + link + run in QEMU (run under WSL)
 ```
 
-The example programs target the QEMU `virt` machine's UART at physical address
-`0x10000000`.
+[scripts/build-run.sh](scripts/build-run.sh) drives the RISC-V GNU toolchain and
+QEMU; point `$RISCV` at the toolchain `bin/` directory (or put the tools on
+PATH). The essential steps it runs per program are:
+
+```sh
+riscv64-unknown-elf-as -o program.o program.s
+# `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp` for the
+# global-pointer relaxation the linker would otherwise apply.
+riscv64-unknown-elf-ld -Ttext=0x80000000 --no-relax -e _start -o program.elf program.o
+qemu-system-riscv64 -machine virt -bios none -nographic -kernel program.elf
+```
+
+`three` writes `H` to the QEMU `virt` machine's UART (physical address
+`0x10000000`) and then halts; `four`/`five`/`six` do racy arithmetic on the
+inferred memory and halt in `wfi` (no output). The toolchain is not bundled —
+download a prebuilt release (use a stable, not nightly, tag) from
+https://github.com/riscv-collab/riscv-gnu-toolchain/releases (e.g.
+`riscv64-elf-ubuntu-24.04-gcc.tar.xz`) and run the binaries via WSL.
 
 ## Further reading
 

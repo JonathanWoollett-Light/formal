@@ -42,13 +42,13 @@ fn four() {
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path.
-    assert_eq!(trace.len(), 614);
+    assert_eq!(trace.len(), 603);
 
-    // Exact type-inference timeline.
+    // Exact type-inference timeline. The first step is now the `#$` define (the
+    // program has no `_start:` entry), so the search opens directly on `Gu8`.
     assert_eq!(
         config_timeline(&trace),
         [
-            "Config: []",
             "Config: [value:Gu8,]",
             "Config: []",
             "Config: [value:Gi8,]",
@@ -76,7 +76,6 @@ fn four() {
         remove_untouched(&mut ast, &touched);
     }
     let expected = "\
-        _start:\n\
         #$ value global _\n\
         la t0, value\n\
         li t1, 0\n\
@@ -95,7 +94,6 @@ fn four() {
         remove_branches(&mut ast, &jumped);
     }
     let expected = "\
-        _start:\n\
         #$ value global _\n\
         la t0, value\n\
         li t1, 0\n\

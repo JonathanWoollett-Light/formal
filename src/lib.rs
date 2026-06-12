@@ -14,6 +14,9 @@ pub mod draw;
 pub mod optimizer;
 pub use optimizer::*;
 
+pub mod codegen;
+pub use codegen::*;
+
 /// Re-allocates the AST nodes contiguously to be more cache efficient.
 pub fn compress(root: &mut Option<NonNull<AstNode>>) {
     unsafe {

@@ -52,14 +52,15 @@ fn three() {
     // Exact number of state-machine steps to reach the valid path. (Its full
     // per-step trace is ~20k lines; the per-step interleaving/inference shape is
     // pinned in detail by `four`/`five`/`six`.)
-    assert_eq!(trace.len(), 20475);
+    assert_eq!(trace.len(), 20464);
 
     // Exact type-inference timeline: `value` is searched `Gu8` → … → `Gu32`,
     // then `welcome`'s explicitly-declared `[u8 u8]` list type joins the config.
+    // The first step is now the `#$` define (no `_start:` entry), so the search
+    // opens directly on `Gu8`.
     assert_eq!(
         config_timeline(&trace),
         [
-            "Config: []",
             "Config: [value:Gu8,]",
             "Config: []",
             "Config: [value:Gi8,]",
@@ -97,7 +98,6 @@ fn three() {
         remove_untouched(&mut ast, &touched);
     }
     let expected = "\
-        _start:\n\
         #$ value global _\n\
         la t0, value\n\
         li t1, 0\n\
@@ -155,7 +155,6 @@ fn three() {
         remove_branches(&mut ast, &jumped);
     }
     let expected = "\
-        _start:\n\
         #$ value global _\n\
         la t0, value\n\
         li t1, 0\n\

@@ -1,5 +1,3 @@
-.global _start
-_start:
     #$ value global _
     la t0, value
 

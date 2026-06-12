@@ -1,5 +1,3 @@
-.global _start
-_start:
     # Do some racy arithmetic
     la t0, value
     lw t1, 0(t0)

@@ -30,7 +30,15 @@
       "Bash(awk '/^error:/{getline l; if \\(l ~ /verifier.rs/\\) print l}')",
       "Read(//c/Program Files/qemu/**)",
       "Bash(qemu-system-riscv64 --version)",
-      "Bash(wsl -e bash -lc 'which riscv64-unknown-elf-as riscv64-linux-gnu-as as 2>/dev/null; qemu-system-riscv64 --version 2>/dev/null | head -1')"
+      "Bash(wsl -e bash -lc 'which riscv64-unknown-elf-as riscv64-linux-gnu-as as 2>/dev/null; qemu-system-riscv64 --version 2>/dev/null | head -1')",
+      "Bash(wsl -e bash -lc ' *)",
+      "Bash(wsl -e bash -lc 'ls ~/riscv-toolchain/riscv/bin/riscv64-unknown-elf-{as,ld,objcopy} 2>/dev/null && ~/riscv-toolchain/riscv/bin/riscv64-unknown-elf-as --version | head -1')",
+      "Bash(echo \"build exit: $\\(cargo build 2>&1)",
+      "Bash(wsl -e bash -lc 'cd /mnt/c/Users/jonat/Documents/formal && bash scripts/build-run.sh 2>&1')",
+      "Bash(echo \"build errors: $\\(cargo build 2>&1)",
+      "Bash(sed -n '110,122p' tests/common/mod.rs)",
+      "Bash(rm -f target/tmp/*.count target/tmp/*.configs target/tmp/*.parsed)",
+      "Bash(grep -vE 'warning|^\\\\s|Compiling|Finished|-->|^$|note:')"
     ]
   }
 }

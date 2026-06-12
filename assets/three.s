@@ -1,5 +1,3 @@
-.global _start
-_start:
     # Do racy arithmetic with an undefined variable.
     # Use global locality so the load/stores are racy.
     #$ value global _
