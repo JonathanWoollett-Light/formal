@@ -1,23 +1,30 @@
-use crate::verifier_types::*;
-use crate::*;
-use indicatif::{ProgressBar, ProgressStyle};
+mod common;
+
+use common::*;
+use formal::verifier_types::*;
+use formal::*;
 use std::collections::BTreeSet;
 
+/// Full UART "Hello, World!" with runtime list-type checking (`#&`/lat). The
+/// verifier infers `value: (Global, U32)` and `welcome: (Thread({0}),
+/// List([U8, U8]))`, then dead-code/dead-branch elimination reduces the program
+/// to its straight-line writer loop.
 #[test]
 fn three() {
-    let (guard, mut ast, _asserter) = super::setup_test("three");
+    let mut ast = setup_test("three");
 
-    let expected = include_str!("../../assets/three_ast.s");
-    let actual = print_ast(ast);
-    assert_eq!(actual, expected);
+    // The parsed + compressed AST round-trips to its canonical form.
+    let expected = normalize(include_str!("../assets/three_ast.s"));
+    assert_eq!(normalize(print_ast(ast)), expected);
 
+    // The QEMU `virt` UART MMIO region.
     let sections = vec![Section {
         address: MemoryValueI64::from(0x10000000),
         size: MemoryValueI64::from(1),
         permissions: Permissions::Write,
         volatile: true,
     }];
-    let mut explorerer = unsafe {
+    let explorerer = unsafe {
         Explorerer::new(
             ast,
             &[
@@ -31,32 +38,42 @@ fn three() {
                 },
             ],
         )
+        .expect("failed to construct the verifier")
     };
 
-    let style = ProgressStyle::with_template(
-        "{bar:40} {pos:>7}/{len:>7} [{elapsed_precise} / {eta_precise}] {msg}",
-    )
-    .unwrap();
-
-    // Find valid path.
+    // Verify, capturing the per-step trace.
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
     let ValidPathResult {
         configuration,
         touched,
         jumped,
-    } = unsafe {
-        const N: u64 = 20475;
-        let bar = ProgressBar::new(N)
-            .with_style(style.clone())
-            .with_message("verifiying program");
-        for i in 0..N {
-            explorerer = explorerer.next_step().continued().expect(&format!("{i}"));
-            bar.inc(1);
-        }
-        bar.finish();
-        explorerer.next_step().valid().unwrap()
-    };
+    } = expect_valid(&trace, result);
 
-    // Optimize based on path.
+    // Exact number of state-machine steps to reach the valid path. (Its full
+    // per-step trace is ~20k lines; the per-step interleaving/inference shape is
+    // pinned in detail by `four`/`five`/`six`.)
+    assert_eq!(trace.len(), 20475);
+
+    // Exact type-inference timeline: `value` is searched `Gu8` → … → `Gu32`,
+    // then `welcome`'s explicitly-declared `[u8 u8]` list type joins the config.
+    assert_eq!(
+        config_timeline(&trace),
+        [
+            "Config: []",
+            "Config: [value:Gu8,]",
+            "Config: []",
+            "Config: [value:Gi8,]",
+            "Config: []",
+            "Config: [value:Gu16,]",
+            "Config: []",
+            "Config: [value:Gi16,]",
+            "Config: []",
+            "Config: [value:Gu32,]",
+            "Config: [value:Gu32,welcome:T[u8 u8],]",
+        ]
+    );
+
+    // The inferred type configuration.
     assert_eq!(
         configuration,
         TypeConfiguration(
@@ -75,7 +92,7 @@ fn three() {
         )
     );
 
-    // Remove untouched nodes.
+    // Remove untouched nodes (dead code).
     unsafe {
         remove_untouched(&mut ast, &touched);
     }
@@ -131,8 +148,7 @@ fn three() {
         wfi\n\
         #?\n\
     ";
-    let actual = print_ast(ast);
-    assert_eq!(actual, expected);
+    assert_eq!(normalize(print_ast(ast)), expected);
 
     // Remove branches that never jump.
     unsafe {
@@ -186,8 +202,5 @@ fn three() {
         wfi\n\
         #?\n\
     ";
-    let actual = print_ast(ast);
-    assert_eq!(actual, expected);
-
-    drop(guard);
+    assert_eq!(normalize(print_ast(ast)), expected);
 }
