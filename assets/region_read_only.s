@@ -1,0 +1,6 @@
+    # A store into a region declared read-only is rejected as `Invalid`.
+    #@ 0x80100000 0x80100004 r
+    li t0, 0x80100000
+    li t1, 42
+    sw t1, 0(t0)
+    #?

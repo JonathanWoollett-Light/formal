@@ -10,11 +10,11 @@ use std::collections::BTreeSet;
 /// List([U8, U8]))`, then dead-code/dead-branch elimination reduces the program
 /// to its straight-line writer loop.
 #[test]
-fn three() {
-    let mut ast = setup_test("three");
+fn uart_hello() {
+    let mut ast = setup_test("uart_hello");
 
     // The parsed + compressed AST round-trips to its canonical form.
-    let expected = normalize(include_str!("../assets/three_ast.s"));
+    let expected = normalize(include_str!("../assets/uart_hello_ast.s"));
     assert_eq!(normalize(print_ast(ast)), expected);
 
     // The QEMU `virt` UART MMIO region.
@@ -52,7 +52,7 @@ fn three() {
 
     // Exact number of state-machine steps to reach the valid path. (Its full
     // per-step trace is ~20k lines; the per-step interleaving/inference shape is
-    // pinned in detail by `four`/`five`/`six`.)
+    // pinned in detail by `racy_increment`/`racy_store_inferred`/`racy_store_annotated`.)
     assert_eq!(trace.len(), 20464);
 
     // Exact type-inference timeline: `value` is searched `Gu8` → … → `Gu32`,
@@ -312,9 +312,9 @@ welcome:
     // Boot it in QEMU (requires the toolchain + QEMU). Hart 0 writes the message
     // ("H\0") to the UART, so success is "ran with no CPU fault and the UART
     // received 'H'".
-    let serial = unsafe { run_program("three", ast, &configuration, &accessed) };
+    let serial = unsafe { run_program("uart_hello", ast, &configuration, &accessed) };
     assert!(
         serial.contains('H'),
-        "three should write 'H' to the UART; got {serial:?}"
+        "uart_hello should write 'H' to the UART; got {serial:?}"
     );
 }

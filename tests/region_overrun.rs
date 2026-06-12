@@ -11,7 +11,7 @@ use formal::*;
 /// than the access — this program would wrongly verify.)
 #[test]
 fn store_overrunning_its_region_is_invalid() {
-    let ast = setup_test("nine");
+    let ast = setup_test("region_overrun");
 
     let explorerer = unsafe {
         Explorerer::new(

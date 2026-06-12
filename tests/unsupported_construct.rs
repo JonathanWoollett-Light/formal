@@ -10,7 +10,7 @@ use formal::*;
 /// than a dead test binary.
 #[test]
 fn unsupported_construct_returns_error_with_trace() {
-    let ast = setup_test("error");
+    let ast = setup_test("unsupported_construct");
 
     let explorerer = unsafe {
         Explorerer::new(

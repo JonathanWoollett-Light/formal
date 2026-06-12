@@ -33,13 +33,13 @@ values, exploring an explicit execution tree.
   always produces the same step sequence, configuration and output (see the
   determinism note at the end of [§4.3](#43-verification--explorerer)).
 - **`cargo test` passes.** The verifier is exercised through the integration
-  tests in [tests/](tests/) (`three`/`four`/`five`/`six`/`seven`), which parse,
+  tests in [tests/](tests/) (`uart_hello`/`racy_increment`/`racy_store_inferred`/`racy_store_annotated`/`heap_regions`), which parse,
   verify and optimize the example programs and assert the inferred
   `TypeConfiguration`, the **runtime-accessed byte ranges** (`accessed` — drives
   dead-data elimination in codegen, [§4.8](#48-code-generation--emit_executable-srccodegenrs)),
   the optimized output, the exact emitted program, and the **exact incremental**
-  behaviour of the state machine (a full per-step trace for `five`/`six`; the
-  exact step count and type-inference timeline for `four`/`three`). `eight` pins
+  behaviour of the state machine (a full per-step trace for `racy_store_inferred`/`racy_store_annotated`; the
+  exact step count and type-inference timeline for `racy_increment`/`uart_hello`). `raw_access_undeclared` pins
   the every-access-must-verify rule (a raw access no `#@` region describes →
   `Invalid`). See [§6](#6-integration-tests-tests).
 - **`cargo run` panics.** [src/main.rs](src/main.rs) hard-codes its input to
@@ -58,8 +58,8 @@ tests) → optimize → print*. Treat the binary `main` as a scratch harness.
 cargo build                 # compile lib + binary
 cargo run                   # scratch harness (currently panics — see above)
 cargo test                  # run the integration tests over the example programs
-cargo test --test three     # run a single integration-test binary
-cargo test --test three -- --nocapture   # with stdout passthrough
+cargo test --test uart_hello     # run a single integration-test binary
+cargo test --test uart_hello -- --nocapture   # with stdout passthrough
 cargo fix --lib -p formal   # clears the two unused-import warnings
 ```
 
@@ -79,9 +79,9 @@ behind `#[cfg(debug_assertions)]`.
 | [src/optimizer.rs](src/optimizer.rs) | `remove_untouched` and `remove_branches` post-proof optimizations. |
 | [src/codegen.rs](src/codegen.rs) | `emit_executable` — lowers the verified+optimized AST + inferred layout into runnable RISC-V (generated `.data`/`.bss` + lowered directives). |
 | [src/draw.rs](src/draw.rs) | `draw_tree` — ASCII rendering of a `VerifierNode` tree (debug/diagnostic). |
-| [tests/](tests/) | Integration tests: `common/mod.rs` helpers + `three/four/five/six/seven/ten.rs`, `eight.rs`, `nine.rs`, `error.rs` (one binary each). Each of `three/four/five/six/seven/ten` also lowers its output and **boots it in QEMU**. |
+| [tests/](tests/) | Integration tests (one binary per file, named after the behaviour they pin — see [§6](#6-integration-tests-tests)): `common/mod.rs` helpers + the pipeline tests (`uart_hello`, `racy_*`, `heap_regions`, …) and behaviour-focused tests (`vague_access`, `region_*`, `conflicting_defines`, …). The Valid-outcome tests also lower their output and **boot it in QEMU**. |
 | [scripts/build-run.sh](scripts/build-run.sh) | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU. |
-| [assets/](assets/) | Example programs `*.s`; `three_ast.s` is the golden parsed/compressed form of `three.s`. |
+| [assets/](assets/) | Example programs `*.s`; `uart_hello_ast.s` is the golden parsed/compressed form of `uart_hello.s`. |
 | [language.md](language.md) | Design notes (placement, racy-ness, list/union exploration, complexity, toolchain). |
 
 ## 4. The compilation & verification pipeline (precise description)
@@ -210,7 +210,10 @@ searched by chronological backtracking:
   I64]`), restricted to any explicitly-annotated locality/type, picks the first
   candidate, inserts it into `configuration`, and pushes the label onto the
   `encountered` stack. If the label is already configured it instead *checks*
-  the annotation matches (this catches conflicting `#$` defines).
+  the annotation matches (this catches conflicting `#$` defines) — and, for a
+  thread-local, records the encountering hart in the `Thread` hart set (each
+  recorded hart gets its own `.bss` copy seeded by `State::new`; without this a
+  second hart's access would find no memory behind its `MemoryLabel`).
 - On any invalid path, `outer_invalid_path`
   ([src/verifier.rs:477](src/verifier.rs#L477)) pops the **most recently**
   encountered variable, calls `invalid_path` to deallocate the subtree from that
@@ -262,7 +265,7 @@ so `check_store`/`check_load` additionally record the *current* instruction's
 own bytes directly into `Explorerer.accessed` (via `record_access_into`) when
 its check passes — without this, an access whose successors all halt (`#?`) is
 never interior to any replay and its bytes would be wrongly elided (pinned by
-the `ten` test). Raw (`I64`-addressed) accesses are *not* recorded: they target
+the `terminal_access` test). Raw (`I64`-addressed) accesses are *not* recorded: they target
 heap/MMIO, not generated storage (soundness of trimming therefore **assumes raw
 regions never alias generated storage** — see §10). This bookkeeping must never
 feed back into exploration control flow.
@@ -358,7 +361,7 @@ nested) `Type` into in-memory records. Each type becomes a **4-field list**:
 
 The *type-number* is `FlatType as u64` ([src/ast.rs:276](src/ast.rs#L276)):
 `U8=0, I8=1, U16=2, I16=3, U32=4, I32=5, U64=6, I64=7, List=8, Union=9`. This is
-the `li t2, 8 # list type number` you see in [assets/three.s](assets/three.s).
+the `li t2, 8 # list type number` you see in [assets/uart_hello.s](assets/uart_hello.s).
 Nested lists are emitted as separate labelled records linked by `Ptr`; leaf
 (non-list) types carry a null pointer and length 0. The schema of each record is
 `memory_value_type_of()` = `List([U64, U64, U64, U8])`.
@@ -382,7 +385,7 @@ Walks the list and `Display`-formats each `Instruction`. The `Display` impls in
 ABI names, immediates honour their stored radix (decimal or `0x`), loads print
 `to, offset(from)`, stores print `from, offset(to)`, `#$`/`#&`/`#!`/`#?` print
 their directive forms. On Windows it emits `\r\n`. This canonical form is what
-the `three` test compares against [assets/three_ast.s](assets/three_ast.s) — note
+the `uart_hello` test compares against [assets/uart_hello_ast.s](assets/uart_hello_ast.s) — note
 e.g. `(t0)` is normalized to `0(t0)`.
 
 ### 4.8 Code generation — `emit_executable` ([src/codegen.rs](src/codegen.rs))
@@ -411,7 +414,7 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
   (`Coverage` / `emit_descriptor_record`): a live field is emitted with its
   value; a dead field below the region's last live byte becomes `.zero` padding
   (the 25-byte stride is hardcoded in the programs, so interior offsets must
-  hold); trailing dead bytes are **omitted**. Concretely, in `three` every
+  hold); trailing dead bytes are **omitted**. Concretely, in `uart_hello` every
   record's locality byte (offset 24) vanishes — `__welcome_type` is 24 bytes
   and `__welcome_subtypes` is 33 (`.dword`, `.zero 17` padding, `.dword`) —
   because the programs only consult locality through the verifier at compile
@@ -427,11 +430,11 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
   `-Ttext=0x80000000 -e _start`. The 25-byte (unaligned) descriptor records rely
   on QEMU emulating misaligned `ld`.
 
-The `four`/`five`/`six`/`three`/`seven` integration tests do this
+The `racy_increment`/`racy_store_inferred`/`racy_store_annotated`/`uart_hello`/`heap_regions` integration tests do this
 **automatically**: each pins the exact emitted program, lowers it to
 `target/gen/<name>.s` and, via the `run_program`/`run_in_qemu` helpers in
 `tests/common/mod.rs`, assembles + links + boots it under WSL, asserting **no
-CPU fault** (and that `three` writes `H` to the UART). The toolchain and QEMU
+CPU fault** (and that `uart_hello` writes `H` to the UART). The toolchain and QEMU
 are **required** — the tests **fail** (not skip) if WSL / the toolchain / QEMU
 are absent; point `RISCV_BIN` at the toolchain `bin/` (default
 `$HOME/riscv-toolchain/riscv/bin`). [scripts/build-run.sh](scripts/build-run.sh)
@@ -504,18 +507,18 @@ and the `accessed` byte ranges, runs `remove_untouched` / `remove_branches`,
 asserts `normalize(print_ast(ast))` after each, asserts the **exact emitted
 program** (`emit_executable`), and finally `run_program`s the result (boots it
 in QEMU). The **incremental** assertions differ by test:
-- `five` — racy store of `0` to `value` (type `_`, inferred). Asserts the **full
+- `racy_store_inferred` — racy store of `0` to `value` (type `_`, inferred). Asserts the **full
   82-step trace** (`assert_trace`): the type search `Gu8 → Gi8 → Gu16 → Gi16 →
   Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   interleavings fanning the queue out to 6 and draining to 0.
-- `six` — same program as `five` but with explicit `#$ value global u32`, so the
+- `racy_store_annotated` — same program as `racy_store_inferred` but with explicit `#$ value global u32`, so the
   annotation is *checked*, never searched. Asserts the **full 54-step trace**.
-- `four` — racy increment of `value` (type `_`); its interleaving fan-out is 603
-  steps (too many to assert line-for-line, so `five`/`six` pin the per-step
+- `racy_increment` — racy increment of `value` (type `_`); its interleaving fan-out is 603
+  steps (too many to assert line-for-line, so `racy_store_inferred`/`racy_store_annotated` pin the per-step
   shape). Asserts the exact step **count**, the `config_timeline`
   (`Gu8 → … → Gu32`) and the optimized output.
-- `three` — full UART "Hello, World!" with list-type checking; 20464 steps.
-  Asserts the AST round-trips to [assets/three_ast.s](assets/three_ast.s), the
+- `uart_hello` — full UART "Hello, World!" with list-type checking; 20464 steps.
+  Asserts the AST round-trips to [assets/uart_hello_ast.s](assets/uart_hello_ast.s), the
   exact step **count**, the `config_timeline` (value search, then `welcome`'s
   `[u8 u8]` joins),
   `{ value: (Global, U32), welcome: (Thread({0}), List([U8, U8])) }`, the exact
@@ -524,7 +527,7 @@ in QEMU). The **incremental** assertions differ by test:
   generated program** including the dead-data-eliminated `.data` (24-byte
   `__welcome_type`, 33-byte `__welcome_subtypes` with `.zero 17` padding, no
   `.byte` anywhere).
-- `seven` ([assets/seven.s](assets/seven.s)) — `#@` region declarations
+- `heap_regions` ([assets/heap_regions.s](assets/heap_regions.s)) — `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them — the latter would panic in
   `MemoryMap::set` if it re-checked with the value's width instead of the
@@ -532,26 +535,53 @@ in QEMU). The **incremental** assertions differ by test:
   racy, so its interleavings against the accesses are explored). Asserts the
   round-trip (including both `#@` forms), empty `configuration`/`accessed`, the
   exact emitted program (no `.data`/`.bss` at all), and boots it in QEMU.
-- `eight` ([assets/eight.s](assets/eight.s)) — loads from a raw address no `#@`
+- `raw_access_undeclared` ([assets/raw_access_undeclared.s](assets/raw_access_undeclared.s)) — loads from a raw address no `#@`
   region or section describes. Asserts the exact 2-step prefix trace and that
   the terminal outcome is **`Invalid`**: every memory access must be verifiable
   as safe.
-- `nine` ([assets/nine.s](assets/nine.s)) — a 4-byte store into a 2-byte `#@`
+- `region_overrun` ([assets/region_overrun.s](assets/region_overrun.s)) — a 4-byte store into a 2-byte `#@`
   region. Asserts the exact 3-step prefix trace and the **`Invalid`** outcome,
   pinning the *direction* of the section bounds check (`required_size <=
   s.size`; with the operands swapped this would wrongly verify).
-- `ten` ([assets/ten.s](assets/ten.s)) — a descriptor load whose only successor
+- `terminal_access` ([assets/terminal_access.s](assets/terminal_access.s)) — a descriptor load whose only successor
   is `#?` (a path-terminal access, never interior to any replay). Asserts the
   full 4-step trace, that `accessed` still contains the load's bytes (the
   check-time record in `check_load` — without it dead-data elimination would
   emit a descriptor the program reads but that has no bytes), the exact emitted
   program (`__value_type` keeps its 8 live bytes, drops the other 17), and
   boots it in QEMU.
-- `error` ([assets/error.s](assets/error.s)) — a `.global` directive, which the
+- `unsupported_construct` ([assets/unsupported_construct.s](assets/unsupported_construct.s)) — a `.global` directive, which the
   verifier does not model (programs have no explicit entry). Asserts that
   `trace_valid_path` returns `Err(CompilerError::Unsupported(_))` (rather than
   panicking) **and** that the trace's last line is the failing step — the
   error-path analogue of the success tests.
+
+Behaviour-focused tests (each pins one specific rule or error case; the Valid
+ones also pin the exact emitted program, and all Invalid ones pin their trace
+prefix):
+- `vague_access` — `record_access` with a *range* offset fills the maximal span
+  (a 4-byte store at offset `0..=6` records `(0, 10)`), and a recorded range
+  that only partially overlaps a descriptor field emits the **whole** field
+  (no sub-field elision) — the soundness contract of dead-data elimination.
+- `partial_variable_access` — accesses only bytes 0 and 2 of a `[u8 u8 u8 u8]`;
+  `accessed` records exactly `(0,1)`/`(2,3)` while `.bss` storage keeps the
+  full 4 bytes (unaccessed live storage is never trimmed). 14 steps; boots.
+- `descriptor_read_union` — hart 0 reads a descriptor's type-number, hart 1 its
+  length; `accessed` is the union, so both fields are emitted with interior
+  `.zero 8` padding between them and an empty subtypes array. 43 steps; boots.
+- `locality_runtime_read` — the inverse of the elision rule: `lb` of the
+  locality byte (offset 24) at runtime keeps the `.byte 1` in `.data` behind
+  `.zero 24` padding (bypasses `run_program`'s no-`.byte` assert). Boots.
+- `offset_widened_inference` — a 4-byte store at offset 2 forces the type
+  search through `u8…i32` to `u64` (the offset participates in inference);
+  `accessed` is exactly `(2, 6)`. 29 steps; boots.
+- `conflicting_defines` / `annotated_store_overflow` — contradictory `#$`
+  defines / a `sw` into an annotated `u8`: annotated searches have one
+  candidate, so backtracking exhausts → **`Invalid`**.
+- `region_permissions` (assets `region_read_only.s`/`region_write_only.s`) —
+  store into an `r` region / load from a `w` region → **`Invalid`**.
+- `region_declared_late` — the store precedes its `#@` in program order;
+  regions take effect when executed (declare-before-use) → **`Invalid`**.
 
 Because exploration is deterministic (see the determinism note in
 [§4.3](#43-verification--explorerer)), the step counts and full traces are stable
@@ -631,9 +661,9 @@ real programs far under this bound. `8` is the count of scalar types in
   tests normalize via `normalize()` so the `\n`-based expected strings are
   portable. The canonical printed form makes the zero offset explicit
   (`sw t1, (t0)` parses and prints back as `sw t1, 0(t0)`), so expected strings
-  must use `0(t0)`, matching [assets/three_ast.s](assets/three_ast.s).
-- **Tests pin exact incremental behaviour — brittle by design.** `five`/`six`
-  assert the full per-step trace; `four`/`three` assert the exact step count and
+  must use `0(t0)`, matching [assets/uart_hello_ast.s](assets/uart_hello_ast.s).
+- **Tests pin exact incremental behaviour — brittle by design.** `racy_store_inferred`/`racy_store_annotated`
+  assert the full per-step trace; `racy_increment`/`uart_hello` assert the exact step count and
   type-inference timeline; all assert the exact `TypeConfiguration` and optimized
   `print_ast` output. A behavioural change to parsing, inference, interleaving or
   optimization will (correctly) break them; re-baseline deliberately (re-derive

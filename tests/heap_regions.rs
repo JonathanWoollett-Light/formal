@@ -14,8 +14,8 @@ use formal::*;
 /// interleaving against the (racy) raw accesses is explored. Codegen lowers
 /// `#@` to a comment: the output program needs no `.data`/`.bss` at all.
 #[test]
-fn seven() {
-    let mut ast = setup_test("seven");
+fn heap_regions() {
+    let mut ast = setup_test("heap_regions");
 
     // The parsed + compressed AST round-trips, including both `#@` forms.
     let source = "\
@@ -113,6 +113,6 @@ __halt:
     // Boot it in QEMU (requires the toolchain + QEMU). The stores land in RAM
     // (0x80100004/0x80200000 on the `virt` machine), the loads read them back,
     // and the program halts — no output, no CPU fault.
-    let serial = unsafe { run_program("seven", ast, &configuration, &accessed) };
-    assert_eq!(serial, "", "seven produces no UART output");
+    let serial = unsafe { run_program("heap_regions", ast, &configuration, &accessed) };
+    assert_eq!(serial, "", "heap_regions produces no UART output");
 }

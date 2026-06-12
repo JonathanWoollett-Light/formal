@@ -4,7 +4,7 @@ use common::*;
 use formal::verifier_types::*;
 use formal::*;
 
-/// Same program as `five`, but `value` is given an explicit type
+/// Same program as `racy_store_inferred`, but `value` is given an explicit type
 /// (`#$ value global u32`) rather than inferred, so the verifier checks the
 /// annotation instead of searching for a type. Verification starts from the
 /// first line (no `_start:` entry). The full per-step trace pins the exact state
@@ -12,8 +12,8 @@ use formal::*;
 /// racy `sw`/`lw` interleavings fanning the queue out to 6 leaves and draining it
 /// to 0, and `jumped` staying 0 (the `bne` never jumps because `value == 0`).
 #[test]
-fn six() {
-    let mut ast = setup_test("six");
+fn racy_store_annotated() {
+    let mut ast = setup_test("racy_store_annotated");
 
     let explorerer = unsafe {
         Explorerer::new(
@@ -169,10 +169,10 @@ value:
     assert_eq!(normalize(asm), expected);
 
     // Boot it in QEMU (requires the toolchain + QEMU). The verifier does not (yet)
-    // detect that all of `six` is dead code, so we boot whatever it emits; the
+    // detect that all of `racy_store_annotated` is dead code, so we boot whatever it emits; the
     // program halts in `wfi` with no output, so success is simply "ran with no CPU
     // fault". (Were the verifier complete, this would lower to an empty program
     // that falls straight into the halt loop.)
-    let serial = unsafe { run_program("six", ast, &configuration, &accessed) };
-    assert_eq!(serial, "", "six produces no UART output");
+    let serial = unsafe { run_program("racy_store_annotated", ast, &configuration, &accessed) };
+    assert_eq!(serial, "", "racy_store_annotated produces no UART output");
 }

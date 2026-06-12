@@ -4,9 +4,10 @@
 #
 # The crate verifies + optimizes each example program and lowers it to a complete,
 # runnable RISC-V program (with the `.data`/`.bss` sections the verifier inferred)
-# under `target/gen/<name>.s` — written when you run `cargo test` (the four/five/
-# six/three tests also boot these in QEMU themselves). This script rebuilds and
-# boots them by hand with the RISC-V GNU toolchain + QEMU.
+# under `target/gen/<name>.s` — written when you run `cargo test` (the
+# racy_increment/racy_store_*/uart_hello tests also boot these in QEMU
+# themselves). This script rebuilds and boots them by hand with the RISC-V GNU
+# toolchain + QEMU.
 #
 # Prerequisites (run under WSL on Windows):
 #   - The RISC-V GNU toolchain (`riscv64-unknown-elf-as` / `-ld`). Point $RISCV at
@@ -32,7 +33,7 @@ if [ ! -d "$GEN" ]; then
     exit 1
 fi
 
-for s in "$GEN"/four.s "$GEN"/five.s "$GEN"/six.s "$GEN"/three.s; do
+for s in "$GEN"/racy_increment.s "$GEN"/racy_store_inferred.s "$GEN"/racy_store_annotated.s "$GEN"/uart_hello.s; do
     name="$(basename "$s" .s)"
     "$AS" -o "$GEN/$name.o" "$s"
     # QEMU `virt` loads `-kernel` at 0x80000000 (RAM) with `-bios none`.
@@ -44,9 +45,9 @@ for s in "$GEN"/four.s "$GEN"/five.s "$GEN"/six.s "$GEN"/three.s; do
 done
 
 echo
-echo "Running three.elf (writes 'H' to the UART at 0x10000000, then halts):"
+echo "Running uart_hello.elf (writes 'H' to the UART at 0x10000000, then halts):"
 echo "----"
-timeout 3 "$QEMU" -machine virt -bios none -nographic -kernel "$GEN/three.elf" || true
+timeout 3 "$QEMU" -machine virt -bios none -nographic -kernel "$GEN/uart_hello.elf" || true
 echo
 echo "----"
-echo "(four/five/six do racy arithmetic on the inferred memory and halt in wfi -- no output.)"
+echo "(racy_increment/racy_store_* do racy arithmetic on the inferred memory and halt in wfi -- no output.)"

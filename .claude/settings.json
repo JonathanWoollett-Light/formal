@@ -82,7 +82,11 @@
       "PowerShell(cargo test --test eight 2>$null)",
       "Bash(printf '%s\\\\r\\\\n' '    # Heap accesses through `#@` region declarations. The first region is' '    # declared with immediate bounds and accessed at a non-zero offset; the' '    # second through registers, the way an allocator would declare each' '    # allocation just before returning its pointer, and is exactly as wide as' '    # the store that hits it.' '    #@ 0x80100000 0x80100008 rw' '    li t0, 0x80100000' '    li t1, 42' '    sw t1, 4\\(t0\\)' '    lw t2, 4\\(t0\\)' '    li t3, 0x80200000' '    li t4, 0x80200004' '    #@ t3 t4 rw' '    sw t1, 0\\(t3\\)' '    lw t5, 0\\(t3\\)' '    #?')",
       "Bash(printf '%s\\\\r\\\\n' '    # A `#@` region too small for the store that targets it: the 4-byte `sw`' '    # needs bytes 0x80100000..0x80100004 but the region ends at 0x80100002,' '    # so no declared region covers the access and the program is rejected as' '    # `Invalid` - see tests/nine.rs.' '    #@ 0x80100000 0x80100002 rw' '    li t0, 0x80100000' '    li t1, 42' '    sw t1, 0\\(t0\\)' '    #?')",
-      "Bash(printf '%s\\\\r\\\\n' '    # `.global` parses but the verifier does not handle it \\(programs have no' '    # explicit entry point - execution starts from the first line\\), so verifying' '    # it returns a `CompilerError::Unsupported` rather than panicking - see' '    # tests/error.rs.' '    li t0, 0' '    .global _start' '    #?')"
+      "Bash(printf '%s\\\\r\\\\n' '    # `.global` parses but the verifier does not handle it \\(programs have no' '    # explicit entry point - execution starts from the first line\\), so verifying' '    # it returns a `CompilerError::Unsupported` rather than panicking - see' '    # tests/error.rs.' '    li t0, 0' '    .global _start' '    #?')",
+      "Bash(wsl -e bash -lc \"qemu-system-riscv64 --version | head -1\")",
+      "Bash(FORMAL_PROGRESS=1 cargo test --test three)",
+      "Bash(awk 'NR % 8 == 1')",
+      "Bash(grep -rn '`three`\\\\|`four`\\\\|`five`\\\\|`six`\\\\|`seven`\\\\|`eight`\\\\|`nine`\\\\|`ten`\\\\|three\\\\.s\\\\|four\\\\.s\\\\|five\\\\.s\\\\|six\\\\.s\\\\|seven\\\\.s\\\\|eight\\\\.s\\\\|nine\\\\.s\\\\|ten\\\\.s\\\\|error\\\\.s' tests/)"
     ]
   }
 }

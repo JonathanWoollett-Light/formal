@@ -10,7 +10,7 @@ use formal::*;
 /// verifier rejects it as `Invalid` (rather than erroring or accepting it).
 #[test]
 fn raw_access_outside_any_region_is_invalid() {
-    let ast = setup_test("eight");
+    let ast = setup_test("raw_access_undeclared");
 
     let explorerer = unsafe {
         Explorerer::new(

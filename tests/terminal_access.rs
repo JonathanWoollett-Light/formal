@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 /// recorded and emitted.
 #[test]
 fn path_terminal_access_is_recorded() {
-    let mut ast = setup_test("ten");
+    let mut ast = setup_test("terminal_access");
 
     let explorerer = unsafe {
         Explorerer::new(
@@ -95,6 +95,6 @@ value:
 
     // Boot it in QEMU (requires the toolchain + QEMU): the load reads the
     // emitted descriptor bytes and the program halts — no output, no fault.
-    let serial = unsafe { run_program("ten", ast, &configuration, &accessed) };
-    assert_eq!(serial, "", "ten produces no UART output");
+    let serial = unsafe { run_program("terminal_access", ast, &configuration, &accessed) };
+    assert_eq!(serial, "", "terminal_access produces no UART output");
 }

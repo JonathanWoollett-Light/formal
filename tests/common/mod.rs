@@ -6,7 +6,29 @@
 
 use formal::verifier_types::{AccessedRanges, TypeConfiguration};
 use formal::*;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
+
+/// A single-line progress spinner on stderr (via [`indicatif`]), so multi-second
+/// tests (the verifier exploring thousands of steps; QEMU running its fixed boot
+/// timeout) visibly make progress instead of appearing stalled.
+///
+/// indicatif writes to the raw stderr handle, which bypasses libtest's output
+/// capture — the spinner is live during a plain `cargo test`, no `--nocapture`
+/// needed — and draws nothing when stderr is not a terminal (CI logs stay
+/// clean). Call `finish_and_clear()` when done so libtest's own `test … ok`
+/// output stays tidy.
+fn progress_spinner(label: String) -> ProgressBar {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::with_template("{spinner} {prefix}: {msg}")
+            .expect("static spinner template"),
+    );
+    spinner.set_prefix(label);
+    spinner.enable_steady_tick(Duration::from_millis(80));
+    spinner
+}
 
 /// Parses and compresses `assets/<asm>.s`, returning the head of the AST.
 ///
@@ -67,7 +89,16 @@ pub unsafe fn trace_valid_path(
 ) -> (Vec<String>, Result<ExplorePathResult, CompilerError>) {
     const STEP_CAP: usize = 10_000_000;
     let mut trace = Vec::new();
-    for _ in 0..STEP_CAP {
+    // Live progress (the verifier can take thousands of steps): the test thread
+    // is named after the test function by libtest.
+    let progress = progress_spinner(format!(
+        "verifying {}",
+        std::thread::current().name().unwrap_or("program")
+    ));
+    for step in 0..STEP_CAP {
+        if step % 64 == 0 {
+            progress.set_message(format!("step {step} (queue {})", explorerer.queue.len()));
+        }
         let pre = front_step(&explorerer);
         match explorerer.next_step() {
             Ok(ExplorePathResult::Continue(next)) => {
@@ -84,17 +115,22 @@ pub unsafe fn trace_valid_path(
             // `Valid` / `Invalid` are terminal outcomes; an `Err` is an unrecoverable
             // compiler error. Either way return it with the trace collected so far so
             // the test can inspect both.
-            Ok(terminal) => return (trace, Ok(terminal)),
+            Ok(terminal) => {
+                progress.finish_and_clear();
+                return (trace, Ok(terminal));
+            }
             Err(error) => {
                 // Record the step that failed (and the error) as the final trace line so
                 // the trace shows *where* the error occurred.
                 if let Some((hart, harts, instruction)) = pre {
                     trace.push(format!("h{hart}/{harts} | {instruction} | <error: {error}>"));
                 }
+                progress.finish_and_clear();
                 return (trace, Err(error));
             }
         }
     }
+    progress.finish_and_clear();
     panic!("exploration did not terminate within {STEP_CAP} steps");
 }
 
@@ -218,9 +254,13 @@ G="$(wslpath '{gen}')"
 "$AS" -o "$G/{name}.o" "$G/{name}.s"
 "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
+# `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
+# (to stderr, which is unbuffered — so the host can watch the count live for
+# progress reporting); `guest_errors` shares the same log for fault detection.
 timeout 3 qemu-system-riscv64 -machine virt -bios none -display none -monitor none \
+    -accel tcg,one-insn-per-tb=on -d guest_errors,exec,nochain \
     -serial "file:$G/{name}.serial" -kernel "$G/{name}.elf" \
-    -d guest_errors -D "$G/{name}.qemu.log" >/dev/null 2>&1 || true
+    >/dev/null 2>"$G/{name}.qemu.log" || true
 echo "===SERIAL_BEGIN==="
 cat "$G/{name}.serial" 2>/dev/null
 echo ""
@@ -228,18 +268,44 @@ echo "===SERIAL_END==="
 FAULTS="$(grep -c riscv_cpu_do_interrupt "$G/{name}.qemu.log" 2>/dev/null || true)"
 echo "===FAULTS===${{FAULTS:-0}}"
 echo "===LOG==="
-head -c 2000 "$G/{name}.qemu.log" 2>/dev/null || true
+grep -v '^Trace' "$G/{name}.qemu.log" 2>/dev/null | head -c 2000 || true
 echo ""
 echo "===END==="
 "#
     );
 
-    let output = Command::new("wsl")
-        .arg("-e")
-        .arg("bash")
-        .arg("-lc")
-        .arg(&script)
-        .output()
+    // Run the (multi-second: QEMU runs under a fixed timeout) build+boot on a
+    // worker thread and report live progress meanwhile: elapsed time plus the
+    // number of guest instructions executed so far, read from the exec log QEMU
+    // writes as it runs.
+    let worker = {
+        let script = script.clone();
+        std::thread::spawn(move || {
+            Command::new("wsl")
+                .arg("-e")
+                .arg("bash")
+                .arg("-lc")
+                .arg(&script)
+                .output()
+        })
+    };
+    let progress = progress_spinner(format!("booting {name} in QEMU"));
+    let log_path = format!("{gen}/{name}.qemu.log");
+    let started = Instant::now();
+    while !worker.is_finished() {
+        let instructions = std::fs::read_to_string(&log_path)
+            .map(|log| log.lines().filter(|l| l.starts_with("Trace")).count())
+            .unwrap_or(0);
+        progress.set_message(format!(
+            "{:.1}s, {instructions} instructions executed",
+            started.elapsed().as_secs_f32()
+        ));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    progress.finish_and_clear();
+    let output = worker
+        .join()
+        .expect("the WSL worker thread panicked")
         .expect(
             "failed to invoke WSL — WSL with the RISC-V GNU toolchain and \
              qemu-system-riscv64 is required to build and boot the generated program",

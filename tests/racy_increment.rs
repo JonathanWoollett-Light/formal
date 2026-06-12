@@ -6,15 +6,15 @@ use formal::*;
 
 /// Racy global increment of `value` (type `_`, inferred), asserting `value < 4`.
 ///
-/// `four` has two racy stores plus the non-atomic increment, so its full
+/// `racy_increment` has two racy stores plus the non-atomic increment, so its full
 /// interleaving fan-out is large (614 steps — too many to assert line-for-line,
-/// so the per-step interleaving shape is pinned by `five`/`six`). We pin the
+/// so the per-step interleaving shape is pinned by `racy_store_inferred`/`racy_store_annotated`). We pin the
 /// exact total step count, the **type-inference timeline** (`value` searched
 /// `Gu8` → `Gi8` → `Gu16` → `Gi16` → `Gu32`, with a reset to `[]` on each
 /// failing `sw`), and the optimized output.
 #[test]
-fn four() {
-    let mut ast = setup_test("four");
+fn racy_increment() {
+    let mut ast = setup_test("racy_increment");
 
     let explorerer = unsafe {
         Explorerer::new(
@@ -144,6 +144,6 @@ value:
     // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
     // the inferred `value` and halts in `wfi` — no output — so success is simply
     // "ran with no CPU fault".
-    let serial = unsafe { run_program("four", ast, &configuration, &accessed) };
-    assert_eq!(serial, "", "four produces no UART output");
+    let serial = unsafe { run_program("racy_increment", ast, &configuration, &accessed) };
+    assert_eq!(serial, "", "racy_increment produces no UART output");
 }

@@ -15,8 +15,8 @@ use formal::*;
 /// out to 6 leaves and draining it to 0. `jumped` stays 0 (the not-equal branch
 /// never jumps).
 #[test]
-fn five() {
-    let mut ast = setup_test("five");
+fn racy_store_inferred() {
+    let mut ast = setup_test("racy_store_inferred");
 
     let explorerer = unsafe {
         Explorerer::new(
@@ -205,6 +205,6 @@ value:
     // Boot it in QEMU (requires the toolchain + QEMU). It does racy arithmetic on
     // the inferred `value` and halts in `wfi` — no output — so success is simply
     // "ran with no CPU fault".
-    let serial = unsafe { run_program("five", ast, &configuration, &accessed) };
-    assert_eq!(serial, "", "five produces no UART output");
+    let serial = unsafe { run_program("racy_store_inferred", ast, &configuration, &accessed) };
+    assert_eq!(serial, "", "racy_store_inferred produces no UART output");
 }

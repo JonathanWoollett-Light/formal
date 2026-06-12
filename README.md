@@ -51,7 +51,7 @@ carry type/verification information. The currently-parsed directives are:
 `{u8 i8}`, or `_`. List and union types are never inferred automatically (there
 are infinitely many), so they must be given with `#$`.
 
-A minimal example ([assets/four.s](assets/four.s)) — racy increment of a global,
+A minimal example ([assets/racy_increment.s](assets/racy_increment.s)) — racy increment of a global,
 then an assertion that its value stays below 4. Execution starts from the first
 line (like Python — there is no explicit `.global`/`_start:` entry; the runnable
 entry point is added by codegen to the program the crate emits):
@@ -73,7 +73,7 @@ _invalid:
 ```
 
 See [assets/](assets/) for the full set of example programs
-(`three.s` is a complete UART "Hello, World!" with list-type checking).
+(`uart_hello.s` is a complete UART "Hello, World!" with list-type checking).
 
 ## Prerequisites
 
@@ -109,21 +109,21 @@ cargo run
 > with the *readable* `lat`/`branch` spellings, which the parser does not accept
 > (it only accepts the canonical `#&` directive and `j`), so `cargo run` panics
 > during parsing. Use the test suite below to exercise the verifier against the
-> programs that do parse (`three`/`four`/`five`/`six`).
+> programs that do parse (`uart_hello`/`racy_increment`/`racy_store_inferred`/`racy_store_annotated`).
 
 ### Verifier test suite
 
 ```sh
 cargo test                 # run all integration tests
-cargo test --test three    # run a single test binary
+cargo test --test uart_hello    # run a single test binary
 ```
 
 The integration tests in [tests/](tests/) drive the full pipeline (parse →
 compress → verify → optimize) over the example programs and assert the inferred
 types and the optimized output. Exploration is deterministic, so they also pin
-the *incremental* behaviour of the verifier state machine: `five`/`six` assert
+the *incremental* behaviour of the verifier state machine: `racy_store_inferred`/`racy_store_annotated` assert
 the exact per-step trace (instruction, hart, configuration and
-queue/touched/jumped counts at every step), and `four`/`three` assert the exact
+queue/touched/jumped counts at every step), and `racy_increment`/`uart_hello` assert the exact
 step count and type-inference timeline.
 
 <a id="running-in-qemu"></a>
@@ -144,11 +144,11 @@ read — does not exist in the output (interior dead bytes survive only as `.zer
 padding where a later record's offset depends on them; trailing dead bytes are
 dropped entirely).
 
-The integration tests do this end to end: each of `four`/`five`/`six`/`three`/
-`seven` verifies, optimizes, lowers to runnable RISC-V (written to
+The integration tests do this end to end: each of `racy_increment`/`racy_store_inferred`/`racy_store_annotated`/`uart_hello`/
+`heap_regions` verifies, optimizes, lowers to runnable RISC-V (written to
 `target/gen/<name>.s`), pins the exact emitted program (including the absence of
 the dead locality data), then **assembles, links, and boots it in QEMU**,
-asserting it runs without a CPU fault (`three` additionally asserts the UART
+asserting it runs without a CPU fault (`uart_hello` additionally asserts the UART
 receives `H`). The RISC-V GNU toolchain and `qemu-system-riscv64` (under WSL)
 are **required** — the tests *fail* if they are missing, not skip:
 
@@ -175,8 +175,8 @@ riscv64-unknown-elf-ld -Ttext=0x80000000 --no-relax -e _start -o program.elf pro
 qemu-system-riscv64 -machine virt -bios none -nographic -kernel program.elf
 ```
 
-`three` writes `H` to the QEMU `virt` machine's UART (physical address
-`0x10000000`) and then halts; `four`/`five`/`six` do racy arithmetic on the
+`uart_hello` writes `H` to the QEMU `virt` machine's UART (physical address
+`0x10000000`) and then halts; `racy_increment`/`racy_store_inferred`/`racy_store_annotated` do racy arithmetic on the
 inferred memory and halt in `wfi` (no output). The toolchain is not bundled —
 download a prebuilt release (use a stable, not nightly, tag) from
 https://github.com/riscv-collab/riscv-gnu-toolchain/releases (e.g.

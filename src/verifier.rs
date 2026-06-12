@@ -711,6 +711,16 @@ impl Explorerer {
                     return false;
                 }
             }
+            // A thread-local has one copy per hart that touches it: a re-encounter
+            // (possibly on a *different* hart) must record that this hart needs a
+            // copy too — `State::new` seeds one `.bss` entry per recorded hart, and
+            // without this a second hart's access would find no memory behind its
+            // `MemoryLabel::Thread { hart }` and die with an internal error.
+            if *existing_locality == Locality::Thread {
+                let existing_type = existing_type.clone();
+                self.configuration
+                    .insert(label.clone(), hart, (Locality::Thread, existing_type));
+            }
             return true;
         }
 
