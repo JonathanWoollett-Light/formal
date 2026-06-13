@@ -3,34 +3,232 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="formal: a verifying compiler for bare-metal RISC-V with Python-like syntax. Every hart interleaving, every admissible type, proven at compile time."
+    />
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
     />
-    <title>Placeholder lang</title>
+    <title>formal</title>
+    <script>
+      // Apply the saved (or system) color scheme before first paint, so the
+      // page never flashes the wrong theme. The toggle (end of body) keeps
+      // `picoColorScheme` in sync.
+      (function () {
+        try {
+          var scheme = localStorage.getItem("picoColorScheme");
+          if (scheme !== "light" && scheme !== "dark") {
+            scheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          document.documentElement.setAttribute("data-theme", scheme);
+        } catch (e) {}
+      })();
+    </script>
     <style>
-      .code {
-        font-family: "consolas";
-        background-color: rgba(100, 100, 100, 0.2);
-        padding: 5px;
-        border-radius: 3px;
-        white-space-collapse: collapse;
-        text-wrap: nowrap;
-        overflow-x: auto;
-        margin: 5px;
+      /* Smaller base type and a narrower central column than Pico's defaults. */
+      :root {
+        font-size: 87.5%;
       }
-      .assembly {
-        font-size: 14px;
-        overflow-y: auto;
-        max-height: 262px;
+      .container {
+        max-width: 720px;
+      }
+      /* Soften the light theme: a papery off-white instead of a harsh pure
+         white, with a slightly warmer card/code surface to match. */
+      [data-theme="light"] {
+        --pico-background-color: #f5f2ea;
+        --pico-card-background-color: #fbf9f3;
+        --pico-card-sectioning-background-color: #fbf9f3;
+        --pico-code-background-color: #ece8dd;
+      }
+      pre.asm {
+        font-size: 12px;
+        max-height: 420px;
+        overflow: auto;
+        margin-bottom: 0;
+      }
+      /* Pico already insets a code block via the inner block `pre > code`
+         (padding: var(--pico-spacing) = 1rem), leaving the `pre` itself
+         unpadded, so the trailing padding survives horizontal scroll. Tune
+         that single knob instead of padding the `pre` on top of it (which
+         doubles up: the text would be inset by both paddings summed). */
+      pre.asm > code {
+        padding: 0.525rem;
+      }
+      .code {
+        font-family: var(--pico-font-family-monospace, monospace);
+        background-color: rgba(100, 100, 100, 0.2);
+        padding: 2px 5px;
+        border-radius: 3px;
+        white-space: nowrap;
+      }
+      .cols > div > h5 {
+        margin-bottom: 0.5rem;
+      }
+      .pipeline {
+        text-align: center;
+        margin: 0.5rem 0 1.5rem 0;
+        opacity: 0.8;
+      }
+      section {
+        margin-bottom: 2.5rem;
+      }
+      table.directives td:first-child,
+      table.directives td:nth-child(2) {
+        white-space: nowrap;
+      }
+      /* Theme toggle: the animated sun/moon icon from picocss.com. */
+      #theme-toggle {
+        display: inline-flex;
+        align-items: center;
+      }
+      svg.icon-theme-toggle {
+        --theme-toggle-duration: 0.4s;
+      }
+      svg.icon-theme-toggle :first-child path {
+        transition-duration: calc(var(--theme-toggle-duration) * 0.6);
+        transition-property: transform, d;
+        transition-timing-function: cubic-bezier(0, 0, 0.5, 1);
+      }
+      svg.icon-theme-toggle g circle,
+      svg.icon-theme-toggle g path {
+        transform-origin: center;
+        transition: transform calc(var(--theme-toggle-duration) * 0.65)
+          cubic-bezier(0, 0, 0, 1.25) calc(var(--theme-toggle-duration) * 0.35);
+      }
+      svg.icon-theme-toggle.moon g circle {
+        transform: scale(1.4);
+        transition-delay: 0s;
+      }
+      svg.icon-theme-toggle.moon g path {
+        transform: scale(0.75);
+        transition-delay: 0s;
+      }
+      svg.icon-theme-toggle.moon :first-child path {
+        d: path("M-9 3h25a1 1 0 0017 13v30H0Z");
+        transition-delay: calc(var(--theme-toggle-duration) * 0.4);
+        transition-timing-function: cubic-bezier(0, 0, 0, 1.25);
+      }
+      @supports not (d: path("")) {
+        svg.icon-theme-toggle.moon :first-child path {
+          transform: translate3d(-9px, 14px, 0);
+        }
+      }
+      /* Language-comparison tab bar. */
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-bottom: 1rem;
+      }
+      .tabs button,
+      .tabs a {
+        /* Equal-width boxes that share the row (a `button` for an in-page tab,
+           an `a` when the tab links out, e.g. a benchmark description). */
+        flex: 1 1 0;
+        text-align: center;
+        margin: 0;
+        padding: 0.2rem 0.5rem;
+        font-size: 0.8em;
+        background: transparent;
+        /* `--pico-color` is redefined to the inverse (white) inside buttons, so
+           an unselected tab would be invisible in light mode; `--pico-contrast`
+           is the page text colour and stays readable in both schemes. */
+        color: var(--pico-contrast);
+        border: 1px solid var(--pico-muted-border-color);
+        border-radius: var(--pico-border-radius);
+        text-decoration: none;
+      }
+      .tabs a:hover,
+      .tabs a:focus {
+        color: var(--pico-contrast);
+        text-decoration: none;
+      }
+      .tabs button[aria-selected="true"],
+      .tabs a[aria-selected="true"] {
+        background: var(--pico-primary-background);
+        color: var(--pico-primary-inverse);
+        border-color: var(--pico-primary-background);
+      }
+      /* Two stacked tab rows (language, then program): keep them tight, with the
+         normal gap left below the second row before the panels. */
+      .lang-tabs {
+        margin-bottom: 0.35rem;
+      }
+      .instr-count {
+        margin: 0.5rem 0 0 0;
+        opacity: 0.85;
+      }
+      .instr-count b {
+        font-size: 1.1em;
+      }
+      /* Give every comparison code block the height of the tallest one (the
+         6-line Ada sample), so switching tabs does not resize the row and the
+         two panels always match. Text stays top-left (the `pre` default). The
+         exact height is measured and applied in JS (see the tab script); this
+         is a generous fallback that still fits the tallest sample without it. */
+      .compare pre.asm {
+        min-height: 11rem;
+      }
+      /* The reproduction commands under each comparison panel: a fixed
+         four-line box that scrolls vertically for more lines and horizontally
+         for lines wider than the panel (`white-space: pre` keeps them unwrapped). */
+      .compare pre.cmd {
+        font-size: 11px;
+        line-height: 1.5;
+        height: calc(4 * 1.5em + 0.7rem);
+        overflow: auto;
+        white-space: pre;
+        margin: 0.5rem 0 0 0;
+        color: var(--pico-muted-color);
+        background: var(--pico-code-background-color);
+        border-radius: var(--pico-border-radius);
+      }
+      /* Same single-source padding as `pre.asm`: on the inner `code`, not the
+         `pre`. The height calc above budgets exactly this 0.7rem of vertical
+         padding (2 x 0.35rem); when it also sat on the `pre`, Pico's hidden
+         1rem on `pre > code` pushed the four lines past the box. */
+      pre.cmd > code {
+        padding: 0.35rem 0.5rem;
+      }
+      /* Thinner, more subtle scrollbars on the scrollable code/command boxes:
+         a slim track with a muted, theme-adaptive thumb. `scrollbar-width` is
+         the standard property; the `::-webkit-` rules cover older Chromium. */
+      pre.asm,
+      pre.cmd {
+        scrollbar-width: thin;
+        scrollbar-color: var(--pico-muted-border-color) transparent;
+      }
+      pre.asm::-webkit-scrollbar,
+      pre.cmd::-webkit-scrollbar {
+        width: 7px;
+        height: 7px;
+      }
+      pre.asm::-webkit-scrollbar-thumb,
+      pre.cmd::-webkit-scrollbar-thumb {
+        background: var(--pico-muted-border-color);
+        border-radius: 4px;
+      }
+      pre.asm::-webkit-scrollbar-thumb:hover,
+      pre.cmd::-webkit-scrollbar-thumb:hover {
+        background: var(--pico-muted-color);
+      }
+      pre.asm::-webkit-scrollbar-track,
+      pre.cmd::-webkit-scrollbar-track {
+        background: transparent;
       }
     </style>
   </head>
   <body>
-    <main class="container" style="padding-top: 0px">
-      <nav style="padding-bottom: 50px">
+    <header class="container">
+      <nav>
         <ul>
-          <li><h1 style="margin-bottom: 0px">Placeholder lang</h1></li>
+          <li>
+            <h1 style="margin-bottom: 0">formal</h1>
+          </li>
         </ul>
         <ul>
           <li>
@@ -38,396 +236,1252 @@
               >GitHub</a
             >
           </li>
+          <li>
+            <a
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
+              >README</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
+              >Comparisons</a
+            >
+          </li>
+          <li>
+            <a
+              href="#"
+              id="theme-toggle"
+              class="contrast"
+              aria-label="Turn on dark mode"
+              role="button"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 32 32"
+                fill="currentColor"
+                class="icon-theme-toggle"
+                aria-hidden="true"
+              >
+                <clipPath id="theme-toggle-cutout">
+                  <path d="M0-11h25a1 1 0 0017 13v30H0Z"></path>
+                </clipPath>
+                <g clip-path="url(#theme-toggle-cutout)">
+                  <circle cx="16" cy="16" r="8.4"></circle>
+                  <path
+                    d="M18.3 3.2c0 1.3-1 2.3-2.3 2.3s-2.3-1-2.3-2.3S14.7.9 16 .9s2.3 1 2.3 2.3zm-4.6 25.6c0-1.3 1-2.3 2.3-2.3s2.3 1 2.3 2.3-1 2.3-2.3 2.3-2.3-1-2.3-2.3zm15.1-10.5c-1.3 0-2.3-1-2.3-2.3s1-2.3 2.3-2.3 2.3 1 2.3 2.3-1 2.3-2.3 2.3zM3.2 13.7c1.3 0 2.3 1 2.3 2.3s-1 2.3-2.3 2.3S.9 17.3.9 16s1-2.3 2.3-2.3zm5.8-7C9 7.9 7.9 9 6.7 9S4.4 8 4.4 6.7s1-2.3 2.3-2.3S9 5.4 9 6.7zm16.3 21c-1.3 0-2.3-1-2.3-2.3s1-2.3 2.3-2.3 2.3 1 2.3 2.3-1 2.3-2.3 2.3zm2.4-21c0 1.3-1 2.3-2.3 2.3S23 7.9 23 6.7s1-2.3 2.3-2.3 2.4 1 2.4 2.3zM6.7 23C8 23 9 24 9 25.3s-1 2.3-2.3 2.3-2.3-1-2.3-2.3 1-2.3 2.3-2.3z"
+                  ></path>
+                </g>
+              </svg>
+            </a>
+          </li>
         </ul>
       </nav>
-      <h4>
-        🚧Anything and everything might not work and much isn't yet
-        implemented🚧
-      </h4>
-      <ul>
-        <li>
-          <b>Fewer keywords than C.</b>
-          <i>"An idiot admires complexity, a genius admires simplicity"</i> -
-          Terry A Davis
-        </li>
-        <li>
-          <b>Infallible type inference</b> unlike
-          <a href="https://www.rust-lang.org/">Rust</a> which constantly fails
-          to infer type infomation.
-        </li>
-        <li>
-          <b>No stack overflow</b> because there is no recursion. There is
-          always a better iterative solution.
-        </li>
-        <li>
-          <b>No hidden memory allocations</b> unlike
-          <a href="https://ziglang.org/">Zig</a> which still does fallible stack
-          allocation.
-        </li>
-        <li>
-          <b>Formal verification</b> like
-          <a href="https://ada-lang.io/">Ada</a> but simpler.
-        </li>
-        <li>
-          <b>No generics or templates</b> becuase it doesn't need hints to
-          figure out the types that work.
-        </li>
-      </ul>
-      <p>Supports <a href="https://riscv.org/">RISC-V</a> ✓</p>
-      Doesn't support
-      <a href="https://en.wikipedia.org/wiki/AArch64">aarch64</a> ?
-      <p></p>
       <p>
-        Won't support
-        <a href="https://en.wikipedia.org/wiki/X86-64">x86-64</a> ✗
+        <b
+          >A verifying compiler for bare-metal RISC-V: every hart interleaving,
+          every admissible type, proven at compile time.</b
+        >
+        You write Python-like statements that map nearly one-to-one onto RISC-V
+        instructions, with the memory layout left implicit; the compiler accepts
+        the program only if it can <i>prove</i>, by symbolically executing the
+        machine code itself, that no assertion fails and no memory access is
+        unsafe on <i>any</i> hardware-thread interleaving, for <i>any</i> input,
+        under the types it infers for you. The proof's by-products then build
+        the binary.
       </p>
-      <h3>Hello, World!</h3>
-      <div class="grid">
-        <div>
-          <h5>Placeholder</h5>
-          <p class="code">
-            include https://placeholder/syscalls.lang<br />write stdout "Hello,
-            World!\n"<br />exit 0
-          </p>
-          <p class="code">
-            placeholder new hello-world<br />cd hello-world<br />placeholder
-            build<br />cat ./build/assembly.s
-          </p>
-          <p class="code assembly">
-            .global _start<br />_start:<br />mov x8, #64<br />mov x0, #1<br />ldr
-            x1, =a<br />mov x2, #14<br />svc #0<br />mov x8, #93<br />mov x0,
-            #0<br />svc #0<br />.data<br />a: .byte
-            72,101,108,108,111,44,32,87,111,114,108,100,33,10
-          </p>
-        </div>
-        <div>
-          <h5>Rust</h5>
-          <p class="code">
-            fn main() {<br />
-            &nbsp;&nbsp;&nbsp;&nbsp;println!("Hello, world!");<br />}
-          </p>
-          <p class="code">
-            cargo new hello-world<br />cd hello-world<br />cargo rustc --release
-            -- --emit asm<br />cat $(find . | grep "hello_world-.*\.s")
-          </p>
-          <p class="code assembly">
-            .text<br />
-            .file "hello_world.72da610180e2e4bd-cgu.0"<br />
-            .section
-            .text._ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,"ax",@progbits<br />
-            .p2align 2<br />
-            .type
-            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,@function<br />_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E:<br />
-            .cfi_startproc<br />
-            str x30, [sp, #-16]!<br />
-            .cfi_def_cfa_offset 16<br />
-            .cfi_offset w30, -16<br />
-            blr x0<br />
-            //APP<br />
-            //NO_APP<br />
-            ldr x30, [sp], #16<br />
-            .cfi_def_cfa_offset 0<br />
-            .cfi_restore w30<br />
-            ret<br />.Lfunc_end0:<br />
-            .size
-            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E,
-            .Lfunc_end0-_ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
-            .cfi_endproc<br /><br />
-            .section
-            .text._ZN3std2rt10lang_start17h29862496ae07c657E,"ax",@progbits<br />
-            .hidden _ZN3std2rt10lang_start17h29862496ae07c657E<br />
-            .globl _ZN3std2rt10lang_start17h29862496ae07c657E<br />
-            .p2align 2<br />
-            .type _ZN3std2rt10lang_start17h29862496ae07c657E,@function<br />_ZN3std2rt10lang_start17h29862496ae07c657E:<br />
-            .cfi_startproc<br />
-            stp x30, x0, [sp, #-16]!<br />
-            .cfi_def_cfa_offset 16<br />
-            .cfi_offset w30, -16<br />
-            mov w4, w3<br />
-            mov x3, x2<br />
-            mov x2, x1<br />
-            adrp x1, .L__unnamed_1<br />
-            add x1, x1, :lo12:.L__unnamed_1<br />
-            add x0, sp, #8<br />
-            bl _ZN3std2rt19lang_start_internal17h95d6f6a22ba2f96dE<br />
-            ldr x30, [sp], #16<br />
-            .cfi_def_cfa_offset 0<br />
-            .cfi_restore w30<br />
-            ret<br />.Lfunc_end1:<br />
-            .size _ZN3std2rt10lang_start17h29862496ae07c657E,
-            .Lfunc_end1-_ZN3std2rt10lang_start17h29862496ae07c657E<br />
-            .cfi_endproc<br /><br />
-            .section
-            ".text._ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE","ax",@progbits<br />
-            .p2align 2<br />
-            .type
-            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE,@function<br />_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE:<br />
-            .cfi_startproc<br />
-            str x30, [sp, #-16]!<br />
-            .cfi_def_cfa_offset 16<br />
-            .cfi_offset w30, -16<br />
-            ldr x0, [x0]<br />
-            bl
-            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
-            mov w0, wzr<br />
-            ldr x30, [sp], #16<br />
-            .cfi_def_cfa_offset 0<br />
-            .cfi_restore w30<br />
-            ret<br />.Lfunc_end2:<br />
-            .size
-            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE,
-            .Lfunc_end2-_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
-            .cfi_endproc<br /><br />
-            .section
-            ".text._ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE","ax",@progbits<br />
-            .p2align 2<br />
-            .type
-            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE,@function<br />_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE:<br />
-            .cfi_startproc<br />
-            str x30, [sp, #-16]!<br />
-            .cfi_def_cfa_offset 16<br />
-            .cfi_offset w30, -16<br />
-            ldr x0, [x0]<br />
-            bl
-            _ZN3std10sys_common9backtrace28__rust_begin_short_backtrace17h929d74729e9673e1E<br />
-            mov w0, wzr<br />
-            ldr x30, [sp], #16<br />
-            .cfi_def_cfa_offset 0<br />
-            .cfi_restore w30<br />
-            ret<br />.Lfunc_end3:<br />
-            .size
-            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE,
-            .Lfunc_end3-_ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE<br />
-            .cfi_endproc<br /><br />
-            .section
-            ".text._ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE","ax",@progbits<br />
-            .p2align 2<br />
-            .type
-            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE,@function<br />_ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE:<br />
-            .cfi_startproc<br />
-            ret<br />.Lfunc_end4:<br />
-            .size
-            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE,
-            .Lfunc_end4-_ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE<br />
-            .cfi_endproc<br /><br />
-            .section
-            .text._ZN11hello_world4main17hff90392c72a0ce9aE,"ax",@progbits<br />
-            .p2align 2<br />
-            .type _ZN11hello_world4main17hff90392c72a0ce9aE,@function<br />_ZN11hello_world4main17hff90392c72a0ce9aE:<br />
-            .cfi_startproc<br />
-            sub sp, sp, #64<br />
-            .cfi_def_cfa_offset 64<br />
-            str x30, [sp, #48]<br />
-            .cfi_offset w30, -16<br />
-            adrp x8, .L__unnamed_2<br />
-            add x8, x8, :lo12:.L__unnamed_2<br />
-            mov w9, #1<br />
-            adrp x10, .L__unnamed_3<br />
-            add x10, x10, :lo12:.L__unnamed_3<br />
-            mov x0, sp<br />
-            stp xzr, xzr, [sp, #24]<br />
-            stp x8, x9, [sp]<br />
-            str x10, [sp, #16]<br />
-            bl _ZN3std2io5stdio6_print17h111c70694d02e77dE<br />
-            ldr x30, [sp, #48]<br />
-            add sp, sp, #64<br />
-            .cfi_def_cfa_offset 0<br />
-            .cfi_restore w30<br />
-            ret<br />.Lfunc_end5:<br />
-            .size _ZN11hello_world4main17hff90392c72a0ce9aE,
-            .Lfunc_end5-_ZN11hello_world4main17hff90392c72a0ce9aE<br />
-            .cfi_endproc<br /><br />
-            .section .text.main,"ax",@progbits<br />
-            .globl main<br />
-            .p2align 2<br />
-            .type main,@function<br />main:<br />
-            .cfi_startproc<br />
-            str x30, [sp, #-16]!<br />
-            .cfi_def_cfa_offset 16<br />
-            .cfi_offset w30, -16<br />
-            mov x2, x1<br />
-            sxtw x1, w0<br />
-            adrp x0, _ZN11hello_world4main17hff90392c72a0ce9aE<br />
-            add x0, x0, :lo12:_ZN11hello_world4main17hff90392c72a0ce9aE<br />
-            mov w3, wzr<br />
-            bl _ZN3std2rt10lang_start17h29862496ae07c657E<br />
-            ldr x30, [sp], #16<br />
-            ret<br />.Lfunc_end6:<br />
-            .size main, .Lfunc_end6-main<br />
-            .cfi_endproc<br /><br />
-            .type .L__unnamed_1,@object<br />
-            .section .data.rel.ro..L__unnamed_1,"aw",@progbits<br />
-            .p2align 3, 0x0<br />.L__unnamed_1:<br />
-            .xword
-            _ZN4core3ptr85drop_in_place$LT$std..rt..lang_start$LT$$LP$$RP$$GT$..$u7b$$u7b$closure$u7d$$u7d$$GT$17h6d6d5a499b7ddfabE<br />
-            .asciz "\b\000\000\000\000\000\000\000\b\000\000\000\000\000\000"<br />
-            .xword
-            _ZN4core3ops8function6FnOnce40call_once$u7b$$u7b$vtable.shim$u7d$$u7d$17h7571627a657c34aaE<br />
-            .xword
-            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
-            .xword
-            _ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hc6a0e8f9cdb08ebbE<br />
-            .size .L__unnamed_1, 48<br /><br />
-            .type .L__unnamed_4,@object<br />
-            .section .rodata..L__unnamed_4,"a",@progbits<br />.L__unnamed_4:<br />
-            .ascii "Hello, world!\n"<br />
-            .size .L__unnamed_4, 14<br /><br />
-            .type .L__unnamed_2,@object<br />
-            .section .data.rel.ro..L__unnamed_2,"aw",@progbits<br />
-            .p2align 3, 0x0<br />.L__unnamed_2:<br />
-            .xword .L__unnamed_4<br />
-            .asciz "\016\000\000\000\000\000\000"<br />
-            .size .L__unnamed_2, 16<br /><br />
-            .type .L__unnamed_3,@object<br />
-            .section .rodata..L__unnamed_3,"a",@progbits<br />
-            .p2align 3, 0x0<br />.L__unnamed_3:<br />
-            .size .L__unnamed_3, 0<br /><br />
-            .ident "rustc version 1.76.0-nightly (9fad68599 2023-12-03)"<br />
-            .section ".note.GNU-stack","",@progbits
-          </p>
-        </div>
-      </div>
-      <h3>Keywords</h3>
-      <ol>
-        <li>
-          <span class="code">if</span>:
-          <a
-            href="https://doc.rust-lang.org/rust-by-example/flow_control/if_else.html"
-            >Rust's <span class="code">if</span></a
-          >
-          without the brackets<sup>1</sup>.
-        </li>
-        <li>
-          <span class="code">loop</span>:
-          <a
-            href="https://doc.rust-lang.org/rust-by-example/flow_control/loop.html"
-            >Rust's <span class="code">loop</span></a
-          >
-          without the brackets<sup>1</sup>.
-        </li>
-        <li>
-          <span class="code">break</span>: Jumps out of the current
-          <span class="code">loop</span><sup>1</sup>.
-        </li>
-        <li>
-          <span class="code">def</span>:
-          <a href="https://www.w3schools.com/python/python_functions.asp"
-            >Python's <span class="code">def</span></a
-          >
-          without the <span class="code">:</span><sup>2</sup>.
-        </li>
-        <li>
-          <span class="code">in</span>: The arguments given to a
-          function<sup>3</sup>.
-        </li>
-        <li>
-          <span class="code">out</span>: The output given to a function.
-          <span class="code">a := b - c + d</span> after unrolling and type
-          inference is equivalent to
-          <p class="code">c + d @ x<br />b - x @ y<br />a := y @ null</p>
-          <span class="code">@</span> can only be defined on the outermost
-          expression in a line, the outputs of nested expression are used to
-          chain the expressions together.
-        </li>
-        <li>
-          <span class="code">fail</span>: If reachable triggers a failure in
-          formal verification.
-        </li>
-        <li>
-          <span class="code">assume</span>: Mark code which will be passed to
-          formal verification but excluded at run-time.
-          <span class="code">assume x %= 4</span> tells the verifier
-          <span class="code">{ 0 ≤ x &lt 4 }</span>.
-        </li>
-        <li>
-          <span class="code">valueof</span>: Gets the value of a value.
-          <p class="code">
-            a := valueof 1 // a = value_literal = 0<br />b := valueof c // b =
-            value_variable = 1
-          </p>
-        </li>
-        <li>
-          <span class="code">unreachable</span>: Marks the end of execution, all
-          following statements are unreachable.
-        </li>
-        <li>
-          <span class="code">macro</span>: Similar to
-          <a href="https://gcc.gnu.org/onlinedocs/cpp/Macros.html"
-            >macros in C</a
-          >. Macro evaluation happens before the AST is parsed and simply
-          performs a find and replace on the text contents of source files.
-          Since <span class="code">:=</span> is a function,
-          <span class="code">macro</span> is how constants used in the
-          definition of <span class="code">:=</span> are defined. Unless writing
-          your own core, you should never need to use this.
-        </li>
-        <li>
-          <span class="code">asm</span>: The prefix for a line with in-line
-          assembly e.g. <span class="code">asm mov x0, 1</span>.
-        </li>
-        <li>
-          <span class="code">section</span>: Defines the valid address space.
-          <p class="code">
-            section 100 200 read // read 100 to 200<br />section 300 400 write
-            // write 300 to 400<br />section 500 600 readwrite // read+write 500
-            to 600
-          </p>
-        </li>
-      </ol>
-      <h4>Notes</h4>
-      <ol>
-        <li>
-          <span class="code">if</span>, <span class="code">loop</span> and
-          <span class="code">break</span>
-          will be removed as intrinsics and added to the core library as
-          functions when the compiler is re-written in the language. At this
-          point functions will be able to mutate their child AST. This will
-          enable equivalent support to
-          <a href="https://doc.rust-lang.org/reference/procedural-macros.html"
-            >procedural macros found in other languages</a
-          >
-          but better.
-        </li>
-        <li>
-          I'm not commited to using <span class="code">def</span> as the
-          function keyword. I'm considering <span class="code">fn</span>.
-        </li>
-        <li>
-          I'm thinking about splitting <span class="code">in</span> into
-          <span class="code">lhs</span> and <span class="code">rhs</span> as
-          this will make all input patterns differentiable to a function.
-          Currently with <span class="code">in</span> when you have a function
-          <span class="code">my_function</span> calling it with
-          <span class="code">a my_function b</span> or
-          <span class="code">my_function a b</span>
-          appears identical to the function.
-        </li>
-      </ol>
+      <h4>
+        🚧 Experimental: anything and everything might not work and much isn't
+        yet implemented 🚧
+      </h4>
+    </header>
 
-      <h4>Features that might require new keywords</h4>
-      <ol>
-        <li>Generation of unique errors codes.</li>
-        <li>Deferred logging.</li>
-        <li>
-          Non-exhaustive checking. E.g. use gradient descent to search for a
-          minimium to check.
-        </li>
-        <li>
-          Starting new threads during execution. The current assumption is based
-          on bare-metal where the program begins with all hardware threads
-          running.
-        </li>
-        <li>
-          Functions mutating the AST like procedural macros. This would be a
-          massive usability improvement over traditional macros and even
-          procedural macros, in essence it would allow every function to access
-          a pointer to its location in the current AST and then edit it
-          dynamically making all functions more powerful than the most powerful
-          macros in other languages. This is accomplished through the formal
-          verification mechanism which can check that all paths resolve to the
-          same AST.
-        </li>
-      </ol>
+    <main class="container">
+      <section>
+        <h3>The same program, every language</h3>
+        <p>
+          The same program, on the left in <span class="code">formal</span> and
+          on the right in each language: switch between <b>Hello World!</b> and
+          the <b>fannkuch-redux</b> benchmark with the program tabs, and between
+          languages with the row above. The point is underneath the source.
+          Counting the actual machine instructions and bytes,
+          <span class="code">formal</span> compiles to far less than the others,
+          because it ships no runtime, no libc, and no garbage collector beneath
+          it; the versions opposite carry a runtime, and that runtime still
+          ships. fannkuch goes one further: its result is
+          <i>proven correct at compile time</i> (the verifier checks the max
+          flip count and checksum against the known answer), so the program need
+          only compute and exit.
+        </p>
+        <div
+          class="tabs lang-tabs"
+          role="tablist"
+          aria-label="Comparison language"
+        >
+          <button
+            type="button"
+            role="tab"
+            data-lang="rust"
+            aria-selected="true"
+          >
+            Rust
+          </button>
+          <button type="button" role="tab" data-lang="c" aria-selected="false">
+            C
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-lang="cpp"
+            aria-selected="false"
+          >
+            C++
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-lang="zig"
+            aria-selected="false"
+          >
+            Zig
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-lang="ada"
+            aria-selected="false"
+          >
+            Ada
+          </button>
+        </div>
+        <div
+          class="tabs prog-tabs"
+          role="tablist"
+          aria-label="Comparison program"
+        >
+          <button
+            type="button"
+            role="tab"
+            data-prog="hello"
+            aria-selected="true"
+          >
+            Hello World!
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-prog="fannkuch"
+            aria-selected="false"
+          >
+            fannkuch-redux
+          </button>
+        </div>
+        <div class="grid cols compare">
+          <div>
+            <h5>formal</h5>
+            <pre class="asm"><code id="formal-code">print("Hello World!\n")
+exit(0)</code></pre>
+            <pre
+              class="cmd"
+            ><code id="formal-cmd">formal new hello_world &amp;&amp; cd hello_world
+cargo run
+grep -cE '^    [a-z]' build/main.s</code></pre>
+            <p class="instr-count">
+              <b id="formal-count">46</b> instructions<br /><b id="formal-bytes"
+                >1,680</b
+              >
+              bytes
+            </p>
+          </div>
+          <div>
+            <h5 id="lang-name">Rust</h5>
+            <pre class="asm"><code id="lang-code">fn main() {
+    println!("Hello World!");
+}</code></pre>
+            <pre class="cmd"><code id="lang-cmd">cargo new hw &amp;&amp; cd hw
+echo 'fn main() { println!("Hello World!"); }' &gt; src/main.rs
+CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=
+objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+[0-9a-f]+:'</code></pre>
+            <p class="instr-count">
+              <b id="lang-count">4,562</b> instructions<span
+                id="lang-bytes-wrap"
+                ><br /><b id="lang-bytes">26,720</b> bytes</span
+              >
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3>Why</h3>
+        <ul>
+          <li>
+            <b>Proves your assertions, doesn't trust you.</b> A
+            <span class="code">fail</span> marker is a theorem: the compiler
+            enumerates every hart interleaving and rejects the program unless
+            the marker is unreachable on all of them. Provably-correct
+            <i>racy</i> code, which Rust's borrow checker forbids and SPARK's
+            tasking model excludes, verifies here.
+          </li>
+          <li>
+            <b>Infallible type inference.</b> Leave a type as
+            <span class="code">_</span> and the compiler searches type and
+            locality assignments, accepting one
+            <i>iff it makes the whole program verify</i>. If any typing works,
+            it is found: inference and verification are the same search, so
+            there is no "couldn't infer, add an annotation" failure mode.
+            (Scalar types are searched; list/union types are infinite, so they
+            are written explicitly.)
+          </li>
+          <li>
+            <b>The memory layout is an output, not an input.</b> No
+            <span class="code">.data</span>/<span class="code">.bss</span> in
+            the source: the verifier discovers each variable's type and locality
+            and emits the sections for you.
+          </li>
+          <li>
+            <b>Every memory access must be provably safe</b>: inside its
+            variable's inferred type, or inside a raw region with the right
+            permissions: one the target system describes (e.g. MMIO, like the
+            UART below) or one the program declares with
+            <span class="code">section</span>. An allocator declares each
+            allocation as it hands it out; an access nothing describes makes the
+            program invalid.
+          </li>
+          <li>
+            <b>It verifies the machine code, not your source</b>: there is no
+            compiler-trust gap between what was proven and what runs.
+          </li>
+          <li>
+            <b>The proof shrinks the binary.</b> Dead-<i>data</i> elimination:
+            bytes the proof shows no runtime path can touch are deleted from the
+            output, with the program's address arithmetic rewritten in lockstep,
+            so information consumed only at compile time simply doesn't exist at
+            runtime.
+          </li>
+        </ul>
+        <p>
+          Supports <a href="https://riscv.org/">RISC-V</a> ✓ &nbsp;·&nbsp;
+          Doesn't support
+          <a href="https://en.wikipedia.org/wiki/AArch64">aarch64</a> ?
+          &nbsp;·&nbsp; Won't support
+          <a href="https://en.wikipedia.org/wiki/X86-64">x86-64</a> ✗
+        </p>
+      </section>
+
+      <section>
+        <h3>End to end: source to booted RISC-V</h3>
+        <p>
+          This is the project's real end-to-end test (<a
+            href="https://github.com/JonathanWoollett-Light/formal/tree/master/tests/uart_hello"
+            ><span class="code">tests/uart_hello/</span></a
+          >). The source races two harts on an inferred global, has hart 0 check
+          the message's <i>runtime type descriptor</i> (the program inspects its
+          own inferred types), then prints over the UART. Note what the source
+          does <i>not</i> contain: an entry point (execution starts at the first
+          line, like Python), a data section, or most of the types.
+        </p>
+        <div class="grid cols">
+          <div>
+            <h5>You write <span class="code">input.hl</span></h5>
+            <pre
+              class="asm"
+            ><code># Do racy arithmetic with an undefined variable.
+# Use global locality so the load/stores are racy.
+value: global _
+t0 = &amp;value
+
+# Set to 0
+t1 = 0
+t0[0:4] = t1
+
+# Do non-atomic addition
+t1 = t0[0:4]
+t1 = t1 + 1
+t0[0:4] = t1
+
+# The proof obligation: value &lt; 4 on every interleaving (`require` lowers to
+# a branch over `#!`, the `fail` marker).
+t1 = t0[0:4]
+t2 = 4
+require t1 &lt; t2
+
+# Use hart 0 to output a message; every other hart skips straight to the
+# `wfi` at the end.
+t0 = csr(mhartid)
+if t0 == 0:
+    welcome: _ [u8]*13
+    # H  e  l  l  o     W  o  r  l  d  !  0
+    # Type exploration doesn't explore list types since they are infinite, so
+    # to define a list a user must define it manually.
+    # In this case we leave the locality as unspecified which will default to `thread`.
+
+    # Declare string
+    # Get address of type structure
+    t0 = type(welcome)
+
+    # Check variable is list
+    t2 = 8  # Load list type number
+    t1 = t0[0:8]  # Load type type number
+    require t1 == t2
+
+    # Check list length
+    t0 = t0 + 16  # Increment address to point at length
+    t1 = t0[0:8]  # Load length
+    t2 = 13  # Load desired length
+    require t1 == t2
+
+    # Check all values in list are u8
+    t0 = t0 - 8  # Decrement address to point at list address
+    t0 = t0[0:8]  # Load list address
+
+    t5 = 0  # Use t5 as the counter
+    while t5 != t2:
+        t3 = t0[0:8]  # Load type of list item
+        t4 = 0  # Load byte type number
+        require t3 == t4
+        t0 = t0 + 25  # Increment list item address (8+8+8+1)
+        t5 = t5 + 1  # Increment the count
+
+    # Set string
+    t0 = &amp;welcome
+    t1 = 72  # H
+    t0[0:1] = t1
+    t1 = 101  # e
+    t0[1:2] = t1
+    t1 = 108  # l
+    t0[2:3] = t1
+    t1 = 108  # l
+    t0[3:4] = t1
+    t1 = 111  # o
+    t0[4:5] = t1
+    t1 = 32  # space
+    t0[5:6] = t1
+    t1 = 87  # W
+    t0[6:7] = t1
+    t1 = 111  # o
+    t0[7:8] = t1
+    t1 = 114  # r
+    t0[8:9] = t1
+    t1 = 108  # l
+    t0[9:10] = t1
+    t1 = 100  # d
+    t0[10:11] = t1
+    t1 = 33  # !
+    t0[11:12] = t1
+    t1 = 0  # NUL terminator
+    t0[12:13] = t1
+
+    # Output message
+    a0 = &amp;welcome  # Load message address
+    t1 = 0x10000000  # Load character device address
+    t2 = a0[0:1]  # Load the first character
+    while t2 != 0:
+        t1[0:1] = t2  # Store character into character device
+        a0 = a0 + 1  # Add 1 message address
+        t2 = a0[0:1]  # Load next character
+
+asm:
+    wfi
+unreachable</code></pre>
+          </div>
+          <div>
+            <h5>It proves, optimizes &amp; emits</h5>
+            <pre class="asm"><code>.global _start
+_start:
+    #$ value global _
+    la t0, value
+    li t1, 0
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    addi t1, t1, 1
+    sw t1, 0(t0)
+    lw t1, 0(t0)
+    li t2, 4
+    blt t1, t2, _l0
+_l0:
+    csrr t0, mhartid
+    bnez t0, _l1
+    #$ welcome _ [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __welcome_type  # #&amp; t0, welcome
+    li t2, 8
+    ld t1, 0(t0)
+    beq t1, t2, _l2
+_l2:
+    addi t0, t0, 16
+    ld t1, 0(t0)
+    li t2, 13
+    beq t1, t2, _l3
+_l3:
+    addi t0, t0, -8
+    ld t0, 0(t0)
+    li t5, 0
+_l4:
+    beq t5, t2, _l5
+    ld t3, 0(t0)
+    li t4, 0
+    beq t3, t4, _l6
+_l6:
+    addi t0, t0, 8
+    addi t5, t5, 1
+    j _l4
+_l5:
+    la t0, welcome
+    li t1, 72
+    sb t1, 0(t0)
+    li t1, 101
+    sb t1, 1(t0)
+    li t1, 108
+    sb t1, 2(t0)
+    li t1, 108
+    sb t1, 3(t0)
+    li t1, 111
+    sb t1, 4(t0)
+    li t1, 32
+    sb t1, 5(t0)
+    li t1, 87
+    sb t1, 6(t0)
+    li t1, 111
+    sb t1, 7(t0)
+    li t1, 114
+    sb t1, 8(t0)
+    li t1, 108
+    sb t1, 9(t0)
+    li t1, 100
+    sb t1, 10(t0)
+    li t1, 33
+    sb t1, 11(t0)
+    li t1, 0
+    sb t1, 12(t0)
+    la a0, welcome
+    li t1, 0x10000000
+    lb t2, 0(a0)
+_l7:
+    beqz t2, _l8
+    sb t2, 0(t1)
+    addi a0, a0, 1
+    lb t2, 0(a0)
+    j _l7
+_l8:
+_l1:
+    wfi
+    j __halt  # unreachable (program end)
+__halt:
+    wfi
+    j __halt
+
+.section .data
+__welcome_type:
+    .dword 8                # List
+    .dword __welcome_subtypes      # subtypes
+    .dword 13                # length
+__welcome_subtypes:
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+    .dword 0
+
+.section .bss
+    .balign 8
+value:
+    .zero 4
+    .balign 8
+welcome:
+    .zero 13</code></pre>
+          </div>
+        </div>
+        <p class="pipeline">
+          translate (one statement, one instruction) → parse → verify (2,026,160
+          machine states across 1- and 2-hart systems) → infer
+          <span class="code">value: u32</span>,
+          <span class="code">welcome: thread [u8 × 13]</span> → remove dead code
+          &amp; never-taken branches → compact the layout → emit
+        </p>
+        <p>
+          The emitted program assembles with the RISC-V GNU toolchain, boots
+          under <span class="code">qemu-system-riscv64 -machine virt</span>, and
+          prints <span class="code">Hello World!</span>. Two things to notice in
+          the output:
+        </p>
+        <ul>
+          <li>
+            <b>The descriptor records shrank.</b> In memory the verifier models
+            each type record as 25 bytes (<span class="code"
+              >[u64 type, u64 subtypes-ptr, u64 length, u8 locality]</span
+            >), and the source walks them with
+            <span class="code">t0 = t0 + 25</span>. The program only ever
+            <i>reads</i> each record's type number, so the emitted
+            <span class="code">__welcome_subtypes</span> is 13
+            <span class="code">.dword</span>s (104 bytes, not 325), and the
+            stride was rewritten to <span class="code">addi t0, t0, 8</span> to
+            match. The locality byte, read only by the verifier, exists nowhere
+            in the binary.
+          </li>
+          <li>
+            <b>The race was proven, not forbidden.</b> Both harts run the
+            non-atomic increment of <span class="code">value</span>; the proof
+            covers every interleaving and shows the
+            <span class="code">value &lt; 4</span> assertion holds in all of
+            them.
+          </li>
+        </ul>
+        <pre class="asm"><code>$ cargo nt uart_hello
+PASS [25.001s] formal::uart_hello uart_hello</code></pre>
+      </section>
+
+      <section>
+        <h3>The language</h3>
+        <p>
+          Two layers, kept deliberately close. You write a Python-like surface
+          language in which
+          <b
+            >every simple statement lowers to exactly one RISC-V instruction or
+            directive</b
+          >, and <span class="code">if</span>/<span class="code">while</span
+          >/<span class="code">require</span> each lower to a small fixed
+          pattern of branches plus generated labels (no register allocation, no
+          hidden control flow, the C-like cost model where the price of a line
+          is visible at the call site), with inline assembly always one
+          <span class="code">asm:</span> block away:
+        </p>
+        <pre
+          class="asm"
+        ><code>value: global _              -&gt;  #$ value global _        define (locality/type; _ = infer)
+welcome: _ [u8]*13           -&gt;  #$ welcome _ [u8 ... u8]  list types: [u8, u8] or [u8]*n
+t0 = &amp;value                  -&gt;  la t0, value              address of a variable
+t0 = type(welcome)           -&gt;  #&amp; t0, welcome            address of the runtime type descriptor
+t0 = csr(mhartid)            -&gt;  csrr t0, mhartid          which hart am I?
+t1 = 0x10000000              -&gt;  li t1, 0x10000000         load immediate
+t1 = t1 + 1                  -&gt;  addi t1, t1, 1            register +/- immediate
+t0[0:4] = t1                 -&gt;  sw t1, 0(t0)              store a byte slice (1 = sb, 4 = sw)
+t1 = t0[8:16]                -&gt;  ld t1, 8(t0)              load a byte slice (1 = lb, 4 = lw, 8 = ld)
+section 0x100 0x200 rw       -&gt;  #@ 0x100 0x200 rw         declare an accessible region
+fail                         -&gt;  #!                        must be proven unreachable
+unreachable                  -&gt;  #?                        end of execution
+asm:                         -&gt;  (each indented line       inline assembly
+    wfi                          emitted verbatim)
+
+require t1 &lt; t2              # fail unless t1 &lt; t2  (one-line `if not cond: fail`)
+if t0 == 0:                 # run the block when the condition holds
+    t1 = t0[0:8]
+while t5 != t2:             # top-tested loop
+    t5 = t5 + 1</code></pre>
+        <p>
+          Underneath sits the verification target: RISC-V assembly plus five
+          directives; every directive starts with
+          <span class="code">#</span>, the RISC-V comment character, so any
+          <span class="code">formal</span> program is also a plain assembly
+          file:
+        </p>
+        <table class="directives">
+          <thead>
+            <tr>
+              <th>Directive</th>
+              <th>Surface form</th>
+              <th>Meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="code">#!</span></td>
+              <td><span class="code">fail</span></td>
+              <td>
+                An assertion the compiler must prove unreachable on every
+                interleaving.
+              </td>
+            </tr>
+            <tr>
+              <td><span class="code">#?</span></td>
+              <td><span class="code">unreachable</span></td>
+              <td>End of execution: the hart that reaches this point halts.</td>
+            </tr>
+            <tr>
+              <td><span class="code">#$ x global u32</span></td>
+              <td><span class="code">x: global u32</span></td>
+              <td>
+                Declare a variable's locality and/or type;
+                <span class="code">_</span> means "infer it for me".
+              </td>
+            </tr>
+            <tr>
+              <td><span class="code">#&amp; t0, x</span></td>
+              <td><span class="code">t0 = type(x)</span></td>
+              <td>
+                Load the address of a variable's <i>runtime type descriptor</i>.
+                Programs can inspect their own inferred types.
+              </td>
+            </tr>
+            <tr>
+              <td><span class="code">#@ 100 200 rw</span></td>
+              <td><span class="code">section 100 200 rw</span></td>
+              <td>
+                Declare a memory region the program may access (bounds may be
+                registers: an allocator declares each allocation as it makes
+                it).
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h3>How it compares</h3>
+        <p>
+          The long version, with the hard cases argued honestly, is in
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
+            ><span class="code">comparison.md</span></a
+          >. The short version:
+        </p>
+        <ul>
+          <li>
+            <b>vs Zig's <span class="code">comptime</span>:</b> concrete
+            execution is the special case of symbolic execution where every
+            value is exactly known. <span class="code">comptime</span> evaluates
+            the <i>known</i> at compile time;
+            <span class="code">formal</span> evaluates the <i>unknown</i>:
+            ranges, all interleavings, all type assignments.
+          </li>
+          <li>
+            <b>vs Rust's borrow checker:</b> the borrow checker is a fast,
+            conservative approximation of the race-freedom question;
+            <span class="code">formal</span> answers the question itself,
+            exactly. And you can still opt into borrow-checker economics by
+            building a verified <span class="code">Rc</span> whose invariant is
+            a <span class="code">fail</span> the proof discharges.
+          </li>
+          <li>
+            <b>vs Lean:</b> Lean proves anything, manually, about a model;
+            <span class="code">formal</span> proves a fixed property class,
+            automatically, about the actual machine code.
+          </li>
+          <li>
+            <b>vs Ada/SPARK</b> (the closest peer): SPARK is deductive, modular,
+            contract-driven and industrial; <span class="code">formal</span> is
+            operational, whole-program, contract-free and exhaustive: it
+            verifies the racy code SPARK's model rejects, at exponential cost.
+          </li>
+        </ul>
+        <p>
+          That cost is explicit:
+          <span class="code"
+            >O(n · h<sup>r</sup> · 2<sup>b</sup> · 8<sup>v</sup>)</span
+          >
+          (instructions × racy-interleavings × indeterminate branches ×
+          unspecified variables). The design lever is reducing the exponents
+          (keep shared mutation rare, annotate what you know); planned compiler
+          modes trade them away explicitly.
+        </p>
+      </section>
+
+      <section>
+        <h3>Where this is going</h3>
+        <p>
+          A bare-metal OS running DOOM. A bare-metal Tor node. A bare-metal web
+          server. A bare-metal hypervisor under a serverless platform. All
+          proven, all the way down: because the verifier works on the machine
+          code, there is nothing underneath it to trust. Nearer term: growing
+          the Python-like surface (it doesn't have a name yet) while keeping its
+          near-one-to-one translation, so the cost model never goes opaque.
+        </p>
+      </section>
     </main>
+
+    <footer class="container">
+      <small>
+        <a href="https://github.com/JonathanWoollett-Light/formal"
+          >github.com/JonathanWoollett-Light/formal</a
+        >
+        ·
+        <a
+          href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
+          >usage</a
+        >
+        ·
+        <a
+          href="https://github.com/JonathanWoollett-Light/formal/blob/master/CLAUDE.md"
+          >internals &amp; design notes</a
+        >
+        ·
+        <a
+          href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
+          >comparisons</a
+        >
+      </small>
+    </footer>
+    <script>
+      // Wires the theme toggle: it flips `data-theme` on <html>, persists the
+      // choice under `picoColorScheme`, animates the sun/moon icon, and follows
+      // the system scheme until the user makes an explicit choice.
+      (function () {
+        var root = document.documentElement;
+        var KEY = "picoColorScheme";
+        var prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+        var toggle = document.getElementById("theme-toggle");
+        var icon = toggle.querySelector(".icon-theme-toggle");
+
+        function stored() {
+          try {
+            var s = localStorage.getItem(KEY);
+            return s === "light" || s === "dark" ? s : null;
+          } catch (e) {
+            return null;
+          }
+        }
+
+        function apply(scheme) {
+          root.setAttribute("data-theme", scheme);
+          var dark = scheme === "dark";
+          icon.classList.toggle("moon", dark);
+          toggle.setAttribute(
+            "aria-label",
+            dark ? "Turn on light mode" : "Turn on dark mode",
+          );
+        }
+
+        apply(
+          root.getAttribute("data-theme") ||
+            (prefersDark.matches ? "dark" : "light"),
+        );
+
+        toggle.addEventListener("click", function (event) {
+          event.preventDefault();
+          var next =
+            root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+          try {
+            localStorage.setItem(KEY, next);
+          } catch (e) {}
+          apply(next);
+        });
+
+        prefersDark.addEventListener("change", function () {
+          if (!stored()) apply(prefersDark.matches ? "dark" : "light");
+        });
+      })();
+
+      // Comparison: two programs (Hello World, fannkuch-redux) x six
+      // implementations. The program tabs swap the whole row (both the formal
+      // panel on the left and the language panel on the right); the language
+      // tabs swap only the right panel. Every count/byte figure is real and
+      // measured (see the methodology note below the panels). `textContent`
+      // keeps the embedded source safe to inject.
+      (function () {
+        var RUST_BUILD =
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=";
+        var OBJDUMP = "objdump -d %s | grep -cE '^[[:space:]]+[0-9a-f]+:'";
+        var FK_FORMAL = `# fannkuch-redux for n = 5. No multiply, no register-register arithmetic,
+# no indexed addressing: every array access is a pointer walk, every reg+reg
+# combine a +/-1 loop. a5/a6/a7 hold max-flips / checksum / parity; the two
+# \`require\`s PROVE the known fannkuch(5) result (7, 11) at compile time.
+perm: thread [u32]*5
+work: thread [u32]*5
+cnt: thread [u32]*5
+
+# init perm[i] = i, cnt[i] = 0
+t0 = &perm
+t1 = 0
+t2 = 5
+while t1 != t2:
+    t0[0:4] = t1
+    t0 = t0 + 4
+    t1 = t1 + 1
+t0 = &cnt
+t1 = 0
+t3 = 0
+while t1 != t2:
+    t0[0:4] = t3
+    t0 = t0 + 4
+    t1 = t1 + 1
+a5 = 0
+a6 = 0
+a7 = 0
+a4 = 0
+
+while a4 == 0:
+    # copy perm -> work
+    t0 = &perm
+    t1 = &work
+    t2 = 0
+    t3 = 5
+    while t2 != t3:
+        t4 = t0[0:4]
+        t1[0:4] = t4
+        t0 = t0 + 4
+        t1 = t1 + 4
+        t2 = t2 + 1
+    # count flips: reverse work[0..k] until work[0] == 0
+    a0 = 0
+    t0 = &work
+    t1 = t0[0:4]
+    while t1 != 0:
+        t2 = &work
+        t3 = &work
+        t4 = 0
+        while t4 != t1:
+            t3 = t3 + 4
+            t4 = t4 + 1
+        t4 = 0
+        t5 = t1 + 0
+        while t4 < t5:
+            t1 = t2[0:4]
+            a1 = t3[0:4]
+            t2[0:4] = a1
+            t3[0:4] = t1
+            t2 = t2 + 4
+            t3 = t3 - 4
+            t4 = t4 + 1
+            t5 = t5 - 1
+        a0 = a0 + 1
+        t1 = t0[0:4]
+    # max flips, then checksum += (parity 0 ? flips : -flips), then toggle parity
+    if a0 > a5:
+        a5 = a0 + 0
+    t0 = a0 + 0
+    if a7 == 0:
+        while t0 != 0:
+            a6 = a6 + 1
+            t0 = t0 - 1
+    if a7 != 0:
+        while t0 != 0:
+            a6 = a6 - 1
+            t0 = t0 - 1
+    t0 = a7 + 0
+    a7 = 1
+    if t0 != 0:
+        a7 = 0
+    # next permutation by prefix rotation
+    a4 = 1
+    a3 = 1
+    a2 = 5
+    while a3 < a2:
+        t0 = &perm
+        t1 = t0[0:4]
+        t2 = &perm
+        t3 = 0
+        while t3 < a3:
+            t4 = t2[4:8]
+            t2[0:4] = t4
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t2[0:4] = t1
+        t2 = &cnt
+        t3 = 0
+        while t3 < a3:
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t4 = t2[0:4]
+        t4 = t4 + 1
+        t2[0:4] = t4
+        t5 = 1
+        if t4 <= a3:
+            a4 = 0
+            a3 = a2 + 0
+            t5 = 0
+        if t5 != 0:
+            t3 = 0
+            t2[0:4] = t3
+            a3 = a3 + 1
+
+# prove the known fannkuch(5) result, then exit
+t0 = 7
+require a5 == t0
+t0 = 11
+require a6 == t0
+exit(0)`;
+        var FK_C = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv){
+    int n = argc>1 ? atoi(argv[1]) : 7;
+    int perm[32], cnt[32], work[32];
+    for(int i=0;i<n;i++){ perm[i]=i; cnt[i]=0; }
+    int maxflips=0, parity=0; long checksum=0;
+    for(;;){
+        memcpy(work, perm, n*sizeof(int));
+        int flips=0, k;
+        while((k=work[0])!=0){
+            for(int i=0,j=k;i<j;i++,j--){ int t=work[i]; work[i]=work[j]; work[j]=t; }
+            flips++;
+        }
+        if(flips>maxflips) maxflips=flips;
+        checksum += parity ? -flips : flips;
+        parity ^= 1;
+        int i=1;
+        for(; i<n; i++){
+            int first=perm[0];
+            for(int j=0;j<i;j++) perm[j]=perm[j+1];
+            perm[i]=first;
+            if(++cnt[i] <= i) break;
+            cnt[i]=0;
+        }
+        if(i==n) break;
+    }
+    printf("%ld\\nPfannkuchen(%d) = %d\\n", checksum, n, maxflips);
+    return 0;
+}`;
+        var FK_CPP = `#include <iostream>
+#include <vector>
+#include <algorithm>
+int main(int argc, char **argv){
+    int n = argc>1 ? std::stoi(argv[1]) : 7;
+    std::vector<int> perm(n), cnt(n, 0), work(n);
+    for(int i=0;i<n;i++) perm[i]=i;
+    int maxflips=0, parity=0; long checksum=0;
+    for(;;){
+        work = perm;
+        int flips=0, k;
+        while((k=work[0])!=0){
+            std::reverse(work.begin(), work.begin()+k+1);
+            flips++;
+        }
+        maxflips = std::max(maxflips, flips);
+        checksum += parity ? -flips : flips;
+        parity ^= 1;
+        int i=1;
+        for(; i<n; i++){
+            int first=perm[0];
+            for(int j=0;j<i;j++) perm[j]=perm[j+1];
+            perm[i]=first;
+            if(++cnt[i] <= i) break;
+            cnt[i]=0;
+        }
+        if(i==n) break;
+    }
+    std::cout << checksum << "\\nPfannkuchen(" << n << ") = " << maxflips << "\\n";
+}`;
+        var FK_RUST = `fn main() {
+    let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(7);
+    let mut perm: Vec<usize> = (0..n).collect();
+    let mut cnt = vec![0usize; n];
+    let mut work = vec![0usize; n];
+    let mut maxflips = 0usize;
+    let mut checksum: i64 = 0;
+    let mut parity = 0u8;
+    loop {
+        work.copy_from_slice(&perm);
+        let mut flips = 0usize;
+        while work[0] != 0 {
+            let k = work[0];
+            work[0..=k].reverse();
+            flips += 1;
+        }
+        if flips > maxflips { maxflips = flips; }
+        checksum += if parity == 0 { flips as i64 } else { -(flips as i64) };
+        parity ^= 1;
+        let mut i = 1;
+        while i < n {
+            let first = perm[0];
+            for j in 0..i { perm[j] = perm[j + 1]; }
+            perm[i] = first;
+            cnt[i] += 1;
+            if cnt[i] <= i { break; }
+            cnt[i] = 0;
+            i += 1;
+        }
+        if i == n { break; }
+    }
+    println!("{}\\nPfannkuchen({}) = {}", checksum, n, maxflips);
+}`;
+        var FK_ZIG = `const std = @import("std");
+pub fn main() !void {
+    const n: usize = 7;
+    var perm: [32]usize = undefined;
+    var cnt: [32]usize = undefined;
+    var work: [32]usize = undefined;
+    var i: usize = 0;
+    while (i < n) : (i += 1) { perm[i] = i; cnt[i] = 0; }
+    var maxflips: usize = 0;
+    var checksum: i64 = 0;
+    var parity: u1 = 0;
+    while (true) {
+        std.mem.copyForwards(usize, work[0..n], perm[0..n]);
+        var flips: usize = 0;
+        while (work[0] != 0) {
+            const k = work[0];
+            std.mem.reverse(usize, work[0 .. k + 1]);
+            flips += 1;
+        }
+        if (flips > maxflips) maxflips = flips;
+        if (parity == 0) { checksum += @intCast(flips); } else { checksum -= @intCast(flips); }
+        parity ^= 1;
+        i = 1;
+        while (i < n) : (i += 1) {
+            const first = perm[0];
+            var j: usize = 0;
+            while (j < i) : (j += 1) perm[j] = perm[j + 1];
+            perm[i] = first;
+            cnt[i] += 1;
+            if (cnt[i] <= i) break;
+            cnt[i] = 0;
+        }
+        if (i == n) break;
+    }
+    const out = std.io.getStdOut().writer();
+    try out.print("{d}\\nPfannkuchen({d}) = {d}\\n", .{ checksum, n, maxflips });
+}`;
+        var FK_ADA = `with Ada.Text_IO;
+procedure Fannkuch is
+   N : constant := 7;
+   type Arr is array (0 .. N - 1) of Integer;
+   Perm, Cnt, Work : Arr;
+   Maxflips : Integer := 0;
+   Checksum : Long_Integer := 0;
+   Parity : Integer := 0;
+   Flips, K, First, I, T : Integer;
+begin
+   for J in Perm'Range loop Perm (J) := J; Cnt (J) := 0; end loop;
+   loop
+      Work := Perm;
+      Flips := 0;
+      loop
+         K := Work (0);
+         exit when K = 0;
+         declare
+            A : Integer := 0;
+            B : Integer := K;
+         begin
+            while A < B loop
+               T := Work (A); Work (A) := Work (B); Work (B) := T;
+               A := A + 1; B := B - 1;
+            end loop;
+         end;
+         Flips := Flips + 1;
+      end loop;
+      if Flips > Maxflips then Maxflips := Flips; end if;
+      if Parity = 0 then Checksum := Checksum + Long_Integer (Flips);
+      else Checksum := Checksum - Long_Integer (Flips); end if;
+      Parity := 1 - Parity;
+      I := 1;
+      while I < N loop
+         First := Perm (0);
+         for J in 0 .. I - 1 loop Perm (J) := Perm (J + 1); end loop;
+         Perm (I) := First;
+         Cnt (I) := Cnt (I) + 1;
+         exit when Cnt (I) <= I;
+         Cnt (I) := 0;
+         I := I + 1;
+      end loop;
+      exit when I = N;
+   end loop;
+   Ada.Text_IO.Put_Line (Long_Integer'Image (Checksum));
+   Ada.Text_IO.Put_Line ("Pfannkuchen(" & Integer'Image (N) & " ) =" & Integer'Image (Maxflips));
+end Fannkuch;`;
+
+        var programs = {
+          hello: {
+            formal: {
+              code: 'print("Hello World!\\n")\nexit(0)',
+              cmd: "formal new hello_world && cd hello_world\ncargo run\ngrep -cE '^    [a-z]' build/main.s",
+              count: "46",
+              bytes: "1,680",
+            },
+            rust: {
+              name: "Rust",
+              count: "4,562",
+              bytes: "26,720",
+              code: 'fn main() {\n    println!("Hello World!");\n}',
+              cmd:
+                "cargo new hw && cd hw\necho 'fn main() { println!(\"Hello World!\"); }' > src/main.rs\n" +
+                RUST_BUILD +
+                "\n" +
+                OBJDUMP.replace(
+                  "%s",
+                  "target/x86_64-unknown-linux-musl/release/hw",
+                ),
+            },
+            c: {
+              name: "C",
+              count: "971",
+              bytes: "13,552",
+              code: '#include <stdio.h>\n\nint main(void) {\n    printf("Hello World!\\n");\n}',
+              cmd: `cat > h.c <<'EOF'\n#include <stdio.h>\nint main(void) { printf("Hello World!\\n"); return 0; }\nEOF\nmusl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o h h.c\n${OBJDUMP.replace("%s", "h")}`,
+            },
+            cpp: {
+              name: "C++",
+              count: "287,893",
+              bytes: "1,448,584",
+              code: '#include <iostream>\n\nint main() {\n    std::cout << "Hello World!\\n";\n}',
+              cmd: `cat > h.cpp <<'EOF'\n#include <iostream>\nint main() { std::cout << "Hello World!\\n"; }\nEOF\ng++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o h h.cpp\n${OBJDUMP.replace("%s", "h")}`,
+            },
+            zig: {
+              name: "Zig",
+              count: "1,238",
+              bytes: "10,016",
+              code: 'const std = @import("std");\n\npub fn main() void {\n    std.debug.print("Hello World!\\n", .{});\n}',
+              cmd: `cat > h.zig <<'EOF'\nconst std = @import("std");\npub fn main() void { std.debug.print("Hello World!\\n", .{}); }\nEOF\nzig build-exe h.zig -O ReleaseSmall\n${OBJDUMP.replace("%s", "h")}`,
+            },
+            ada: {
+              name: "Ada",
+              count: "223,978",
+              bytes: "1,164,576",
+              code: 'with Ada.Text_IO;\n\nprocedure Hello is\nbegin\n   Ada.Text_IO.Put_Line ("Hello World!");\nend Hello;',
+              cmd: `cat > hello.adb <<'EOF'\nwith Ada.Text_IO;\nprocedure Hello is\nbegin\n   Ada.Text_IO.Put_Line ("Hello World!");\nend Hello;\nEOF\ngnatmake -O2 hello.adb -largs -static\n${OBJDUMP.replace("%s", "hello")}`,
+            },
+          },
+          fannkuch: {
+            formal: {
+              code: FK_FORMAL,
+              cmd: "cargo run\ngrep -cE '^    [a-z]' build/main.s",
+              count: "119",
+              bytes: "1,088",
+            },
+            rust: {
+              name: "Rust",
+              count: "6,513",
+              bytes: "39,008",
+              code: FK_RUST,
+              cmd:
+                RUST_BUILD +
+                "\n" +
+                OBJDUMP.replace(
+                  "%s",
+                  "target/x86_64-unknown-linux-musl/release/fk",
+                ),
+            },
+            c: {
+              name: "C",
+              count: "3,115",
+              bytes: "21,744",
+              code: FK_C,
+              cmd:
+                "musl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o fk fannkuch.c\n" +
+                OBJDUMP.replace("%s", "fk"),
+            },
+            cpp: {
+              name: "C++",
+              count: "288,700",
+              bytes: "1,452,680",
+              code: FK_CPP,
+              cmd:
+                "g++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o fk fannkuch.cpp\n" +
+                OBJDUMP.replace("%s", "fk"),
+            },
+            zig: {
+              name: "Zig",
+              count: "1,541",
+              bytes: "11,200",
+              code: FK_ZIG,
+              cmd:
+                "zig build-exe fannkuch.zig -O ReleaseSmall -femit-bin=fk\n" +
+                OBJDUMP.replace("%s", "fk"),
+            },
+            ada: {
+              name: "Ada",
+              count: "223,824",
+              bytes: "1,160,368",
+              code: FK_ADA,
+              cmd:
+                "gnatmake -Os fannkuch.adb -largs -static -Wl,--gc-sections\nstrip fannkuch\n" +
+                OBJDUMP.replace("%s", "fannkuch"),
+            },
+          },
+        };
+
+        var langTabs = document.querySelectorAll(".lang-tabs button");
+        var progTabs = document.querySelectorAll(".prog-tabs button");
+        var formalCode = document.getElementById("formal-code");
+        var formalCmd = document.getElementById("formal-cmd");
+        var formalCount = document.getElementById("formal-count");
+        var formalBytes = document.getElementById("formal-bytes");
+        var nameEl = document.getElementById("lang-name");
+        var codeEl = document.getElementById("lang-code");
+        var cmdEl = document.getElementById("lang-cmd");
+        var countEl = document.getElementById("lang-count");
+        var bytesEl = document.getElementById("lang-bytes");
+        var bytesWrapEl = document.getElementById("lang-bytes-wrap");
+        var curProg = "hello";
+        var curLang = "rust";
+
+        function renderFormal() {
+          var f = programs[curProg].formal;
+          formalCode.textContent = f.code;
+          formalCmd.textContent = f.cmd;
+          formalCount.textContent = f.count;
+          formalBytes.textContent = f.bytes;
+        }
+        function renderLang() {
+          var d = programs[curProg][curLang];
+          if (!d) return;
+          nameEl.textContent = d.name;
+          codeEl.textContent = d.code;
+          cmdEl.textContent = d.cmd;
+          countEl.textContent = d.count;
+          bytesEl.textContent = d.bytes || "";
+          bytesWrapEl.style.display = d.bytes ? "" : "none";
+          langTabs.forEach(function (t) {
+            t.setAttribute(
+              "aria-selected",
+              t.dataset.lang === curLang ? "true" : "false",
+            );
+          });
+        }
+
+        langTabs.forEach(function (t) {
+          t.addEventListener("click", function () {
+            curLang = t.dataset.lang;
+            renderLang();
+            equalizeHeights();
+          });
+        });
+        progTabs.forEach(function (t) {
+          t.addEventListener("click", function () {
+            curProg = t.dataset.prog;
+            progTabs.forEach(function (p) {
+              p.setAttribute(
+                "aria-selected",
+                p.dataset.prog === curProg ? "true" : "false",
+              );
+            });
+            renderFormal();
+            renderLang();
+            equalizeHeights();
+          });
+        });
+
+        // Fix both code blocks to the tallest *Hello World* sample, so the code
+        // window is the same size for every program: a longer program
+        // (fannkuch-redux) scrolls within it rather than resizing the row when
+        // you switch programs. A fixed `height` (not `min-height`) keeps it from
+        // growing toward `max-height` when the content is tall. Re-run on resize
+        // (column width changes wrapping).
+        var pres = document.querySelectorAll(".compare pre.asm");
+        function equalizeHeights() {
+          // Reset so `scrollHeight` reflects the natural content height.
+          pres.forEach(function (p) {
+            p.style.height = "auto";
+            p.style.minHeight = "0";
+          });
+          var tallest = 0;
+          var ref = programs.hello;
+          Object.keys(ref).forEach(function (key) {
+            codeEl.textContent = ref[key].code;
+            tallest = Math.max(tallest, codeEl.parentElement.scrollHeight);
+          });
+          pres.forEach(function (p) {
+            p.style.height = tallest + "px";
+          });
+          renderFormal();
+          renderLang();
+        }
+        renderFormal();
+        equalizeHeights();
+        var resizeTimer;
+        window.addEventListener("resize", function () {
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(equalizeHeights, 150);
+        });
+      })();
+    </script>
   </body>
 </html>

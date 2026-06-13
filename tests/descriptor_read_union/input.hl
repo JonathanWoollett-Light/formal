@@ -1,0 +1,16 @@
+# Hart 0 reads the descriptor type-number (bytes 0..8); hart 1 reads its
+# length (bytes 16..24). The accessed ranges are the union over all harts
+# and paths, so both fields survive in `.data` with padding between them.
+welcome: _ [u8, u8]
+t0 = csr(mhartid)
+if t0 == 0:
+    t1 = type(welcome)
+    t5 = 0
+    t2 = t1[0:8]
+if t0 != 0:
+    t1 = type(welcome)
+    t5 = 0
+    t2 = t1[16:24]
+asm:
+    wfi
+unreachable

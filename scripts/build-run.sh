@@ -4,7 +4,7 @@
 #
 # The crate verifies + optimizes each example program and lowers it to a complete,
 # runnable RISC-V program (with the `.data`/`.bss` sections the verifier inferred)
-# under `target/gen/<name>.s` — written when you run `cargo test` (the
+# under `target/gen/<name>.s`, written when you run `cargo test` (the
 # racy_increment/racy_store_*/uart_hello tests also boot these in QEMU
 # themselves). This script rebuilds and boots them by hand with the RISC-V GNU
 # toolchain + QEMU.
@@ -29,7 +29,7 @@ LD="${LD:-$RISCV/riscv64-unknown-elf-ld}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 
 if [ ! -d "$GEN" ]; then
-    echo "No $GEN — generate it first: cargo test" >&2
+    echo "No $GEN; generate it first: cargo test" >&2
     exit 1
 fi
 
@@ -37,7 +37,7 @@ for s in "$GEN"/racy_increment.s "$GEN"/racy_store_inferred.s "$GEN"/racy_store_
     name="$(basename "$s" .s)"
     "$AS" -o "$GEN/$name.o" "$s"
     # QEMU `virt` loads `-kernel` at 0x80000000 (RAM) with `-bios none`.
-    # `--no-relax`: keep `la` PC-relative — a bare-metal program has no `gp`, so
+    # `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp`, so
     # the global-pointer relaxation the linker would otherwise apply produces a
     # bad address.
     "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$GEN/$name.elf" "$GEN/$name.o"

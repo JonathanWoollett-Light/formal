@@ -1,0 +1,6 @@
+# A load from a region declared write-only is rejected as `Invalid`.
+section 0x80100000 0x80100004 w
+t0 = 0x80100000
+t5 = 0
+t1 = t0[0:4]
+unreachable

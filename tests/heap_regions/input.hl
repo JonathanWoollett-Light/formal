@@ -1,0 +1,16 @@
+# Heap accesses through `#@` region declarations. The first region is
+# declared with immediate bounds and accessed at a non-zero offset; the
+# second through registers, the way an allocator would declare each
+# allocation just before returning its pointer, and is exactly as wide as
+# the store that hits it.
+section 0x80100000 0x80100008 rw
+t0 = 0x80100000
+t1 = 42
+t0[4:8] = t1
+t2 = t0[4:8]
+t3 = 0x80200000
+t4 = 0x80200004
+section t3 t4 rw
+t3[0:4] = t1
+t5 = t3[0:4]
+unreachable

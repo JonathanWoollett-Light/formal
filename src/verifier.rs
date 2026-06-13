@@ -21,12 +21,10 @@ use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::iter::once;
 use std::ops::ControlFlow;
 use std::ptr::null_mut;
 use std::{collections::VecDeque, ptr::NonNull};
 use thiserror::Error;
-use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
@@ -159,7 +157,7 @@ pub struct Explorerer {
     /// Program configurations that have been found to be invalid.
     #[cfg(debug_assertions)]
     pub excluded: BTreeSet<TypeConfiguration>,
-    /// Pointer to the first AST node — verification (and execution) starts from the
+    /// Pointer to the first AST node: verification (and execution) starts from the
     /// first line of the program (there is no explicit `.global`/`_start:` entry).
     pub start_ptr: NonNull<AstNode>,
     /// The different systems configurations to verify.
@@ -175,7 +173,7 @@ pub struct Explorerer {
     /// The byte ranges of each memory region the program accesses at **runtime**,
     /// unioned over every replayed path (see [`AccessedRanges`]). Like `touched`,
     /// this only ever grows (entries from since-abandoned configurations remain),
-    /// so it over-approximates the final program's accesses — sound for dead-data
+    /// so it over-approximates the final program's accesses, sound for dead-data
     /// elimination, which must never drop a byte any path could read.
     pub accessed: AccessedRanges,
     /// Per-node pointer-arithmetic transitions, unioned over every replayed path
@@ -188,6 +186,15 @@ pub struct Explorerer {
     /// Nodes that must keep their original immediate (they also executed with a
     /// raw address, scalar operand, or range offset). Grows like `accessed`.
     pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
+    /// Cached [`State`] per live leaf: the state *before* the leaf's
+    /// `prev.node` executes. The tree only extends at leaves, so `queue_up`
+    /// derives each successor's state incrementally (parent state + one
+    /// [`apply_node`]) instead of replaying the whole path per step; the
+    /// `find_state` replay remains the fallback after backtracking, which
+    /// clears this cache (the configuration changed and leaves were rebuilt).
+    /// Keyed by leaf pointer; only ever probed per-leaf, never iterated, so the
+    /// pointer ordering is unobservable (same rule as `touched`/`jumped`).
+    state_cache: BTreeMap<*mut VerifierLeafNode, State>,
     // When a variable is 1st encountered in a path it is added here with an iterator over all the
     // possible types, then a type is set in the configuration by calling `.next` on this iterator.
     //
@@ -222,7 +229,7 @@ impl Explorerer {
             ));
         }
 
-        // Execution starts from the first line of the program (like Python — there
+        // Execution starts from the first line of the program (like Python: there
         // is no explicit `.global`/`_start:` entry; the runnable entry point is added
         // later, by codegen, to the program the verifier emits).
         let start_ptr = ast.internal("new: the AST is empty")?;
@@ -285,6 +292,7 @@ impl Explorerer {
             transitions: Default::default(),
             uncompactable: Default::default(),
             pinned_nodes: Default::default(),
+            state_cache: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
             counter: 0,
@@ -301,32 +309,33 @@ impl Explorerer {
             transitions: Default::default(),
             uncompactable: Default::default(),
             pinned_nodes: Default::default(),
+            state_cache: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
         };
         Ok(x)
     }
 
-    /// Merges the accessed-ranges, pointer transitions and uncompactable set a
-    /// replayed [`State`] recorded into the unions kept across all explored
-    /// paths (see [`AccessedRanges`]/[`AccessTransitions`]). Set union is
-    /// idempotent, so merging the same replayed prefix repeatedly is harmless.
-    fn merge_accessed(&mut self, state: &State) {
-        for (label, ranges) in &state.accessed {
-            self.accessed
-                .entry(label.clone())
-                .or_default()
-                .extend(ranges.iter().copied());
+    /// The [`State`] at `leaf` (before its `prev.node` executes): the cached
+    /// one, or (after backtracking cleared the cache) rebuilt by replaying
+    /// the path (`find_state`) and cached.
+    unsafe fn state_for(&mut self, leaf: *mut VerifierLeafNode) -> Result<&State, CompilerError> {
+        if !self.state_cache.contains_key(&leaf) {
+            let state = find_state(
+                leaf,
+                &self.configuration,
+                &mut RecordSinks {
+                    accessed: &mut self.accessed,
+                    transitions: &mut self.transitions,
+                    uncompactable: &mut self.uncompactable,
+                    pinned_nodes: &mut self.pinned_nodes,
+                },
+            )?;
+            self.state_cache.insert(leaf, state);
         }
-        for (node, edges) in &state.transitions {
-            self.transitions
-                .entry(*node)
-                .or_default()
-                .extend(edges.iter().cloned());
-        }
-        self.uncompactable
-            .extend(state.uncompactable.iter().cloned());
-        self.pinned_nodes.extend(state.pinned_nodes.iter().copied());
+        self.state_cache
+            .get(&leaf)
+            .internal("state_for: just-inserted state missing")
     }
 
     // Advance the verifier by one instruction.
@@ -419,6 +428,9 @@ impl Explorerer {
             | Instruction::Beqz(_)
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
+            // `ecall` is the boundary to the host/OS; the verifier does not
+            // model the call's effect, so it cannot itself be invalid.
+            | Instruction::Ecall(_)
             | Instruction::Beq(_)
             | Instruction::J(_)
             // `#@` cannot itself be invalid; its effect (declaring a section) is
@@ -527,9 +539,11 @@ impl Explorerer {
     /// different type infomation).
     /// 1. Pop most recently encountered variable.
     /// 2. De-allocate all nodes below
-    pub unsafe fn outer_invalid_path(
-        mut self,
-    ) -> Result<ExplorePathResult, CompilerError> {
+    pub unsafe fn outer_invalid_path(mut self) -> Result<ExplorePathResult, CompilerError> {
+        // Backtracking deallocates leaves and retries the most recent variable
+        // under a different type: every cached per-leaf state is stale (or
+        // dangling), so drop them all; survivors are rebuilt lazily by replay.
+        self.state_cache.clear();
         // Deallocate nodes up to the 1st occurence of the most recently encountered variable.
         // If there is an invalid path without any variables defined, then there is no possible
         // valid path.
@@ -591,8 +605,8 @@ impl Explorerer {
         // This MUST keep a deterministic order. Keying by the raw `*mut VerifierNode`
         // (e.g. a `BTreeMap<*mut VerifierNode, _>`) would order by allocation address,
         // which varies run-to-run and would make the order in which we re-queue the
-        // replacement leaves below — and hence the whole exploration order and total
-        // step count — non-deterministic. Iterating `self.queue` (itself in deterministic
+        // replacement leaves below (and hence the whole exploration order and total
+        // step count) non-deterministic. Iterating `self.queue` (itself in deterministic
         // order) and keeping first-insertion order keeps this deterministic.
         let mut encounters: Vec<(*mut VerifierNode, BTreeMap<Label, *mut VerifierNode>)> =
             Vec::new();
@@ -634,7 +648,7 @@ impl Explorerer {
             let root = encounter_ref.root;
             // If the variable was first encountered at the very first instruction, its
             // encounter node is part of the initial chain (all harts still at the
-            // start), so there is no preceding per-hart structure to walk back through —
+            // start), so there is no preceding per-hart structure to walk back through;
             // the replacement is a fresh initial chain. Otherwise re-attach a leaf after
             // the encounter's predecessor node.
             let current_opt = if encounter_ref.node == start_ptr {
@@ -642,7 +656,11 @@ impl Explorerer {
             } else {
                 encounter_ref.prev.branch().copied()
             };
-            let harts = root.as_ref().internal("invalid_path: null root")?.configuration.harts;
+            let harts = root
+                .as_ref()
+                .internal("invalid_path: null root")?
+                .configuration
+                .harts;
 
             // De-allocate the 1st encounter for this variable and its subtree.
             let mut stack = vec![encounter_ptr];
@@ -653,7 +671,7 @@ impl Explorerer {
                         dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>())
                     }
                 }
-                // `next` is a `VerifierNode` (not a leaf) — free it with its own layout.
+                // `next` is a `VerifierNode` (not a leaf): free it with its own layout.
                 dealloc(next.cast(), Layout::new::<VerifierNode>());
             }
 
@@ -685,7 +703,7 @@ impl Explorerer {
                         .next = InnerNextVerifierNode::Leaf(new_leaf);
                     new_leaf
                 }
-                // The encounter was the very first instruction — rebuild the initial
+                // The encounter was the very first instruction: rebuild the initial
                 // chain from the root.
                 None => build_initial_chain(root, start_ptr, variable_encounters)?,
             };
@@ -742,7 +760,7 @@ impl Explorerer {
             }
             // A thread-local has one copy per hart that touches it: a re-encounter
             // (possibly on a *different* hart) must record that this hart needs a
-            // copy too — `State::new` seeds one `.bss` entry per recorded hart, and
+            // copy too: `State::new` seeds one `.bss` entry per recorded hart, and
             // without this a second hart's access would find no memory behind its
             // `MemoryLabel::Thread { hart }` and die with an internal error.
             if *existing_locality == Locality::Thread {
@@ -838,8 +856,7 @@ impl Explorerer {
         type_size: u64,
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
         // Collect the state.
-        let state = find_state(leaf_ptr, &self.configuration)?;
-        self.merge_accessed(&state);
+        let state = self.state_for(leaf_ptr)?.clone();
 
         // Check the destination is valid.
         match state.registers[branch.borrow().hart as usize].get(to) {
@@ -877,7 +894,7 @@ impl Explorerer {
                         // Record this store's own bytes directly: `find_state` replays
                         // exclude the instruction being processed, so a store whose
                         // successors all halt (`#?`) would otherwise never enter
-                        // `accessed` — and dead-data elimination would elide bytes the
+                        // `accessed`, and dead-data elimination would elide bytes the
                         // emitted program still writes at runtime.
                         let start_offset = from_offset
                             .clone()
@@ -984,8 +1001,7 @@ impl Explorerer {
         type_size: u64,
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
         // Collect the state.
-        let state = find_state(leaf_ptr, &self.configuration)?;
-        self.merge_accessed(&state);
+        let state = self.state_for(leaf_ptr)?.clone();
 
         // Check the destination is valid.
         match state.registers[branch.borrow().hart as usize].get(from) {
@@ -1023,7 +1039,7 @@ impl Explorerer {
                         // Record this load's own bytes directly: `find_state` replays
                         // exclude the instruction being processed, so a load whose
                         // successors all halt (`#?`) would otherwise never enter
-                        // `accessed` — and dead-data elimination would elide bytes the
+                        // `accessed`, and dead-data elimination would elide bytes the
                         // emitted program still reads at runtime.
                         let start_offset = from_offset
                             .clone()
@@ -1053,7 +1069,7 @@ impl Explorerer {
                 }
             }
             // For accesses to main memory (raw addresses), every access must be
-            // verifiable as safe: the load must fall within a described section —
+            // verifiable as safe: the load must fall within a described section,
             // one from the system configuration or one declared by `#@`.
             Some(MemoryValue::I64(x)) => {
                 let start = x
@@ -1120,15 +1136,24 @@ impl Explorerer {
     /// if its racy, we look at the 2nd hart and queue it up if its not racy,
     /// if its racy we look at the 3rd hart etc. If all next nodes are racy, we queue
     /// up all racy instructions (since we need to evaluate all the possible ordering of them).
-    unsafe fn queue_up(
-        &mut self,
-        leaf_ptr: *mut VerifierLeafNode,
-    ) -> Result<(), CompilerError> {
-        // TOOD We duplicate so much work doing `find_state` in a bunch of places and
-        // multiple times when the state hasn't change, we should avoid doing this call
-        // here (and remove it in other places too).
-        let state = find_state(leaf_ptr, &self.configuration)?;
-        self.merge_accessed(&state);
+    unsafe fn queue_up(&mut self, leaf_ptr: *mut VerifierLeafNode) -> Result<(), CompilerError> {
+        // The state *before* this step's instruction executes: take the cached
+        // one (populating it via replay only after a backtrack cleared the
+        // cache). Taken by value: the successor states derived below replace
+        // this leaf's entry.
+        let state = match self.state_cache.remove(&leaf_ptr) {
+            Some(state) => state,
+            None => find_state(
+                leaf_ptr,
+                &self.configuration,
+                &mut RecordSinks {
+                    accessed: &mut self.accessed,
+                    transitions: &mut self.transitions,
+                    uncompactable: &mut self.uncompactable,
+                    pinned_nodes: &mut self.pinned_nodes,
+                },
+            )?,
+        };
         let queue = &mut self.queue;
         let jumped = &mut self.jumped;
         let leaf = leaf_ptr.as_mut().internal("queue_up: null leaf")?;
@@ -1136,7 +1161,12 @@ impl Explorerer {
         // Search the verifier tree for the fronts of all harts.
         let mut fronts = BTreeMap::new();
         let mut current = leaf.prev.as_ref().internal("queue_up: null leaf prev")?;
-        let harts = current.root.as_ref().internal("queue_up: null root")?.configuration.harts;
+        let harts = current
+            .root
+            .as_ref()
+            .internal("queue_up: null root")?
+            .configuration
+            .harts;
         fronts.insert(current.hart, current.node);
         #[cfg(debug_assertions)]
         let mut check = (0..1000).into_iter();
@@ -1160,9 +1190,7 @@ impl Explorerer {
         // );
 
         type Followup = Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>>;
-        let followup = |node: NonNull<AstNode>,
-                        hart: u8|
-         -> Result<Followup, CompilerError> {
+        let followup = |node: NonNull<AstNode>, hart: u8| -> Result<Followup, CompilerError> {
             let instruction = &node.as_ref().as_ref().this;
             Ok(match instruction {
                 // Non-racy.
@@ -1180,10 +1208,13 @@ impl Explorerer {
                 | Instruction::Bge(_)
                 | Instruction::Fail(_)
                 | Instruction::Beq(_)
+                // `ecall` has no verifier-modeled effect, so its ordering
+                // against other harts is unobservable here: non-racy.
+                | Instruction::Ecall(_)
                 | Instruction::J(_) => Some(Err((hart, node))),
                 // `#@` is racy: a region only becomes accessible once its declaration
                 // executes, so its order relative to other harts' raw accesses is
-                // observable — collapsing it would skip the (invalid) interleavings
+                // observable; collapsing it would skip the (invalid) interleavings
                 // where another hart's access precedes the declaration it needs.
                 Instruction::Region(_) => Some(Ok((hart, node))),
                 // Possibly racy.
@@ -1314,7 +1345,10 @@ impl Explorerer {
                             }
                             Some(RangeOrdering::Equal) => {
                                 trace!("bne no jump");
-                                followup(node_ref.next.internal("queue_up: bne has no next")?, hart)?
+                                followup(
+                                    node_ref.next.internal("queue_up: bne has no next")?,
+                                    hart,
+                                )?
                             }
                             _ => {
                                 return Err(CompilerError::Unsupported(
@@ -1334,7 +1368,7 @@ impl Explorerer {
                         match src {
                             MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
                                 RangeScalarOrdering::Within => {
-                                    if imm.eq(&0) {
+                                    if RangeType::eq(imm, &0) {
                                         followup(
                                             node_ref.next.internal("queue_up: bnez has no next")?,
                                             hart,
@@ -1354,7 +1388,7 @@ impl Explorerer {
                             },
                             MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
                                 RangeScalarOrdering::Within => {
-                                    if imm.eq(&0) {
+                                    if RangeType::eq(imm, &0) {
                                         followup(
                                             node_ref.next.internal("queue_up: bnez has no next")?,
                                             hart,
@@ -1362,6 +1396,71 @@ impl Explorerer {
                                     } else {
                                         return Err(CompilerError::Unsupported(
                                             "queue_up: indeterminate bnez (u8)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            // The wider integer types (`li`/`addi` produce `I64`
+                            // registers, 4-byte loads `U32`): determinate when the
+                            // range is exactly zero (fall through) or entirely
+                            // nonzero (jump); a range straddling zero is
+                            // indeterminate, like the `U8`/`I8` arms above.
+                            MemoryValue::U32(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (u32)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::U64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (u64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::I64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (i64)".to_string(),
                                         ));
                                     }
                                 }
@@ -1403,7 +1502,7 @@ impl Explorerer {
                         match src {
                             MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
                                 RangeScalarOrdering::Within => {
-                                    if imm.eq(&0) {
+                                    if RangeType::eq(imm, &0) {
                                         jumped.insert(node);
                                         let label_node = find_label(node, label)
                                             .internal("queue_up: beqz target not found")?;
@@ -1414,14 +1513,16 @@ impl Explorerer {
                                         ));
                                     }
                                 }
-                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => followup(
-                                    node_ref.next.internal("queue_up: beqz has no next")?,
-                                    hart,
-                                )?,
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
                             },
                             MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
                                 RangeScalarOrdering::Within => {
-                                    if imm.eq(&0) {
+                                    if RangeType::eq(imm, &0) {
                                         jumped.insert(node);
                                         let label_node = find_label(node, label)
                                             .internal("queue_up: beqz target not found")?;
@@ -1432,10 +1533,75 @@ impl Explorerer {
                                         ));
                                     }
                                 }
-                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => followup(
-                                    node_ref.next.internal("queue_up: beqz has no next")?,
-                                    hart,
-                                )?,
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            // Wider integer types, mirroring the `U8`/`I8` arms:
+                            // jump when the range is exactly zero, fall through
+                            // when entirely nonzero, indeterminate if it straddles.
+                            MemoryValue::U32(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (u32)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::U64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (u64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::I64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (i64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
                             },
                             MemoryValue::Csr(CsrValue::Mhartid) => {
                                 if hart == 0 {
@@ -1471,9 +1637,10 @@ impl Explorerer {
                                     .internal("queue_up: bge target not found")?;
                                 followup(label_node, hart)?
                             }
-                            Some(RangeOrdering::Less) => {
-                                followup(node_ref.next.internal("queue_up: bge has no next")?, hart)?
-                            }
+                            Some(RangeOrdering::Less) => followup(
+                                node_ref.next.internal("queue_up: bge has no next")?,
+                                hart,
+                            )?,
                             _ => {
                                 return Err(CompilerError::Unsupported(
                                     "queue_up: indeterminate bge comparison".to_string(),
@@ -1501,13 +1668,18 @@ impl Explorerer {
                     | Instruction::Lw(_)
                     | Instruction::Lb(_)
                     | Instruction::Fail(_)
-                    | Instruction::Region(_) => {
-                        followup(node_ref.next.internal("queue_up: instruction has no next")?, hart)?
-                    }
+                    | Instruction::Ecall(_)
+                    | Instruction::Region(_) => followup(
+                        node_ref
+                            .next
+                            .internal("queue_up: instruction has no next")?,
+                        hart,
+                    )?,
                     // See note on `wfi`.
-                    Instruction::Wfi(_) => {
-                        Some(Ok((hart, node_ref.next.internal("queue_up: wfi has no next")?)))
-                    }
+                    Instruction::Wfi(_) => Some(Ok((
+                        hart,
+                        node_ref.next.internal("queue_up: wfi has no next")?,
+                    ))),
                     // Blocking.
                     Instruction::Unreachable(_) => None,
                     x => {
@@ -1539,6 +1711,23 @@ impl Explorerer {
         //         ))
         // );
 
+        // Derive the successor leaves' state: this step's instruction applied
+        // once to the pre-state (every successor shares the same new prefix).
+        // This is what makes a step O(1) in path depth; the replay in
+        // `find_state` is only the post-backtrack fallback.
+        let mut successor_state = state;
+        apply_node(
+            &mut successor_state,
+            leaf.prev.as_ref().internal("queue_up: null leaf prev")?,
+            &self.configuration,
+            &mut RecordSinks {
+                accessed: &mut self.accessed,
+                transitions: &mut self.transitions,
+                uncompactable: &mut self.uncompactable,
+                pinned_nodes: &mut self.pinned_nodes,
+            },
+        )?;
+
         // TODO Currently these does breadth first search by pushing to the back of the queue. It would be more
         // efficient to do depth first search (since this is more likely to hit invalid paths earlier). I remember
         // there was a reason this needed to push to back and be breadth first (but can't remember specifics), try
@@ -1558,6 +1747,7 @@ impl Explorerer {
                 leaf.prev = new_branch;
                 branch.next = InnerNextVerifierNode::Branch(vec![new_branch]);
 
+                self.state_cache.insert(leaf_ptr, successor_state);
                 queue.push_back(leaf_ptr);
             }
             // If all nodes where racy, enqueue these nodes.
@@ -1611,6 +1801,9 @@ impl Explorerer {
                         })
                         .collect::<Vec<_>>()
                 );
+                for &new_leaf in &new_leaves {
+                    self.state_cache.insert(new_leaf, successor_state.clone());
+                }
                 trace!("queue before racy: {:?}", queue);
                 queue.extend(new_leaves);
                 trace!("queue after racy: {:?}", queue);
@@ -1631,7 +1824,7 @@ impl Drop for Explorerer {
                 dealloc(system.cast(), Layout::new::<VerifierConfiguration>());
             }
             #[cfg(debug_assertions)]
-            let mut check = (0..100_000).into_iter();
+            let mut check = (0..100_000_000).into_iter();
             while let Some(current) = stack.pop() {
                 debug_assert!(check.next().is_some());
                 match &(*current).next {
@@ -1683,17 +1876,16 @@ impl ExplorePathResult {
 /// die without diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CompilerError {
-    /// A construct the verifier does not (yet) support — previously a `todo!` /
+    /// A construct the verifier does not (yet) support: previously a `todo!` /
     /// `unimplemented!`. The string identifies the unsupported construct.
     #[error("unsupported construct: {0}")]
     Unsupported(String),
-    /// An internal invariant the verifier relies on did not hold — previously an
+    /// An internal invariant the verifier relies on did not hold: previously an
     /// `unwrap` / `expect` / `panic!` / `unreachable!`. The string describes the
     /// invariant that was violated.
     #[error("internal invariant violated: {0}")]
     Internal(String),
 }
-
 
 use std::fmt;
 impl fmt::Debug for Explorerer {
@@ -1730,7 +1922,7 @@ pub struct ValidPathResult {
     /// under-determined offset no single immediate rewrite can re-point).
     pub uncompactable: BTreeSet<Label>,
     /// Nodes that must keep their original immediate: they also executed with
-    /// a raw address, scalar operand, or range offset — executions invisible to
+    /// a raw address, scalar operand, or range offset, executions invisible to
     /// `transitions` that a rewrite would silently corrupt. Compaction demotes
     /// any region that would require rewriting a pinned node.
     pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
@@ -1769,7 +1961,7 @@ pub enum InvalidExplanation {
 /// (`root -> hart_{h-1} -> … -> hart_0 -> leaf`), returning the leaf with the given
 /// `variable_encounters`. Used to seed exploration in [`Explorerer::new`] and to
 /// recreate it in `invalid_path` when a backtracked variable was first encountered
-/// at the very first instruction — so its encounter node directly followed the root
+/// at the very first instruction, so its encounter node directly followed the root
 /// and there is no predecessor node to re-attach to. Overwrites `root.next`.
 unsafe fn build_initial_chain(
     root: *mut VerifierConfiguration,
@@ -1814,18 +2006,25 @@ unsafe fn build_initial_chain(
 }
 
 // Get the number of harts of this sub-tree and record the path.
-unsafe fn get_backpath_harts(
-    prev: *mut VerifierLeafNode,
-) -> Result<Vec<usize>, CompilerError> {
-    let mut current = prev.as_ref().internal("get_backpath_harts: null leaf")?.prev;
+unsafe fn get_backpath_harts(prev: *mut VerifierLeafNode) -> Result<Vec<usize>, CompilerError> {
+    let mut current = prev
+        .as_ref()
+        .internal("get_backpath_harts: null leaf")?
+        .prev;
     let mut record = Vec::new();
     #[cfg(debug_assertions)]
     let mut check = (0..1000).into_iter();
-    while let PrevVerifierNode::Branch(branch) =
-        current.as_ref().internal("get_backpath_harts: null node")?.prev
+    while let PrevVerifierNode::Branch(branch) = current
+        .as_ref()
+        .internal("get_backpath_harts: null node")?
+        .prev
     {
         debug_assert!(check.next().is_some());
-        let r = match &branch.as_ref().internal("get_backpath_harts: null branch")?.next {
+        let r = match &branch
+            .as_ref()
+            .internal("get_backpath_harts: null branch")?
+            .next
+        {
             InnerNextVerifierNode::Branch(branches) => branches
                 .iter()
                 .position(|&x| x == current)
@@ -1888,23 +2087,28 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     None
 }
 
+/// Mutable borrows of the explorer's global, monotone proof-record unions,
+/// threaded into state application. Bookkeeping only: never read during
+/// exploration (that would couple step order to bookkeeping and could break
+/// determinism).
+pub struct RecordSinks<'a> {
+    pub accessed: &'a mut AccessedRanges,
+    pub transitions: &'a mut AccessTransitions,
+    pub uncompactable: &'a mut BTreeSet<Label>,
+    pub pinned_nodes: &'a mut BTreeSet<NonNull<AstNode>>,
+}
+
+/// Rebuilds the [`State`] at `leaf` (the state *before* its `prev.node`
+/// executes) by replaying the whole path from the root. This is the slow
+/// fallback used after backtracking invalidates the per-leaf cache; steady
+/// exploration instead extends states incrementally (one [`apply_node`] per
+/// step) in `queue_up`. Replay re-records accesses/transitions into `sinks`;
+/// the unions are idempotent, so that is harmless.
 unsafe fn find_state(
     leaf: *mut VerifierLeafNode, // The leaf to finish at.
     configuration: &TypeConfiguration,
+    sinks: &mut RecordSinks,
 ) -> Result<State, CompilerError> {
-    // info!(
-    //     "find_state for {:?} up to {:?}",
-    //     leaf.as_ref()
-    //         .unwrap()
-    //         .prev
-    //         .as_ref()
-    //         .unwrap()
-    //         .root
-    //         .as_ref()
-    //         .unwrap(),
-    //     leaf.as_ref().unwrap().prev.as_ref().unwrap().node.as_ref()
-    // );
-
     let record = get_backpath_harts(leaf)?;
     let root = leaf
         .as_ref()
@@ -1913,215 +2117,17 @@ unsafe fn find_state(
         .as_ref()
         .internal("find_state: null leaf prev")?
         .root;
-    let system = &root.as_ref().internal("find_state: null root")?.configuration;
-
-    // Iterator to generate unique labels.
-    const N: u8 = b'z' - b'a';
-    let mut tag_iter = (0..)
-        .map(|index| Label {
-            tag: once('_')
-                .chain((0..index / N).map(|_| 'z'))
-                .chain(once(char::from((index % N) + b'a')))
-                .collect::<String>(),
-        })
-        .peekable();
+    let system = &root
+        .as_ref()
+        .internal("find_state: null root")?
+        .configuration;
 
     // Iterate forward to find the values.
     let mut state = State::new(system, configuration);
     let mut current = root.as_ref().internal("find_state: null root")?.next;
     for next in record.iter().rev() {
         let vnode = current.as_ref().internal("find_state: null node")?;
-        let hart = vnode.hart;
-        let hartu = hart as usize;
-        match &vnode.node.as_ref().as_ref().this {
-            // Instructions with no side affects.
-            Instruction::Label(_)
-            | Instruction::Blt(_)
-            | Instruction::Bnez(_)
-            | Instruction::Beqz(_)
-            | Instruction::Bge(_)
-            | Instruction::Bne(_)
-            | Instruction::Beq(_)
-            | Instruction::J(_) => {}
-            // No side affects, but worth double checking.
-            Instruction::Define(Define {
-                label,
-                locality,
-                cast,
-            }) => {
-                let (found_locality, found_type) = state
-                    .configuration
-                    .get(label)
-                    .internal("find_state: define label missing from configuration")?;
-                if let Some(defined_locality) = locality {
-                    assert_eq!(found_locality, defined_locality);
-                }
-                if let Some(defined_cast) = cast {
-                    assert_eq!(found_type, defined_cast);
-                }
-            }
-            Instruction::Li(Li {
-                register,
-                immediate,
-            }) => {
-                let mem_value = MemoryValue::from(*immediate);
-                state.registers[hartu]
-                    .insert(*register, mem_value)
-                    .internal("find_state: li register insert failed")?;
-            }
-            // TOOD This is the only place where in finding state we need to modify `state.configuration`
-            // is this the best way to do this? Could these types not be defined in `next_step` (like `la`)?
-            Instruction::Lat(Lat { register, label }) => {
-                let (_locality, typeof_type) = state
-                    .configuration
-                    .get(label)
-                    .internal("find_state: lat label missing from configuration")?;
-                let (loc, subtypes) = state.memory.set_type(typeof_type, &mut tag_iter, hart);
-                // Map the generated descriptor tags (`_a`, …) to the symbols codegen
-                // emits for the same records, so runtime reads of descriptor bytes are
-                // recorded (in `state.accessed`) under names codegen can look up —
-                // this is what lets it elide descriptor bytes never read at runtime.
-                state.descriptor_labels.insert(
-                    <&Label>::from(&loc).clone(),
-                    Label {
-                        tag: format!("__{label}_type"),
-                    },
-                );
-                for subtag in subtypes.0.keys() {
-                    state.descriptor_labels.insert(
-                        subtag.clone(),
-                        Label {
-                            tag: format!("__{label}_subtypes"),
-                        },
-                    );
-                }
-                let ptr = MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                    tag: loc.clone(),
-                    offset: MemoryValueU64::ZERO,
-                })));
-                state.registers[hartu]
-                    .insert(*register, ptr)
-                    .internal("find_state: lat register insert failed")?;
-
-                // Each type type is thread local and unique between `lat` instructions.
-                let hart_type_state = &mut state.configuration;
-                hart_type_state.insert(
-                    loc.into(),
-                    hart,
-                    (Locality::Thread, memory_value_type_of()),
-                );
-                // Extend with subtypes.
-                hart_type_state.append(subtypes);
-            }
-            Instruction::La(La { register, label }) => {
-                let (locality, _to_type) = state
-                    .configuration
-                    .get(label)
-                    .internal("find_state: la label missing from configuration")?;
-                state.registers[hartu]
-                    .insert(
-                        *register,
-                        MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                            tag: match locality {
-                                Locality::Global => MemoryLabel::Global {
-                                    label: label.clone(),
-                                },
-                                Locality::Thread => MemoryLabel::Thread {
-                                    label: label.clone(),
-                                    hart,
-                                },
-                            },
-                            offset: MemoryValueU64::ZERO,
-                        }))),
-                    )
-                    .internal("find_state: la register insert failed")?;
-            }
-            Instruction::Sw(Sw { to, from, offset }) => {
-                find_state_store(&mut state, vnode.node, hartu, to, from, offset, 4)?;
-            }
-            Instruction::Sb(Sb { to, from, offset }) => {
-                find_state_store(&mut state, vnode.node, hartu, to, from, offset, 1)?;
-            }
-            Instruction::Ld(Ld { to, from, offset }) => {
-                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 8)?;
-            }
-            Instruction::Lw(Lw { to, from, offset }) => {
-                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 4)?;
-            }
-            Instruction::Lb(Lb { to, from, offset }) => {
-                find_state_load(&mut state, vnode.node, hartu, to, from, offset, 1)?;
-            }
-            Instruction::Addi(Addi { out, lhs, rhs }) => {
-                let lhs_value = state.registers[hartu]
-                    .get(lhs)
-                    .cloned()
-                    .internal("find_state: addi lhs register has no value")?;
-                let rhs_value = MemoryValue::from(*rhs);
-                let out_value = lhs_value.clone() + rhs_value;
-                // Pointer arithmetic: record the transition for layout compaction
-                // (this node's immediate is what codegen rewrites when the bytes
-                // between `from` and `to` move).
-                if let (
-                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                        tag,
-                        offset: from_offset,
-                    }))),
-                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                        offset: to_offset, ..
-                    }))),
-                ) = (&lhs_value, &out_value)
-                {
-                    let (tag, from_offset, to_offset) =
-                        (tag.clone(), from_offset.clone(), to_offset.clone());
-                    state.record_transition(vnode.node, &tag, &from_offset, &to_offset);
-                } else {
-                    // A scalar / raw-address execution of this node: its
-                    // immediate is a plain number compaction must never rewrite
-                    // (another execution of the same node may be a recorded
-                    // pointer transition on a compacted region).
-                    state.pinned_nodes.insert(vnode.node);
-                }
-                state.registers[hartu]
-                    .insert(*out, out_value)
-                    .internal("find_state: addi register insert failed")?;
-            }
-            #[allow(unreachable_patterns)]
-            Instruction::Csrr(Csrr { dest, src }) => match src {
-                Csr::Mhartid => {
-                    state.registers[hartu]
-                        .insert(*dest, MemoryValue::Csr(CsrValue::Mhartid))
-                        .internal("find_state: csrr register insert failed")?;
-                }
-                _ => return Err(CompilerError::Unsupported(format!("csrr from {src:?}"))),
-            },
-            // TODO Some interrupt state is likely affected here so this needs to be added.
-            Instruction::Wfi(_) => {}
-            Instruction::Unreachable(_) => {}
-            // `#@ <start> <end> <perms>` — declare a memory region the program may
-            // access. Takes effect when executed (so e.g. a heap allocator declares
-            // each allocation as it makes it), extending the sections that raw-address
-            // accesses are validated against in `check_store`/`check_load`. Bounds may
-            // be immediates or registers; a register bound contributes its full
-            // symbolic range. `end` is exclusive (`size = end - start`).
-            Instruction::Region(Region {
-                start,
-                end,
-                permissions,
-            }) => {
-                let start_value = region_bound_value(&state, hartu, start)?;
-                let end_value = region_bound_value(&state, hartu, end)?;
-                let region_size = end_value
-                    .sub(&start_value)
-                    .internal("region: end - start underflowed")?;
-                state.memory.sections.push(Section {
-                    address: start_value,
-                    size: region_size,
-                    permissions: Permissions::from(*permissions),
-                    volatile: false,
-                });
-            }
-            x => return Err(CompilerError::Unsupported(format!("instruction during state reconstruction: {x:?}"))),
-        }
+        apply_node(&mut state, vnode, configuration, sinks)?;
         current = match &current.as_ref().internal("find_state: null node")?.next {
             InnerNextVerifierNode::Branch(b) => b[*next],
             InnerNextVerifierNode::Leaf(_) => {
@@ -2132,22 +2138,276 @@ unsafe fn find_state(
         };
     }
 
-    // info!(
-    //     "hart: {}/{}, state: {:?}",
-    //     leaf.as_ref().unwrap().prev.as_ref().unwrap().hart,
-    //     leaf.as_ref()
-    //         .unwrap()
-    //         .prev
-    //         .as_ref()
-    //         .unwrap()
-    //         .root
-    //         .as_ref()
-    //         .unwrap()
-    //         .configuration
-    //         .harts,
-    //     state
-    // );
     Ok(state)
+}
+
+/// Applies one executed instruction's effects to `state`: the single transfer
+/// function behind both the replaying [`find_state`] and the incremental
+/// per-leaf state cache (`queue_up` extends a parent's state with one
+/// `apply_node` instead of replaying the whole path). `configuration` is the
+/// explorer's current global configuration, used to seed variables this state
+/// has not yet encountered (see [`seed_label`]); accesses/transitions are
+/// recorded straight into `sinks`.
+unsafe fn apply_node(
+    state: &mut State,
+    vnode: &VerifierNode,
+    configuration: &TypeConfiguration,
+    sinks: &mut RecordSinks,
+) -> Result<(), CompilerError> {
+    let hart = vnode.hart;
+    let hartu = hart as usize;
+    match &vnode.node.as_ref().as_ref().this {
+        // Instructions with no side affects.
+        Instruction::Label(_)
+        | Instruction::Blt(_)
+        | Instruction::Bnez(_)
+        | Instruction::Beqz(_)
+        | Instruction::Bge(_)
+        | Instruction::Bne(_)
+        | Instruction::Beq(_)
+        | Instruction::J(_) => {}
+        // No side affects, but worth double checking.
+        Instruction::Define(Define {
+            label,
+            locality,
+            cast,
+        }) => {
+            seed_label(state, configuration, label, hart)?;
+            let (found_locality, found_type) = state
+                .configuration
+                .get(label)
+                .internal("apply: define label missing from configuration")?;
+            if let Some(defined_locality) = locality {
+                assert_eq!(found_locality, defined_locality);
+            }
+            if let Some(defined_cast) = cast {
+                assert_eq!(found_type, defined_cast);
+            }
+        }
+        Instruction::Li(Li {
+            register,
+            immediate,
+        }) => {
+            let mem_value = MemoryValue::from(*immediate);
+            state.registers[hartu]
+                .insert(*register, mem_value)
+                .internal("apply: li register insert failed")?;
+        }
+        // TOOD This is the only place where in finding state we need to modify `state.configuration`
+        // is this the best way to do this? Could these types not be defined in `next_step` (like `la`)?
+        Instruction::Lat(Lat { register, label }) => {
+            seed_label(state, configuration, label, hart)?;
+            let typeof_type = state
+                .configuration
+                .get(label)
+                .internal("apply: lat label missing from configuration")?
+                .1
+                .clone();
+            let State {
+                memory, tag_index, ..
+            } = state;
+            let (loc, subtypes) = memory.set_type(&typeof_type, tag_index, hart);
+            // Map the generated descriptor tags (`_a`, …) to the symbols codegen
+            // emits for the same records, so runtime reads of descriptor bytes are
+            // recorded (in `state.accessed`) under names codegen can look up;
+            // this is what lets it elide descriptor bytes never read at runtime.
+            state.descriptor_labels.insert(
+                <&Label>::from(&loc).clone(),
+                Label {
+                    tag: format!("__{label}_type"),
+                },
+            );
+            for subtag in subtypes.0.keys() {
+                state.descriptor_labels.insert(
+                    subtag.clone(),
+                    Label {
+                        tag: format!("__{label}_subtypes"),
+                    },
+                );
+            }
+            let ptr = MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                tag: loc.clone(),
+                offset: MemoryValueU64::ZERO,
+            })));
+            state.registers[hartu]
+                .insert(*register, ptr)
+                .internal("apply: lat register insert failed")?;
+
+            // Each type type is thread local and unique between `lat` instructions.
+            let hart_type_state = &mut state.configuration;
+            hart_type_state.insert(loc.into(), hart, (Locality::Thread, memory_value_type_of()));
+            // Extend with subtypes.
+            hart_type_state.append(subtypes);
+        }
+        Instruction::La(La { register, label }) => {
+            seed_label(state, configuration, label, hart)?;
+            let (locality, _to_type) = state
+                .configuration
+                .get(label)
+                .internal("apply: la label missing from configuration")?;
+            state.registers[hartu]
+                .insert(
+                    *register,
+                    MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                        tag: match locality {
+                            Locality::Global => MemoryLabel::Global {
+                                label: label.clone(),
+                            },
+                            Locality::Thread => MemoryLabel::Thread {
+                                label: label.clone(),
+                                hart,
+                            },
+                        },
+                        offset: MemoryValueU64::ZERO,
+                    }))),
+                )
+                .internal("apply: la register insert failed")?;
+        }
+        Instruction::Sw(Sw { to, from, offset }) => {
+            find_state_store(state, sinks, vnode.node, hartu, to, from, offset, 4)?;
+        }
+        Instruction::Sb(Sb { to, from, offset }) => {
+            find_state_store(state, sinks, vnode.node, hartu, to, from, offset, 1)?;
+        }
+        Instruction::Ld(Ld { to, from, offset }) => {
+            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 8)?;
+        }
+        Instruction::Lw(Lw { to, from, offset }) => {
+            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 4)?;
+        }
+        Instruction::Lb(Lb { to, from, offset }) => {
+            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 1)?;
+        }
+        Instruction::Addi(Addi { out, lhs, rhs }) => {
+            let lhs_value = state.registers[hartu]
+                .get(lhs)
+                .cloned()
+                .internal("apply: addi lhs register has no value")?;
+            let rhs_value = MemoryValue::from(*rhs);
+            let out_value = lhs_value.clone() + rhs_value;
+            // Pointer arithmetic: record the transition for layout compaction
+            // (this node's immediate is what codegen rewrites when the bytes
+            // between `from` and `to` move).
+            if let (
+                MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                    tag,
+                    offset: from_offset,
+                }))),
+                MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+                    offset: to_offset, ..
+                }))),
+            ) = (&lhs_value, &out_value)
+            {
+                record_transition_into(
+                    &state.descriptor_labels,
+                    sinks.transitions,
+                    sinks.uncompactable,
+                    sinks.pinned_nodes,
+                    vnode.node,
+                    tag,
+                    from_offset,
+                    to_offset,
+                );
+            } else {
+                // A scalar / raw-address execution of this node: its
+                // immediate is a plain number compaction must never rewrite
+                // (another execution of the same node may be a recorded
+                // pointer transition on a compacted region).
+                sinks.pinned_nodes.insert(vnode.node);
+            }
+            state.registers[hartu]
+                .insert(*out, out_value)
+                .internal("apply: addi register insert failed")?;
+        }
+        #[allow(unreachable_patterns)]
+        Instruction::Csrr(Csrr { dest, src }) => match src {
+            Csr::Mhartid => {
+                state.registers[hartu]
+                    .insert(*dest, MemoryValue::Csr(CsrValue::Mhartid))
+                    .internal("apply: csrr register insert failed")?;
+            }
+            _ => return Err(CompilerError::Unsupported(format!("csrr from {src:?}"))),
+        },
+        // TODO Some interrupt state is likely affected here so this needs to be added.
+        Instruction::Wfi(_) => {}
+        // `ecall`: the verifier does not model the system call's effect (the
+        // write/exit happens in the host), so applying it leaves state unchanged.
+        Instruction::Ecall(_) => {}
+        Instruction::Unreachable(_) => {}
+        // `#@ <start> <end> <perms>`: declare a memory region the program may
+        // access. Takes effect when executed (so e.g. a heap allocator declares
+        // each allocation as it makes it), extending the sections that raw-address
+        // accesses are validated against in `check_store`/`check_load`. Bounds may
+        // be immediates or registers; a register bound contributes its full
+        // symbolic range. `end` is exclusive (`size = end - start`).
+        Instruction::Region(Region {
+            start,
+            end,
+            permissions,
+        }) => {
+            let start_value = region_bound_value(&state, hartu, start)?;
+            let end_value = region_bound_value(&state, hartu, end)?;
+            let region_size = end_value
+                .sub(&start_value)
+                .internal("region: end - start underflowed")?;
+            state.memory.sections.push(Section {
+                address: start_value,
+                size: region_size,
+                permissions: Permissions::from(*permissions),
+                volatile: false,
+            });
+        }
+        x => {
+            return Err(CompilerError::Unsupported(format!(
+                "instruction during state reconstruction: {x:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Ensures `label`'s configuration entry and full-range storage exist in
+/// `state`, mirroring what `State::new` seeds upfront when a state is rebuilt
+/// by replay: the global configuration gains variables mid-exploration (as
+/// `load_label` encounters them), so a state cached *before* an encounter must
+/// seed the variable when the encountering node is applied. (A variable is only
+/// ever accessed through a pointer obtained from its `la`/`#&`/`#$` on the same
+/// path, so seeding at those nodes is equivalent to seeding upfront.)
+fn seed_label(
+    state: &mut State,
+    configuration: &TypeConfiguration,
+    label: &Label,
+    hart: u8,
+) -> Result<(), CompilerError> {
+    let (locality, ttype) = configuration
+        .get(label)
+        .internal("seed: label missing from the global configuration")?;
+    let key = match locality {
+        Locality::Global => MemoryLabel::Global {
+            label: label.clone(),
+        },
+        Locality::Thread => MemoryLabel::Thread {
+            label: label.clone(),
+            hart,
+        },
+    };
+    if !state.memory.map.contains_key(&key) {
+        state
+            .memory
+            .map
+            .insert(key, MemoryValue::from(ttype.clone()));
+    }
+    match (state.configuration.get(label), locality) {
+        (None, _) | (Some(_), Locality::Thread) => {
+            // For thread labels this also records `hart` in the copy set
+            // (mirroring `load_label`); an existing global entry needs nothing.
+            state
+                .configuration
+                .insert(label.clone(), hart, (*locality, ttype.clone()));
+        }
+        (Some(_), Locality::Global) => {}
+    }
+    Ok(())
 }
 
 impl From<RegionPermissions> for Permissions {
@@ -2179,6 +2439,7 @@ fn region_bound_value(
 
 fn find_state_store(
     state: &mut State,
+    sinks: &mut RecordSinks,
     node: NonNull<AstNode>,
     hartu: usize,
     to: impl Borrow<Register>,
@@ -2225,8 +2486,23 @@ fn find_state_store(
             // Record the bytes this store can touch at runtime (dead-data analysis)
             // and the pointer→target transition (layout compaction rewrites this
             // node's offset immediate when the bytes between them move).
-            state.record_access(to_label, &store_offset, len);
-            state.record_transition(node, to_label, to_offset, &store_offset);
+            record_access_into(
+                &state.descriptor_labels,
+                sinks.accessed,
+                to_label,
+                &store_offset,
+                len,
+            );
+            record_transition_into(
+                &state.descriptor_labels,
+                sinks.transitions,
+                sinks.uncompactable,
+                sinks.pinned_nodes,
+                node,
+                to_label,
+                to_offset,
+                &store_offset,
+            );
             let memloc = MemoryPtr(Some(NonNullMemoryPtr {
                 tag: to_label.clone(),
                 offset: store_offset,
@@ -2240,9 +2516,9 @@ fn find_state_store(
             // A raw-address execution: invisible to `transitions`, so the node
             // must keep its original immediate (another execution of the same
             // node may be a pointer access into a compacted region).
-            state.pinned_nodes.insert(node);
+            sinks.pinned_nodes.insert(node);
             // The store's address is the register value plus the instruction offset
-            // (`sw t1, 8(t3)` stores at t3+8) — `check_store` validated that address.
+            // (`sw t1, 8(t3)` stores at t3+8); `check_store` validated that address.
             let address = x
                 .add(&MemoryValueI64::from(offset.borrow().value.value))
                 .internal("store: address overflow")?;
@@ -2258,6 +2534,7 @@ fn find_state_store(
 
 fn find_state_load(
     state: &mut State,
+    sinks: &mut RecordSinks,
     node: NonNull<AstNode>,
     hartu: usize,
     to: impl Borrow<Register>,
@@ -2284,8 +2561,7 @@ fn find_state_load(
                 .add(from_offset)
                 .internal("load: offset overflow")?
                 .add(&MemoryValueU64::from(
-                    u64::try_from(offset.borrow().value.value)
-                        .internal("load: negative offset")?,
+                    u64::try_from(offset.borrow().value.value).internal("load: negative offset")?,
                 ))
                 .internal("load: offset overflow")?;
 
@@ -2306,21 +2582,39 @@ fn find_state_load(
             // Record the bytes this load can touch at runtime (dead-data analysis)
             // and the pointer→target transition (layout compaction rewrites this
             // node's offset immediate when the bytes between them move).
-            state.record_access(&memloc.base, &memloc.offset, len);
-            state.record_transition(node, &memloc.base, from_offset, &memloc.offset);
-            let value = state.memory.get(&memloc).internal("load: memory get failed")?;
+            record_access_into(
+                &state.descriptor_labels,
+                sinks.accessed,
+                &memloc.base,
+                &memloc.offset,
+                len,
+            );
+            record_transition_into(
+                &state.descriptor_labels,
+                sinks.transitions,
+                sinks.uncompactable,
+                sinks.pinned_nodes,
+                node,
+                &memloc.base,
+                from_offset,
+                &memloc.offset,
+            );
+            let value = state
+                .memory
+                .get(&memloc)
+                .internal("load: memory get failed")?;
             state.registers[hartu]
                 .insert(to.borrow().clone(), value)
                 .internal("load: register insert failed")?;
         }
-        // A raw-address load — a region described by the system configuration or
+        // A raw-address load: a region described by the system configuration or
         // declared with `#@` (validated by `check_load`). The backing memory is
         // not modelled precisely, so the loaded value is the full range of the
         // loaded width: a sound over-approximation of whatever was stored there.
         MemoryValue::I64(_) => {
             // Raw execution: the node must keep its original immediate (see the
             // store arm).
-            state.pinned_nodes.insert(node);
+            sinks.pinned_nodes.insert(node);
             let value = match len {
                 1 => MemoryValue::from(Type::I8),
                 4 => MemoryValue::from(Type::I32),

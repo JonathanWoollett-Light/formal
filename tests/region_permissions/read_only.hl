@@ -1,0 +1,6 @@
+# A store into a region declared read-only is rejected as `Invalid`.
+section 0x80100000 0x80100004 r
+t0 = 0x80100000
+t1 = 42
+t0[0:4] = t1
+unreachable

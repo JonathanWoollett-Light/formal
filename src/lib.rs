@@ -4,6 +4,8 @@ use std::ptr::NonNull;
 pub mod ast;
 pub use ast::*;
 
+pub mod hl;
+
 pub mod verifier;
 pub use verifier::*;
 
@@ -59,6 +61,100 @@ pub fn compress(root: &mut Option<NonNull<AstNode>>) {
             }
         }
     }
+}
+
+/// The artifacts of compiling an `hl` (Python-dialect) program end to end.
+pub struct Compiled {
+    /// The program with the standard-library prelude prepended: the combined
+    /// source the compiler actually sees ([`hl::prelude`] + the program).
+    pub combined: String,
+    /// The annotated RISC-V dialect ([`hl::translate`]'s output).
+    pub dialect: String,
+    /// The verified, optimized, runnable RISC-V assembly ([`emit_executable`]).
+    pub assembly: String,
+}
+
+/// An error from [`compile`].
+#[derive(Debug)]
+pub enum CompileError {
+    /// The Python-dialect source did not translate to the dialect.
+    Translate(hl::TranslateError),
+    /// The verifier rejected or could not handle the program.
+    Verify(CompilerError),
+    /// The program has no valid type configuration: a `#!` (`fail`) is reachable.
+    Invalid,
+}
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Translate(e) => write!(f, "translation failed: {e}"),
+            Self::Verify(e) => write!(f, "verification failed: {e}"),
+            Self::Invalid => write!(
+                f,
+                "the program is invalid: a `fail` is reachable on some interleaving \
+                 or type assignment"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CompileError {}
+
+/// Compiles an `hl` program end to end: translate (with the standard-library
+/// prelude) to the dialect, parse, **verify**, optimize, and lower to runnable
+/// RISC-V. Returns the combined source, the dialect, and the assembly.
+///
+/// The program is verified for a single hart with no memory-mapped regions, the
+/// configuration a hosted program (one that reaches the outside world through
+/// `ecall`, like the `print`/`exit` standard library) needs. Bare-metal
+/// programs that declare `#@` regions or rely on multiple harts need the lower
+/// level API ([`Explorerer`]) with the appropriate systems.
+pub fn compile(source: &str) -> Result<Compiled, CompileError> {
+    let dialect = hl::translate(source).map_err(CompileError::Translate)?;
+    let combined = format!("{}\n{source}", hl::prelude());
+
+    // `new_ast` records the source path in spans, which are re-read from disk
+    // only to render an error; write the dialect to a temp file so any such
+    // read resolves, then parse from its characters.
+    let dialect_path =
+        std::env::temp_dir().join(format!("formal-{}.dialect.s", std::process::id()));
+    let _ = std::fs::write(&dialect_path, &dialect);
+    let chars = dialect.chars().collect::<Vec<_>>();
+    let mut ast = new_ast(&chars, dialect_path.clone());
+    compress(&mut ast);
+
+    let result = (|| unsafe {
+        let systems = [InnerVerifierConfiguration {
+            sections: Vec::new(),
+            harts: 1,
+        }];
+        let mut explorerer = Explorerer::new(ast, &systems).map_err(CompileError::Verify)?;
+        let valid = loop {
+            match explorerer.next_step().map_err(CompileError::Verify)? {
+                ExplorePathResult::Continue(next) => explorerer = next,
+                ExplorePathResult::Valid(valid) => break valid,
+                ExplorePathResult::Invalid => return Err(CompileError::Invalid),
+            }
+        };
+        remove_untouched(&mut ast, &valid.touched);
+        remove_branches(&mut ast, &valid.jumped);
+        Ok(emit_executable(
+            ast,
+            &valid.configuration,
+            &valid.accessed,
+            &valid.transitions,
+            &valid.uncompactable,
+            &valid.pinned_nodes,
+        ))
+    })();
+    let _ = std::fs::remove_file(&dialect_path);
+
+    Ok(Compiled {
+        combined,
+        dialect,
+        assembly: result?,
+    })
 }
 
 /// Serializes the AST nodes back to their canonical textual form.

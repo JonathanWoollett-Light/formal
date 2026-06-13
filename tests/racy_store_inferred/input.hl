@@ -1,0 +1,27 @@
+# Do racy arithmetic on a variables without a defined type.
+# Use global locality so the load/stores are racy.
+# It would otherwise default to thread local.
+#
+# Another way we could enforce locality would be loading the
+# type of `value` (with `#&`) then comparing the type locality
+# and failing if the type were not thread local.
+#
+# The difference in these approaches is that `#$` is faster and
+# allows defining variables as types not explored. By default the
+# only way to specify a list or union type is with `#$` since these
+# paths are not otherwise explored (since there are an infinite number
+# of list and union type combinations). In essence `#$` = "this is" while
+# later checks are "if this is".
+value: global _
+t0 = &value
+
+# Set to 0
+t1 = 0
+t0[0:4] = t1
+
+# The proof obligation: value = 0 (`require` lowers to a branch over `#!`,
+# the `fail` marker).
+t1 = t0[0:4]
+t2 = 0
+require t1 == t2
+unreachable

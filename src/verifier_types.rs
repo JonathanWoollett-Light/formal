@@ -9,11 +9,9 @@ use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::iter::once;
 use std::iter::repeat;
-use std::iter::Peekable;
 use std::ops::Add;
 use std::ptr::NonNull;
 use thiserror::Error;
-use tracing::error;
 
 #[derive(Debug, Clone)]
 pub struct MemoryValueI8 {
@@ -774,7 +772,10 @@ impl Add for MemoryValue {
                 Ptr(MemoryPtr(Some(a)))
             }
             (U32(a), U8(b)) => U32(a.add(&MemoryValueU32::from(b)).unwrap()),
-            (U32(a), I64(b)) => U32(a.add(&MemoryValueU32::try_from(b).unwrap()).unwrap()),
+            // A register is 64-bit: arithmetic on a loaded `U32` widens to `I64`
+            // (matching RV64, where `lw` sign-extends and `addi` is 64-bit), so a
+            // negative immediate no longer underflows an unsigned slot.
+            (U32(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
             (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
                 // dbg!(&b);
                 let c = MemoryValueI64::try_from(a.offset).unwrap();
@@ -947,7 +948,28 @@ impl MemoryValue {
                         match size_of_item.cmp(&len) {
                             // if the size is equal it fully covers the last item in the list.
                             Ordering::Equal => {
-                                *item = value;
+                                use MemoryValue::*;
+                                let size_of_value = u64::from(size(&Type::from(&value)));
+                                // A register value (`I64`) is wider than the slot
+                                // it is stored into (`sw` => len 4): keep its low
+                                // `len` native-endian bytes as the slot's type,
+                                // exactly as the interior-element path does.
+                                match (&value, &*item) {
+                                    _ if size_of_value == *len => *item = value,
+                                    (I64(from), U32(_)) => {
+                                        let bytes = from.to_bytes().unwrap();
+                                        let to: [u8; 4] =
+                                            bytes[0..*len as usize].try_into().unwrap();
+                                        *item = U32(MemoryValueU32::from_bytes(&to));
+                                    }
+                                    (I64(from), U8(_)) => {
+                                        let bytes = from.to_bytes().unwrap();
+                                        let to: [u8; 1] =
+                                            bytes[0..*len as usize].try_into().unwrap();
+                                        *item = U8(MemoryValueU8::from_bytes(&to));
+                                    }
+                                    x => todo!("end-of-list set coercion: {x:?} len={len:?}"),
+                                }
                                 return Ok(());
                             }
                             // if the size of the value is larger it will leak into earlier
@@ -999,6 +1021,19 @@ impl MemoryValue {
                                             let to_bytes =
                                                 from_bytes[0..*len as usize].try_into().unwrap();
                                             *to = MemoryValueU8::from_bytes(&to_bytes);
+                                            return Ok(());
+                                        } else {
+                                            todo!()
+                                        }
+                                    }
+                                    // Storing a register (`I64`) into a 4-byte
+                                    // slot: keep the low `len` native-endian
+                                    // bytes, the truncation a `sw` performs.
+                                    (I64(from), U32(to)) => {
+                                        if let Some(from_bytes) = from.to_bytes() {
+                                            let to_bytes =
+                                                from_bytes[0..*len as usize].try_into().unwrap();
+                                            *to = MemoryValueU32::from_bytes(&to_bytes);
                                             return Ok(());
                                         } else {
                                             todo!()
@@ -1150,12 +1185,17 @@ impl MemoryValue {
             (U32(a), U8(b)) => Some(a.compare(&MemoryValueU32::from(b.clone()))),
             (U64(a), U8(b)) => Some(a.compare(&MemoryValueU64::from(b.clone()))),
             (U32(a), I64(b)) => Some(MemoryValueI64::from(a.clone()).compare(b)),
+            (U8(a), I64(b)) => Some(MemoryValueI64::from(a.clone()).compare(b)),
             (U64(a), I64(b)) => {
                 let Ok(c) = MemoryValueI64::try_from(a.clone()) else {
                     todo!()
                 };
                 Some(c.compare(b))
             }
+            // The reverse orderings (a register `I64` compared against a value
+            // loaded from memory): promote the narrower operand to `I64`.
+            (I64(a), U8(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
+            (I64(a), U32(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
             x => todo!("{x:?}"),
         }
     }
@@ -1308,7 +1348,7 @@ impl MemoryMap {
             }
             MemoryValue::I64(start) => {
                 // The bytes this store needs are the *instruction's* width (`len`),
-                // not the width of the value in the register — `sw` from a register
+                // not the width of the value in the register: `sw` from a register
                 // holding an I64 stores 4 bytes, and re-checking with 8 here would
                 // fail to find the (already-validated) section and panic.
                 let type_size = *len;
@@ -1358,7 +1398,7 @@ impl MemoryMap {
                     Ok(())
                 } else {
                     // The backing memory tracks raw memory for two purposes: the
-                    // *values* stored (so later loads can assert on content — loads do
+                    // *values* stored (so later loads can assert on content; loads do
                     // not consult it yet, they return full-range values, see
                     // `find_state_load`) and *which bytes* are touched (the basis for
                     // eliding memory never accessed at runtime). Both demand that a
@@ -1367,13 +1407,11 @@ impl MemoryMap {
                     // have been overwritten, so any backing previously recorded there
                     // no longer holds a known value. Absent backing reads as
                     // fully-unknown, so "fill the span with unknown" is implemented by
-                    // *erasing* the overlapping backings — the same semantics (the
+                    // *erasing* the overlapping backings: the same semantics (the
                     // sound union of "old value or new value", narrowable later),
                     // allocation-free even for huge spans.
                     let span_start = start.start;
-                    let span_end = start
-                        .stop
-                        .saturating_add(i64::try_from(*len).unwrap());
+                    let span_end = start.stop.saturating_add(i64::try_from(*len).unwrap());
                     self.memory.retain(|m| {
                         let m_start = m.address.start;
                         let m_end = m_start
@@ -1402,7 +1440,7 @@ impl MemoryMap {
     pub fn set_type(
         &mut self,
         value: &Type,
-        tag_iter: &mut Peekable<impl Iterator<Item = Label>>, // Iterator to generate unique tags.
+        tag_index: &mut u64, // Persistent counter generating unique tags (see [`nth_tag`]).
         hart: u8,
     ) -> (MemoryLabel, TypeConfiguration) {
         let mut vec = Vec::new();
@@ -1448,7 +1486,8 @@ impl MemoryMap {
                         ])
                     })
                     .collect::<Vec<_>>();
-                let tag = tag_iter.next().unwrap();
+                let tag = nth_tag(*tag_index);
+                *tag_index += 1;
                 let mem_tag = MemoryLabel::Thread {
                     label: tag.clone(),
                     hart,
@@ -1472,7 +1511,11 @@ impl MemoryMap {
         }
 
         let final_tag = MemoryLabel::Thread {
-            label: tag_iter.next().unwrap(),
+            label: {
+                let tag = nth_tag(*tag_index);
+                *tag_index += 1;
+                tag
+            },
             hart,
         };
         match vec.remove(0) {
@@ -1531,7 +1574,7 @@ pub struct SubSlice {
 ///
 /// This is what makes dead-data elimination possible: a descriptor byte that
 /// appears in no range here is only ever read at *compile time* (by the verifier),
-/// so codegen need not emit its value — see `emit_executable`.
+/// so codegen need not emit its value (see `emit_executable`).
 pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
 
 /// For each instruction node, the pointer-arithmetic transitions it performs per
@@ -1542,7 +1585,7 @@ pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
 ///
 /// This is what makes **layout compaction** possible: under a compacted layout
 /// `f` (unaccessed bytes removed rather than padded), codegen rewrites the
-/// node's immediate to `f(to) - f(from)` — and a single immediate must satisfy
+/// node's immediate to `f(to) - f(from)`, and a single immediate must satisfy
 /// *every* recorded execution of that node, else the involved regions fall back
 /// to the padded layout. Keyed by node pointer; only ever queried per-node
 /// during deterministic AST-order walks, so the pointer ordering is never
@@ -1555,68 +1598,36 @@ pub struct State {
     pub registers: Vec<RegisterValues>,
     pub memory: MemoryMap,
     pub configuration: TypeConfiguration,
-    /// Runtime-accessed byte ranges per region label, recorded while replaying the
-    /// path (see [`AccessedRanges`]). Merged into `Explorerer::accessed` after each
-    /// replay; the union is idempotent, so replaying the same prefix many times
-    /// (which `find_state` does) is harmless.
-    pub accessed: AccessedRanges,
     /// Maps the generated descriptor tags (`_a`, `_b`, …) allocated by
     /// `MemoryMap::set_type` to the symbols codegen emits for the same records
     /// (`__<label>_type` / `__<label>_subtypes`), so descriptor accesses are
-    /// recorded in `accessed` under the name codegen can look up.
+    /// recorded (into the explorer's `accessed` union) under the name codegen
+    /// can look up. Path-dependent, so it lives on the state.
     pub descriptor_labels: BTreeMap<Label, Label>,
-    /// Per-node pointer-arithmetic transitions recorded while replaying the path
-    /// (see [`AccessTransitions`]); drives instruction rewriting for layout
-    /// compaction. Merged into `Explorerer::transitions` like `accessed`.
-    pub transitions: AccessTransitions,
-    /// Regions touched through an offset the verifier only knows as a *range*:
-    /// no single rewritten immediate can re-point such an access, so these
-    /// regions keep the padded (identity) layout.
-    pub uncompactable: BTreeSet<Label>,
-    /// Nodes that must keep their **original** immediate: they also executed
-    /// with a raw (`I64`) address, a scalar operand, or a range offset — an
-    /// execution invisible to `transitions` that a rewritten immediate would
-    /// silently corrupt. Compaction demotes any region that would require
-    /// rewriting a pinned node.
-    pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
+    /// The next descriptor tag `MemoryMap::set_type` will allocate (see
+    /// [`nth_tag`]). Persistent on the state so an incrementally-extended state
+    /// allocates the same tag sequence a full path replay would.
+    pub tag_index: u64,
 }
-impl State {
-    /// Records that bytes `offset.start .. offset.stop + len` of the region behind
-    /// `base` may be accessed at runtime. Uses the full symbolic span of `offset`
-    /// (not just its exact value) so an under-determined access never under-records.
-    pub fn record_access(&mut self, base: &MemoryLabel, offset: &MemoryValueU64, len: u64) {
-        record_access_into(&self.descriptor_labels, &mut self.accessed, base, offset, len);
-    }
 
-    /// Records that `node` turned a pointer at byte `from` of the region behind
-    /// `base` into one addressing byte `to` (see [`AccessTransitions`]). An
-    /// under-determined (`from`/`to` not exact) transition instead marks the
-    /// region uncompactable — its layout must stay padded.
-    pub fn record_transition(
-        &mut self,
-        node: NonNull<AstNode>,
-        base: &MemoryLabel,
-        from: &MemoryValueU64,
-        to: &MemoryValueU64,
-    ) {
-        record_transition_into(
-            &self.descriptor_labels,
-            &mut self.transitions,
-            &mut self.uncompactable,
-            &mut self.pinned_nodes,
-            node,
-            base,
-            from,
-            to,
-        );
+/// The `index`-th generated descriptor tag: `_a`…`_y`, then `_za`…, `_zza`… .
+/// Tag allocation order is path-determined (each `set_type` call advances the
+/// state's persistent `tag_index`), so replayed and incrementally-extended
+/// states produce identical tags.
+pub fn nth_tag(index: u64) -> Label {
+    const N: u64 = (b'z' - b'a') as u64;
+    Label {
+        tag: once('_')
+            .chain((0..index / N).map(|_| 'z'))
+            .chain(once(char::from((index % N) as u8 + b'a')))
+            .collect::<String>(),
     }
 }
 
-/// The recording primitive behind [`State::record_access`], split out so the
-/// verifier can also record an access into a *different* accumulator than the
-/// replayed state's own (it records the instruction currently being checked
-/// directly into `Explorerer::accessed` — replays exclude that instruction, and a
-/// path-terminal access would otherwise never be recorded at all).
+/// Records that bytes `offset.start .. offset.stop + len` of the region behind
+/// `base` may be accessed at runtime, into the explorer's global union. Uses the
+/// full symbolic span of `offset` (not just its exact value) so an
+/// under-determined access never under-records.
 pub fn record_access_into(
     descriptor_labels: &BTreeMap<Label, Label>,
     accessed: &mut AccessedRanges,
@@ -1632,10 +1643,10 @@ pub fn record_access_into(
         .insert((offset.start, offset.stop.saturating_add(len)));
 }
 
-/// The recording primitive behind [`State::record_transition`], split out so the
-/// verifier can also record the instruction currently being *checked* directly
-/// into `Explorerer::transitions` (replays exclude that instruction — the same
-/// path-terminal asymmetry as `record_access_into`).
+/// Records that `node` turned a pointer at byte `from` of the region behind
+/// `base` into one addressing byte `to` (see [`AccessTransitions`]), into the
+/// explorer's global unions. An under-determined (`from`/`to` not exact)
+/// transition instead marks the region uncompactable and pins the node.
 #[allow(clippy::too_many_arguments)]
 pub fn record_transition_into(
     descriptor_labels: &BTreeMap<Label, Label>,
@@ -1701,11 +1712,8 @@ impl State {
                 .collect(),
             memory,
             configuration: configuration.clone(),
-            accessed: Default::default(),
             descriptor_labels: Default::default(),
-            transitions: Default::default(),
-            uncompactable: Default::default(),
-            pinned_nodes: Default::default(),
+            tag_index: 0,
         }
     }
 }

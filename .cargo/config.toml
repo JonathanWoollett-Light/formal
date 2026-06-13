@@ -1,0 +1,2 @@
+[alias]
+nt = "nextest run" #  --show-progress none

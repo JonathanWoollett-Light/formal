@@ -1,6 +1,0 @@
-    # A load from a region declared write-only is rejected as `Invalid`.
-    #@ 0x80100000 0x80100004 w
-    li t0, 0x80100000
-    li t5, 0
-    lw t1, 0(t0)
-    #?

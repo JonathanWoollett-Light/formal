@@ -1,0 +1,141 @@
+# fannkuch-redux for n = 5, written in the Python dialect.
+#
+# The dialect has no multiply, no register-register arithmetic, and no indexed
+# addressing, so every array access is a pointer walk and every reg+reg combine
+# is a +/-1 loop. The verifier proves, at compile time, that the computed max
+# flip count and checksum equal the known fannkuch(5) answer (7 and 11): the
+# two `require`s below are only reachable-as-satisfied if the algorithm is right.
+#
+# Persistent registers across the whole run:
+#   a5 = max flips, a6 = checksum, a7 = permutation-index parity (0/1)
+#   a4 = done flag (outer loop runs while a4 == 0)
+
+perm: thread [u32]*5
+work: thread [u32]*5
+cnt: thread [u32]*5
+
+# --- init perm[i] = i ---
+t0 = &perm
+t1 = 0
+t2 = 5
+while t1 != t2:
+    t0[0:4] = t1
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+# --- init cnt[i] = 0 ---
+t0 = &cnt
+t1 = 0
+t3 = 0
+while t1 != t2:
+    t0[0:4] = t3
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+a5 = 0
+a6 = 0
+a7 = 0
+a4 = 0
+
+while a4 == 0:
+    # ===== copy perm -> work =====
+    t0 = &perm
+    t1 = &work
+    t2 = 0
+    t3 = 5
+    while t2 != t3:
+        t4 = t0[0:4]
+        t1[0:4] = t4
+        t0 = t0 + 4
+        t1 = t1 + 4
+        t2 = t2 + 1
+
+    # ===== count flips on work =====
+    a0 = 0
+    t0 = &work
+    t1 = t0[0:4]
+    while t1 != 0:
+        # reverse work[0 .. k] in place, k = t1
+        t2 = &work
+        t3 = &work
+        t4 = 0
+        while t4 != t1:
+            t3 = t3 + 4
+            t4 = t4 + 1
+        t4 = 0
+        t5 = t1 + 0
+        while t4 < t5:
+            t1 = t2[0:4]
+            a1 = t3[0:4]
+            t2[0:4] = a1
+            t3[0:4] = t1
+            t2 = t2 + 4
+            t3 = t3 - 4
+            t4 = t4 + 1
+            t5 = t5 - 1
+        a0 = a0 + 1
+        t1 = t0[0:4]
+
+    # ===== max flips =====
+    if a0 > a5:
+        a5 = a0 + 0
+
+    # ===== checksum += (parity == 0 ? flips : -flips) =====
+    t0 = a0 + 0
+    if a7 == 0:
+        while t0 != 0:
+            a6 = a6 + 1
+            t0 = t0 - 1
+    if a7 != 0:
+        while t0 != 0:
+            a6 = a6 - 1
+            t0 = t0 - 1
+
+    # ===== toggle parity =====
+    t0 = a7 + 0
+    a7 = 1
+    if t0 != 0:
+        a7 = 0
+
+    # ===== next permutation by prefix rotation =====
+    a4 = 1
+    a3 = 1
+    a2 = 5
+    while a3 < a2:
+        # rotate perm[0 .. i] left by one, i = a3
+        t0 = &perm
+        t1 = t0[0:4]
+        t2 = &perm
+        t3 = 0
+        while t3 < a3:
+            t4 = t2[4:8]
+            t2[0:4] = t4
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t2[0:4] = t1
+        # ++cnt[i]
+        t2 = &cnt
+        t3 = 0
+        while t3 < a3:
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t4 = t2[0:4]
+        t4 = t4 + 1
+        t2[0:4] = t4
+        # if cnt[i] <= i: found next (break); else reset and i++
+        t5 = 1
+        if t4 <= a3:
+            a4 = 0
+            a3 = a2 + 0
+            t5 = 0
+        if t5 != 0:
+            t3 = 0
+            t2[0:4] = t3
+            a3 = a3 + 1
+
+# ===== prove the known fannkuch(5) result =====
+t0 = 7
+require a5 == t0
+t0 = 11
+require a6 == t0
+exit(0)

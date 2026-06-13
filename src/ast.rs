@@ -179,6 +179,7 @@ pub enum Instruction {
     Bnez(Bnez),
     J(J),
     Wfi(Wfi),
+    Ecall(Ecall),
     Label(LabelInstruction),
     Global(Global),
     Data(Data),
@@ -221,6 +222,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['b', 'n', 'e', 'z', ' ', rem @ ..] => Instruction::Bnez(new_bnez(rem)),
         ['j', ' ', rem @ ..] => Instruction::J(new_j(rem)),
         ['w', 'f', 'i'] => Instruction::Wfi(Wfi),
+        ['e', 'c', 'a', 'l', 'l'] => Instruction::Ecall(Ecall),
         ['.', 'd', 'a', 't', 'a'] => Instruction::Data(Data),
         ['.', 'a', 's', 'c', 'i', 'i', ' ', rem @ ..] => Instruction::Ascii(new_ascii(rem)),
         ['l', 'a', ' ', rem @ ..] => Instruction::La(new_la(rem)),
@@ -250,6 +252,7 @@ impl fmt::Display for Instruction {
             Bnez(bnez) => write!(f, "{bnez}"),
             J(j) => write!(f, "{j}"),
             Wfi(wfi) => write!(f, "{wfi}"),
+            Ecall(ecall) => write!(f, "{ecall}"),
             Label(label_instruction) => write!(f, "{label_instruction}"),
             Global(global) => write!(f, "{global}"),
             Data(data) => write!(f, "{data}"),
@@ -580,7 +583,7 @@ fn new_locality(src: &[char]) -> Locality {
 ///
 /// `start`/`end` bound the region's addresses (`end` exclusive, so a heap
 /// allocator declares `#@ <base> <base + size> rw` for each allocation it makes)
-/// and may be immediates or registers — a register bound takes the register's
+/// and may be immediates or registers; a register bound takes the register's
 /// (possibly under-determined, symbolic) value when the declaration executes.
 /// `perms` is `r` (read), `w` (write) or `rw`. Every raw-address memory access
 /// must fall within a declared region (or a section described by the system
@@ -1189,6 +1192,12 @@ fn new_register(src: &[char]) -> Result<Register, Vec<char>> {
         ['t', '5'] => Ok(Register::X30),
         ['a', '0'] => Ok(Register::X10),
         ['a', '1'] => Ok(Register::X11),
+        ['a', '2'] => Ok(Register::X12),
+        ['a', '3'] => Ok(Register::X13),
+        ['a', '4'] => Ok(Register::X14),
+        ['a', '5'] => Ok(Register::X15),
+        ['a', '6'] => Ok(Register::X16),
+        ['a', '7'] => Ok(Register::X17),
         _ => Err(Vec::from(src)),
     }
 }
@@ -1460,5 +1469,18 @@ pub struct Wfi;
 impl fmt::Display for Wfi {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "wfi")
+    }
+}
+
+/// `ecall`: the RISC-V environment-call (system-call) instruction. The verifier
+/// does not model the call's effect (it is the boundary to the host/OS), so it
+/// treats `ecall` as a no-op for checking; the system-call ABI lives entirely
+/// in the registers the surrounding code sets (`a7` = number, `a0`-`a5` = args).
+#[derive(Debug, Clone)]
+pub struct Ecall;
+
+impl fmt::Display for Ecall {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ecall")
     }
 }

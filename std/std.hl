@@ -1,0 +1,42 @@
+# The formal standard library (working name; minimal for now). The compiler
+# prepends this file to every program it compiles, so these definitions are
+# available everywhere. A `def` emits no code until it is called, so an unused
+# prelude costs nothing: a program that never calls `print` lowers exactly as
+# if this file were not there.
+
+# print(msg): write the string literal `msg` to standard output with the Linux
+# `write(2, fd=1, ...)` system call. This targets **Linux** (a hosted RISC-V
+# process), not bare metal: it uses `ecall`, so a bare-metal program (no OS to
+# answer the `ecall`) cannot use it and must write to its device directly (see
+# the `uart_hello` test, which poke the QEMU UART with raw assembly).
+#
+# `print` is inlined at each call site; the call lays the string down in `.bss`
+# first (clobbering t0 and t1), then this body measures and writes it
+# (clobbering a0, a1, a2, a7, and t0). Minimal and specific for now: a fuller
+# library would take the output stream and handle partial writes.
+def print(msg):
+    # a2 = strlen(msg): walk to the NUL the compiler appended.
+    a1 = &msg
+    a2 = 0
+    t0 = a1[0:1]
+    while t0 != 0:
+        a2 = a2 + 1
+        a1 = a1 + 1
+        t0 = a1[0:1]
+    # write(fd = 1, buf = &msg, count = a2)  (syscall 64).
+    a0 = 1
+    a1 = &msg
+    a7 = 64
+    asm:
+        ecall
+
+# exit(code): end the process with the Linux `exit` system call (syscall 93).
+# Like `print` this targets Linux (it uses `ecall`); the call never returns, so
+# the body ends in `unreachable`. `exit(0)` is the clean way to finish a hosted
+# program (see the `linux_hello` test).
+def exit(code):
+    a0 = code
+    a7 = 93
+    asm:
+        ecall
+    unreachable

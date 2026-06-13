@@ -1,0 +1,10 @@
+# A descriptor load whose only successor is `#?` (a path-terminal access).
+# Replays exclude the instruction being processed, so without the explicit
+# check-time record this load would never enter `accessed` and dead-data
+# elimination would elide the descriptor bytes the program still reads at
+# runtime - see tests/terminal_access.rs.
+value: global u32
+t0 = type(value)
+t5 = 0
+t1 = t0[0:8]
+unreachable

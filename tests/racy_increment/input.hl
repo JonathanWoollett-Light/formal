@@ -1,0 +1,20 @@
+# Do racy arithmetic with an undefined variable.
+# Use global locality so the load/stores are racy.
+value: global _
+t0 = &value
+
+# Set to 0
+t1 = 0
+t0[0:4] = t1
+
+# Do non-atomic addition
+t1 = t0[0:4]
+t1 = t1 + 1
+t0[0:4] = t1
+
+# The proof obligation: value < 4 on every interleaving (`require` lowers to
+# a branch over `#!`, the `fail` marker).
+t1 = t0[0:4]
+t2 = 4
+require t1 < t2
+unreachable

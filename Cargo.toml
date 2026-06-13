@@ -11,6 +11,12 @@ num = "0.4.3"
 sha2 = "0.10.8"
 base64 = "0.22.1"
 
+# Optimize test builds: the verifier explores millions of steps for the larger
+# programs (uart_hello). `debug-assertions` stay enabled (the default for the
+# test/dev profiles), so the internal loop guards remain active.
+[profile.test]
+opt-level = 3
+
 [dev-dependencies]
 tracing-test = "0.2.5"
 tracing-subscriber = "0.3.18"
@@ -21,4 +27,3 @@ tracing-assertions = "0.6.0"
 opentelemetry = "0.17.0"
 tracing-opentelemetry = "0.17.2" 
 opentelemetry-jaeger = "0.16.0"
-indicatif = "0.17.9"

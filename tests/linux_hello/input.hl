@@ -1,0 +1,5 @@
+# Hello World on Linux: print to stdout with the `write` syscall, then end with
+# the `exit` syscall. Both `print` and `exit` come from the std library, so the
+# program is two lines with no inline assembly.
+print("Hello World!\n")
+exit(0)

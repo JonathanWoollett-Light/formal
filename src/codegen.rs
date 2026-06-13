@@ -18,12 +18,12 @@ use std::ptr::NonNull;
 /// runtime-access records (`accessed`/`transitions`/`uncompactable`).
 ///
 /// Directive lowering:
-/// - `#$ …` (define) — metadata only, kept as a comment.
-/// - `#@ …` (region) — metadata only (verified at compile time), kept as a comment.
-/// - `#& reg, label` (lat) — lowered to `la reg, __<label>_type`, loading the
+/// - `#$ …` (define): metadata only, kept as a comment.
+/// - `#@ …` (region): metadata only (verified at compile time), kept as a comment.
+/// - `#& reg, label` (lat): lowered to `la reg, __<label>_type`, loading the
 ///   address of the generated runtime type descriptor.
-/// - `#!` (fail) — should be proven unreachable; lowered to `ebreak` as a guard.
-/// - `#?` (unreachable / program end) — lowered to a jump to the halt loop.
+/// - `#!` (fail): should be proven unreachable; lowered to `ebreak` as a guard.
+/// - `#?` (unreachable / program end): lowered to a jump to the halt loop.
 ///
 /// A `__halt: wfi; j __halt` loop is appended so execution never runs off the end
 /// of `.text`. Then `.data` holds the runtime type descriptors read via `#&`, and
@@ -35,7 +35,7 @@ use std::ptr::NonNull;
 /// proven paths, and (in `transitions`) which instruction computes which offset.
 /// Bytes outside the accessed ranges are **removed** from the emitted layout, and
 /// every instruction whose address arithmetic spans a removed gap has its
-/// immediate rewritten to the compacted offset (`f(to) - f(from)`) — e.g. a loop
+/// immediate rewritten to the compacted offset (`f(to) - f(from)`): e.g. a loop
 /// striding 25-byte descriptor records whose middle 17 bytes are never read is
 /// rewritten to stride 8. A single immediate must satisfy *every* recorded
 /// execution of its instruction; where it cannot (or where the verifier marked
@@ -44,8 +44,8 @@ use std::ptr::NonNull;
 /// live byte survive as `.zero` padding and only trailing dead bytes are
 /// dropped. Compaction can relocate accesses to different alignments; QEMU
 /// `virt` emulates misaligned access (the 25-byte records already rely on it),
-/// but stricter hardware may require an alignment-preserving layout — a future
-/// refinement.
+/// but stricter hardware may require an alignment-preserving layout (a future
+/// refinement).
 pub fn emit_executable(
     ast: Option<NonNull<AstNode>>,
     configuration: &TypeConfiguration,
@@ -82,7 +82,7 @@ pub fn emit_executable(
     // instruction, exactly where verification began.
     let mut text = String::from(".global _start\n_start:\n");
 
-    // .text — walk the AST, lowering the verification directives to real RISC-V
+    // .text: walk the AST, lowering the verification directives to real RISC-V
     // and re-pointing immediates at the compacted layout where required.
     let mut next = ast;
     while let Some(node) = next {
@@ -92,16 +92,16 @@ pub fn emit_executable(
             .and_then(|immediate| patch_immediate(instr, *immediate));
         let instr = patched.as_ref().unwrap_or(instr);
         match instr {
-            // Type annotation — metadata only; keep as a comment (`#` starts a
+            // Type annotation: metadata only; keep as a comment (`#` starts a
             // RISC-V comment, so its `Display` is already comment-safe).
             Instruction::Define(_) => text.push_str(&format!("    {instr}\n")),
-            // Load-address-of-type — load the generated descriptor's address.
+            // Load-address-of-type: load the generated descriptor's address.
             Instruction::Lat(Lat { register, label }) => text.push_str(&format!(
                 "    la {register}, __{label}_type  # #& {register}, {label}\n"
             )),
             // `fail` must be proven unreachable; trap if somehow reached.
             Instruction::Fail(_) => text.push_str("    ebreak  # fail (proven unreachable)\n"),
-            // `unreachable` / program end — halt.
+            // `unreachable` / program end: halt.
             Instruction::Unreachable(_) => {
                 text.push_str("    j __halt  # unreachable (program end)\n")
             }
@@ -114,7 +114,7 @@ pub fn emit_executable(
     // Halt loop, so execution never runs off the end of `.text`.
     text.push_str("__halt:\n    wfi\n    j __halt\n");
 
-    // .data — initialized runtime type descriptors, read by the lowered `#&`.
+    // .data: initialized runtime type descriptors, read by the lowered `#&`.
     let mut data = String::new();
     for label in &lat_labels {
         if let Some((_locality, ty)) = configuration.get(label) {
@@ -122,7 +122,7 @@ pub fn emit_executable(
         }
     }
 
-    // .bss — zero-initialized storage for every inferred variable, compacted to
+    // .bss: zero-initialized storage for every inferred variable, compacted to
     // its runtime-accessed bytes where the layout allows.
     let mut bss = String::new();
     for (label, (_locality, ty)) in &configuration.0 {
@@ -166,7 +166,7 @@ impl Layout {
     /// Maps an old offset to its emitted offset. Identity for padded layouts.
     /// For compacted layouts: inside an emitted range, its position among the
     /// emitted bytes; inside a gap, the position the next emitted byte takes
-    /// (gap bytes are never dereferenced — that is what made them gaps); past
+    /// (gap bytes are never dereferenced; that is what made them gaps); past
     /// the region's end, the emitted total plus the overhang, so a pointer that
     /// strides one whole record past the end (a loop's final, never-dereferenced
     /// step) keeps a consistent stride.
@@ -191,7 +191,7 @@ impl Layout {
         self.emitted.iter().map(|(start, end)| end - start).sum()
     }
 
-    /// One past the last emitted (old-offset) byte — the padded layout drops
+    /// One past the last emitted (old-offset) byte; the padded layout drops
     /// everything after it.
     fn live_end(&self) -> u64 {
         self.emitted.last().map(|&(_, end)| end).unwrap_or(0)
@@ -205,8 +205,8 @@ impl Layout {
     }
 }
 
-/// Builds the layout of every region the program emits and — under those
-/// layouts — the immediate each recorded instruction must carry. A node whose
+/// Builds the layout of every region the program emits and (under those
+/// layouts) the immediate each recorded instruction must carry. A node whose
 /// recorded executions cannot agree on a single immediate forces its regions
 /// back to the padded (identity) layout; the fixpoint iterates in AST order so
 /// any cascade is deterministic.
@@ -241,7 +241,10 @@ fn solve_layouts(
     }
     // Variable storage regions (byte-granular).
     for (label, (_locality, ty)) in &configuration.0 {
-        layouts.insert(label.clone(), variable_layout(accessed.get(label), size(ty)));
+        layouts.insert(
+            label.clone(),
+            variable_layout(accessed.get(label), size(ty)),
+        );
     }
     // Compact unless the verifier saw an under-determined offset into the region.
     for (label, layout) in layouts.iter_mut() {
@@ -258,7 +261,7 @@ fn solve_layouts(
 
     // Fixpoint: demote regions until every recorded node can carry one
     // immediate. A node fails when its records disagree, when it is *pinned*
-    // (it also executed with a raw address / scalar operand / range offset —
+    // (it also executed with a raw address / scalar operand / range offset,
     // executions invisible to `transitions`) yet compaction would change its
     // immediate, or when the required change cannot be patched into its
     // instruction at all.
@@ -271,12 +274,9 @@ fn solve_layouts(
             let satisfiable = match required_immediate(records, &layouts) {
                 None => false,
                 Some(required) => {
-                    let unchanged = records
-                        .iter()
-                        .next()
-                        .is_some_and(|(_, from, to)| {
-                            required as i128 == *to as i128 - *from as i128
-                        });
+                    let unchanged = records.iter().next().is_some_and(|(_, from, to)| {
+                        required as i128 == *to as i128 - *from as i128
+                    });
                     unchanged || (!pinned_nodes.contains(node) && patchable(*node))
                 }
             };
@@ -306,7 +306,7 @@ fn solve_layouts(
             continue;
         };
         // The original immediate is `to - from` of any record (an invariant of
-        // how transitions are recorded); rewrite only when compaction moved it —
+        // how transitions are recorded); rewrite only when compaction moved it,
         // which the fixpoint only permits for unpinned, patchable nodes.
         let original = records
             .iter()
@@ -344,19 +344,21 @@ fn required_immediate(
     required.and_then(|value| i64::try_from(value).ok())
 }
 
-/// Field-granular layout of a descriptor region — `record_count` 25-byte records
+/// Field-granular layout of a descriptor region: `record_count` 25-byte records
 /// of fields `[u64, u64, u64, u8]`. A field is emitted iff any accessed range
 /// touches it: values can only be emitted whole-field (a `.dword` holding a
 /// relocation cannot be split), which also over-covers partially-accessed fields
-/// — the sound direction.
+/// (the sound direction).
 fn descriptor_layout(ranges: Option<&BTreeSet<(u64, u64)>>, record_count: u64) -> Layout {
     const FIELD_SIZES: [u64; 4] = [8, 8, 8, 1];
     let mut emitted = Vec::new();
     for record in 0..record_count {
         let mut offset = record * 25;
         for field in FIELD_SIZES {
-            let live = ranges
-                .is_some_and(|rs| rs.iter().any(|&(start, end)| start < offset + field && end > offset));
+            let live = ranges.is_some_and(|rs| {
+                rs.iter()
+                    .any(|&(start, end)| start < offset + field && end > offset)
+            });
             if live {
                 emitted.push((offset, offset + field));
             }
@@ -393,7 +395,7 @@ fn variable_layout(ranges: Option<&BTreeSet<(u64, u64)>>, size: u64) -> Layout {
     }
 }
 
-/// Whether [`patch_immediate`] can rewrite this node's instruction — anything
+/// Whether [`patch_immediate`] can rewrite this node's instruction; anything
 /// else with recorded transitions must keep its original immediate (the
 /// fixpoint demotes its regions instead).
 fn patchable(node: NonNull<AstNode>) -> bool {
@@ -434,7 +436,7 @@ fn patch_immediate(instruction: &Instruction, immediate: i64) -> Option<Instruct
 /// The on-target layout matches what the verifier builds in `MemoryMap::set_type`
 /// and what the asset programs read: a 25-byte record
 /// `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]`, with `List`
-/// types followed by a `<name>_subtypes` array of one such record per element —
+/// types followed by a `<name>_subtypes` array of one such record per element,
 /// **minus** whatever the region's [`Layout`] removed or padded (see
 /// [`emit_executable`]'s dead-data note).
 fn emit_type_descriptor(
@@ -503,8 +505,8 @@ fn leaf_record_fields(ty: &Type) -> [String; 4] {
 
 /// Emits one 25-byte descriptor record starting at old-offset `base` of its
 /// region: live fields with their values; dead fields *removed* under a
-/// compacted layout (the accessing instructions were re-pointed), or — under a
-/// padded layout — kept as `.zero` padding below the region's last live byte
+/// compacted layout (the accessing instructions were re-pointed), or, under a
+/// padded layout, kept as `.zero` padding below the region's last live byte
 /// with trailing dead bytes dropped.
 fn emit_descriptor_record(out: &mut String, layout: &Layout, base: u64, fields: [String; 4]) {
     const FIELD_SIZES: [u64; 4] = [8, 8, 8, 1];

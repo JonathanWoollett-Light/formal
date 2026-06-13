@@ -6,38 +6,82 @@
 
 use formal::verifier_types::{AccessTransitions, AccessedRanges, TypeConfiguration};
 use formal::*;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-/// A single-line progress spinner on stderr (via [`indicatif`]), so multi-second
-/// tests (the verifier exploring thousands of steps; QEMU running its fixed boot
-/// timeout) visibly make progress instead of appearing stalled.
+/// Streams a test phase's live progress to `target/tmp/<test>.<phase>.progress`
+/// instead of drawing on the console.
 ///
-/// indicatif writes to the raw stderr handle, which bypasses libtest's output
-/// capture — the spinner is live during a plain `cargo test`, no `--nocapture`
-/// needed — and draws nothing when stderr is not a terminal (CI logs stay
-/// clean). Call `finish_and_clear()` when done so libtest's own `test … ok`
-/// output stays tidy.
-fn progress_spinner(label: String) -> ProgressBar {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::with_template("{spinner} {prefix}: {msg}")
-            .expect("static spinner template"),
-    );
-    spinner.set_prefix(label);
-    spinner.enable_steady_tick(Duration::from_millis(80));
-    spinner
+/// The console belongs to the test runner: interactive output (spinners,
+/// carriage returns) interleaves with nextest's own status display and corrupts
+/// it, so tests report nothing live: the console carries only the runner's
+/// concise per-test lines. To watch a long phase (the verifier explores ~2M
+/// steps for `uart_hello`; QEMU runs a fixed boot timeout), follow the file:
+///
+/// ```powershell
+/// Get-Content -Wait target\tmp\uart_hello.verify.progress
+/// ```
+///
+/// Updates are throttled (so calling [`Progress::update`] every verifier step
+/// is cheap) and appended one line at a time; the file is truncated when the
+/// phase starts and ends with a `done:` line.
+pub struct Progress {
+    file: Option<std::fs::File>,
+    last: Instant,
 }
 
-/// Parses and compresses `assets/<asm>.s`, returning the head of the AST.
+impl Progress {
+    const INTERVAL: Duration = Duration::from_millis(250);
+
+    /// Creates `target/tmp/<test>.<phase>.progress` (truncating any previous
+    /// run's file). The test name is taken from the current thread, which
+    /// libtest/nextest name after the test function.
+    pub fn new(phase: &str) -> Self {
+        let test = std::thread::current()
+            .name()
+            .unwrap_or("test")
+            .replace("::", ".");
+        let dir = format!("{}/target/tmp", env!("CARGO_MANIFEST_DIR"));
+        let file = std::fs::create_dir_all(&dir)
+            .ok()
+            .and_then(|()| std::fs::File::create(format!("{dir}/{test}.{phase}.progress")).ok());
+        Self {
+            file,
+            last: Instant::now() - Self::INTERVAL,
+        }
+    }
+
+    /// Appends a `status()` line if the rate limit allows (the closure only
+    /// runs when a line is actually written).
+    pub fn update(&mut self, status: impl FnOnce() -> String) {
+        if self.last.elapsed() < Self::INTERVAL {
+            return;
+        }
+        self.last = Instant::now();
+        if let Some(file) = &mut self.file {
+            let _ = writeln!(file, "{}", status());
+        }
+    }
+
+    /// Appends the final `done:` line.
+    pub fn finish(&mut self, status: impl std::fmt::Display) {
+        if let Some(file) = &mut self.file {
+            let _ = writeln!(file, "done: {status}");
+        }
+    }
+}
+
+/// Parses and compresses a dialect file given relative to `tests/` (each test
+/// folder stores its own `dialect.s`, generated from its `input.hl` by
+/// `hl::translate` and pinned by the test), returning the head of the AST.
 ///
 /// The path is resolved against `CARGO_MANIFEST_DIR` so the tests do not depend
 /// on the working directory.
-pub fn setup_test(asm: &str) -> Option<NonNull<AstNode>> {
+pub fn setup_test(asset: &str) -> Option<NonNull<AstNode>> {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let path = std::path::PathBuf::from(format!("{dir}/assets/{asm}.s"));
+    let path = std::path::PathBuf::from(format!("{dir}/tests/{asset}"));
     let source = std::fs::read_to_string(&path).unwrap();
     let chars = source.chars().collect::<Vec<_>>();
     let mut ast = new_ast(&chars, path);
@@ -45,7 +89,7 @@ pub fn setup_test(asm: &str) -> Option<NonNull<AstNode>> {
     ast
 }
 
-/// Inspects the leaf at the front of the queue — i.e. the `(hart, harts,
+/// Inspects the leaf at the front of the queue, i.e. the `(hart, harts,
 /// instruction)` that the *next* call to `next_step` will process. Returns
 /// `None` only when the queue is empty (the next step yields `Valid`).
 ///
@@ -73,13 +117,13 @@ pub unsafe fn front_step(explorerer: &Explorerer) -> Option<(u8, u8, String)> {
 /// queue length, `touched` count and `jumped` count *after* the step. Because
 /// the trace records every step (including the type-search backtracking), any
 /// change in exploration order, type inference, racy interleaving or
-/// optimization accounting will alter it — which is exactly the regression
+/// optimization accounting will alter it, which is exactly the regression
 /// signal these tests exist to provide.
 ///
 /// Returns the trace together with the terminal result of exploration: `Ok` of
 /// the terminal [`ExplorePathResult`] (`Valid` / `Invalid`), or `Err` of the
-/// [`CompilerError`] the verifier hit. The trace is returned in **all** cases —
-/// including on error — so a test can report where the error occurred. Use
+/// [`CompilerError`] the verifier hit. The trace is returned in **all** cases,
+/// including on error, so a test can report where the error occurred. Use
 /// [`expect_valid`] to assert success.
 ///
 /// # Safety
@@ -90,16 +134,12 @@ pub unsafe fn trace_valid_path(
 ) -> (Vec<String>, Result<ExplorePathResult, CompilerError>) {
     const STEP_CAP: usize = 10_000_000;
     let mut trace = Vec::new();
-    // Live progress (the verifier can take thousands of steps): the test thread
-    // is named after the test function by libtest.
-    let progress = progress_spinner(format!(
-        "verifying {}",
-        std::thread::current().name().unwrap_or("program")
-    ));
+    // Live progress (the verifier can take millions of steps) streams to
+    // `target/tmp/<test>.verify.progress`, never to the console (see
+    // [`Progress`]).
+    let mut progress = Progress::new("verify");
     for step in 0..STEP_CAP {
-        if step % 64 == 0 {
-            progress.set_message(format!("step {step} (queue {})", explorerer.queue.len()));
-        }
+        progress.update(|| format!("step {step} (queue {})", explorerer.queue.len()));
         let pre = front_step(&explorerer);
         match explorerer.next_step() {
             Ok(ExplorePathResult::Continue(next)) => {
@@ -117,22 +157,83 @@ pub unsafe fn trace_valid_path(
             // compiler error. Either way return it with the trace collected so far so
             // the test can inspect both.
             Ok(terminal) => {
-                progress.finish_and_clear();
+                progress.finish(format_args!("{} steps", trace.len()));
+                dump_trace(&trace);
                 return (trace, Ok(terminal));
             }
             Err(error) => {
                 // Record the step that failed (and the error) as the final trace line so
                 // the trace shows *where* the error occurred.
                 if let Some((hart, harts, instruction)) = pre {
-                    trace.push(format!("h{hart}/{harts} | {instruction} | <error: {error}>"));
+                    trace.push(format!(
+                        "h{hart}/{harts} | {instruction} | <error: {error}>"
+                    ));
                 }
-                progress.finish_and_clear();
+                progress.finish(format_args!("error after {} steps", trace.len()));
+                dump_trace(&trace);
                 return (trace, Err(error));
             }
         }
     }
-    progress.finish_and_clear();
+    progress.finish("step cap exceeded");
     panic!("exploration did not terminate within {STEP_CAP} steps");
+}
+
+/// Re-baseline mode: true when `BLESS` is set in the environment. In this mode
+/// the brittle pins that legitimately change with behaviour are regenerated
+/// from actual output in a single run rather than asserted: [`bless_asm`]
+/// overwrites each golden `.s`, [`trace_valid_path`] dumps the trace and step
+/// count to `target/tmp`, and a test skips its inline trace/step-count
+/// assertions (see the `if !blessing()` guards in the tests). The QEMU boot
+/// still runs, so a blessed program is still proven to execute. Re-baseline
+/// **deliberately**: inspect the regenerated pins and re-derive the inline
+/// expectations from the dumped trace; never bless to paper over a regression.
+pub fn blessing() -> bool {
+    std::env::var_os("BLESS").is_some()
+}
+
+/// Pins `actual` against the golden file `tests/<rel>`: asserts equality
+/// (line-ending-normalized) in a normal run, or, in [`blessing`] mode,
+/// overwrites the golden with `actual` and returns without asserting.
+/// `included` is the compile-time contents of the same file (`include_str!`),
+/// compared so the golden gets assembly syntax highlighting as a file.
+pub fn bless_asm(rel: &str, actual: String, included: &str) {
+    if blessing() {
+        let path = format!("{}/tests/{}", env!("CARGO_MANIFEST_DIR"), rel);
+        std::fs::write(&path, actual.as_bytes()).expect("bless write failed");
+        return;
+    }
+    assert_eq!(
+        normalize(actual),
+        normalize(included),
+        "golden mismatch: {rel}"
+    );
+}
+
+/// In [`blessing`] mode writes the trace and its step count to
+/// `target/tmp/<test>.trace` / `target/tmp/<test>.meta` so re-baselining a
+/// pinned trace, step count, or configuration timeline starts from the actual
+/// behaviour. A no-op in a normal run; the test name is taken from the current
+/// thread. Very long traces (e.g. `uart_hello`'s ~2M steps) write only the
+/// `.meta` count, not the full trace.
+fn dump_trace(trace: &[String]) {
+    if !blessing() {
+        return;
+    }
+    let test = std::thread::current()
+        .name()
+        .unwrap_or("test")
+        .replace("::", ".");
+    let dir = format!("{}/target/tmp", env!("CARGO_MANIFEST_DIR"));
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(
+            format!("{dir}/{test}.meta"),
+            format!("steps={}\n", trace.len()),
+        );
+        if trace.len() <= 100_000 {
+            let _ = std::fs::write(format!("{dir}/{test}.trace"), trace.join("\n"));
+        }
+    }
 }
 
 /// Asserts the verifier reached a valid path and returns it. On any other
@@ -160,40 +261,6 @@ pub fn expect_valid(
     }
 }
 
-/// Runs the full pipeline for `name` — parse, compress, verify (over the given
-/// hart counts), then `remove_untouched` + `remove_branches` — and returns the
-/// optimized AST plus the inferred `TypeConfiguration`. Panics if verification
-/// does not reach a valid path.
-///
-/// # Safety
-/// As [`Explorerer::new`] / the optimizer: operates on the raw-pointer AST.
-pub unsafe fn verify_and_optimize(
-    name: &str,
-    sections: Vec<Section>,
-    harts: &[u8],
-) -> (Option<NonNull<AstNode>>, TypeConfiguration, AccessedRanges) {
-    let mut ast = setup_test(name);
-    let systems = harts
-        .iter()
-        .map(|&harts| InnerVerifierConfiguration {
-            sections: sections.clone(),
-            harts,
-        })
-        .collect::<Vec<_>>();
-    let explorerer = Explorerer::new(ast, &systems).expect("failed to construct the verifier");
-    let (trace, result) = trace_valid_path(explorerer);
-    let ValidPathResult {
-        configuration,
-        touched,
-        jumped,
-        accessed,
-        ..
-    } = expect_valid(&trace, result);
-    remove_untouched(&mut ast, &touched);
-    remove_branches(&mut ast, &jumped);
-    (ast, configuration, accessed)
-}
-
 /// Normalizes line endings so the expected strings (written with `\n`) compare
 /// equal regardless of the platform-specific line ending emitted by
 /// [`print_ast`] (which uses `\r\n` on Windows).
@@ -205,7 +272,7 @@ pub fn normalize(s: impl Into<String>) -> String {
 pub struct QemuOutcome {
     /// Bytes the program wrote to the UART (the QEMU `virt` 16550 at 0x10000000).
     pub serial: String,
-    /// Number of guest CPU exceptions/faults QEMU logged — `0` means it ran cleanly.
+    /// Number of guest CPU exceptions/faults QEMU logged; `0` means it ran cleanly.
     pub faults: usize,
     /// The head of QEMU's `guest_errors` log (for diagnostics on failure).
     pub fault_log: String,
@@ -218,7 +285,7 @@ fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// Writes the generated program `asm` to `target/gen/<name>.s`, then — under WSL —
+/// Writes the generated program `asm` to `target/gen/<name>.s`, then, under WSL,
 /// assembles + links it with the RISC-V GNU toolchain and boots it in
 /// `qemu-system-riscv64 -machine virt`, returning the captured UART output and
 /// CPU-fault count.
@@ -241,7 +308,8 @@ pub fn run_in_qemu(name: &str, asm: &str) -> QemuOutcome {
     std::fs::create_dir_all(&gen).expect("create target/gen");
     std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
 
-    let bin = std::env::var("RISCV_BIN").unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
+    let bin = std::env::var("RISCV_BIN")
+        .unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
     // `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp`. The
     // program halts in a `wfi` loop, so `timeout` bounds the run; the UART output
     // is captured to a file and the CPU faults to the `guest_errors` log.
@@ -257,7 +325,7 @@ G="$(wslpath '{gen}')"
 "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
 # `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
-# (to stderr, which is unbuffered — so the host can watch the count live for
+# (to stderr, which is unbuffered, so the host can watch the count live for
 # progress reporting); `guest_errors` shares the same log for fault detection.
 timeout 3 qemu-system-riscv64 -machine virt -bios none -display none -monitor none \
     -accel tcg,one-insn-per-tb=on -d guest_errors,exec,nochain \
@@ -283,33 +351,49 @@ echo "===END==="
     let worker = {
         let script = script.clone();
         std::thread::spawn(move || {
-            Command::new("wsl")
-                .arg("-e")
-                .arg("bash")
-                .arg("-lc")
-                .arg(&script)
-                .output()
+            let mut command = Command::new("wsl");
+            command.arg("-e").arg("bash").arg("-lc").arg(&script);
+            // Detach WSL from our console (`CREATE_NO_WINDOW`). `wsl.exe`
+            // mutates the console mode of whatever console it attaches to,
+            // which corrupts the test runner's output for the rest of the run
+            // (newlines stop carriage-returning, the "staircase" effect, and
+            // in-place progress displays print a new line per redraw). Its
+            // output is piped by `.output()`, so it never needs the console.
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                command.creation_flags(CREATE_NO_WINDOW);
+            }
+            command.output()
         })
     };
-    let progress = progress_spinner(format!("booting {name} in QEMU"));
+    // Progress (elapsed time + live guest instruction count, read from the exec
+    // log QEMU writes as it runs) streams to `target/tmp/<test>.qemu.progress`.
+    let mut progress = Progress::new("qemu");
     let log_path = format!("{gen}/{name}.qemu.log");
     let started = Instant::now();
     while !worker.is_finished() {
-        let instructions = std::fs::read_to_string(&log_path)
-            .map(|log| log.lines().filter(|l| l.starts_with("Trace")).count())
-            .unwrap_or(0);
-        progress.set_message(format!(
-            "{:.1}s, {instructions} instructions executed",
-            started.elapsed().as_secs_f32()
-        ));
+        progress.update(|| {
+            let instructions = std::fs::read_to_string(&log_path)
+                .map(|log| log.lines().filter(|l| l.starts_with("Trace")).count())
+                .unwrap_or(0);
+            format!(
+                "{:.1}s, {instructions} instructions executed",
+                started.elapsed().as_secs_f32()
+            )
+        });
         std::thread::sleep(Duration::from_millis(50));
     }
-    progress.finish_and_clear();
+    progress.finish(format_args!(
+        "booted in {:.1}s",
+        started.elapsed().as_secs_f32()
+    ));
     let output = worker
         .join()
         .expect("the WSL worker thread panicked")
         .expect(
-            "failed to invoke WSL — WSL with the RISC-V GNU toolchain and \
+            "failed to invoke WSL: WSL with the RISC-V GNU toolchain and \
              qemu-system-riscv64 is required to build and boot the generated program",
         );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -318,7 +402,7 @@ echo "===END==="
     if let Some((_, rest)) = stdout.split_once("===MISSING===") {
         let reason = rest.lines().next().unwrap_or("").trim();
         panic!(
-            "`{name}`: cannot build/boot the generated program — {reason}.\n\
+            "`{name}`: cannot build/boot the generated program ({reason}).\n\
              QEMU (`qemu-system-riscv64`) and the RISC-V GNU toolchain are REQUIRED to \
              run these tests; install them under WSL (point `RISCV_BIN` at the toolchain \
              `bin/`)."
@@ -337,7 +421,9 @@ echo "===END==="
         .trim()
         .parse()
         .unwrap_or(usize::MAX);
-    let fault_log = between(&stdout, "===LOG===", "===END===").trim().to_string();
+    let fault_log = between(&stdout, "===LOG===", "===END===")
+        .trim()
+        .to_string();
 
     QemuOutcome {
         serial,
@@ -375,7 +461,10 @@ pub unsafe fn run_program(
     );
 
     // The emitted program must be self-contained.
-    assert!(asm.contains(".global _start"), "{name}: no entry point\n{asm}");
+    assert!(
+        asm.contains(".global _start"),
+        "{name}: no entry point\n{asm}"
+    );
     assert!(asm.contains("__halt:"), "{name}: no halt loop\n{asm}");
     for label in configuration.0.keys() {
         assert!(
@@ -386,8 +475,8 @@ pub unsafe fn run_program(
 
     // Dead-data elimination: information only read at *compile time* (by the
     // verifier) must not be stored in the output. None of these programs read a
-    // descriptor's locality byte at runtime, so no locality data — the only
-    // `.byte` directives the descriptor emitter produces — may survive anywhere
+    // descriptor's locality byte at runtime, so no locality data (the only
+    // `.byte` directives the descriptor emitter produces) may survive anywhere
     // in the generated `.data`/`.bss` sections.
     if let Some((_, generated_sections)) = asm.split_once(".section .data") {
         assert!(
@@ -405,8 +494,104 @@ pub unsafe fn run_program(
     outcome.serial
 }
 
+/// Like [`run_in_qemu`], but builds and runs a **Linux** RISC-V program rather
+/// than booting bare metal: it assembles + links a static ELF (entry `_start`,
+/// no fixed text address) and runs it under the user-mode emulator
+/// `qemu-riscv64` (bundled in the toolchain `bin/`), returning what the program
+/// wrote to standard output. This is how `linux_hello` exercises the std
+/// library's `print`, which issues the Linux `write`/`exit` system calls via
+/// `ecall`.
+///
+/// Requires the RISC-V GNU toolchain and `qemu-riscv64`; like [`run_in_qemu`] it
+/// panics (failing the test) if they are missing, rather than skipping.
+pub fn run_linux(name: &str, asm: &str) -> String {
+    use std::process::Command;
+
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let gen = format!("{dir}/target/gen");
+    std::fs::create_dir_all(&gen).expect("create target/gen");
+    std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
+
+    let bin = std::env::var("RISCV_BIN")
+        .unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
+    let script = format!(
+        r#"set -e
+BIN="{bin}"
+AS="$BIN/riscv64-unknown-elf-as"
+LD="$BIN/riscv64-unknown-elf-ld"
+QEMU="$BIN/qemu-riscv64"
+{{ [ -x "$AS" ] && [ -x "$LD" ] && [ -x "$QEMU" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (as/ld) and user-mode qemu-riscv64 were not found under $BIN (set RISCV_BIN)"; exit 0; }}
+G="$(wslpath '{gen}')"
+"$AS" -o "$G/{name}.o" "$G/{name}.s"
+# Static ELF with entry `_start`; `--no-relax` keeps `la` PC-relative (no `gp`).
+"$LD" --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
+echo "===OUT_BEGIN==="
+timeout 10 "$QEMU" "$G/{name}.elf" || true
+echo "===OUT_END==="
+echo "===END==="
+"#
+    );
+
+    let worker = {
+        let script = script.clone();
+        std::thread::spawn(move || {
+            let mut command = Command::new("wsl");
+            command.arg("-e").arg("bash").arg("-lc").arg(&script);
+            // Detach WSL from the console (see the note in `run_in_qemu`).
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                command.creation_flags(CREATE_NO_WINDOW);
+            }
+            command.output()
+        })
+    };
+    let mut progress = Progress::new("qemu");
+    let started = Instant::now();
+    while !worker.is_finished() {
+        progress.update(|| {
+            format!(
+                "{:.1}s building + running under qemu-riscv64",
+                started.elapsed().as_secs_f32()
+            )
+        });
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    progress.finish(format_args!(
+        "ran in {:.1}s",
+        started.elapsed().as_secs_f32()
+    ));
+    let output = worker
+        .join()
+        .expect("the WSL worker thread panicked")
+        .expect(
+            "failed to invoke WSL: WSL with the RISC-V GNU toolchain and qemu-riscv64 is \
+         required to build and run the generated Linux program",
+        );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if let Some((_, rest)) = stdout.split_once("===MISSING===") {
+        let reason = rest.lines().next().unwrap_or("").trim();
+        panic!(
+            "`{name}`: cannot build/run the Linux program ({reason}). The RISC-V GNU \
+             toolchain and `qemu-riscv64` are REQUIRED; install them under WSL (point \
+             `RISCV_BIN` at the toolchain `bin/`)."
+        );
+    }
+    assert!(
+        stdout.contains("===END==="),
+        "assembling/linking/running the Linux `{name}` program failed:\n\
+         --- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+    between(&stdout, "===OUT_BEGIN===", "===OUT_END===")
+        .trim_matches('\n')
+        .to_string()
+}
+
 /// Extracts the sequence of distinct, consecutive `configuration` strings from a
-/// [`trace_valid_path`] trace — i.e. the type-inference timeline. A reset to
+/// [`trace_valid_path`] trace, i.e. the type-inference timeline. A reset to
 /// `Config: []` marks a backtrack to re-try a variable's next candidate type.
 pub fn config_timeline(trace: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
