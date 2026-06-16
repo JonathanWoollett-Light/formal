@@ -227,7 +227,7 @@ search with it. `formal` lets you encode that discipline as a **verified library
 abstraction** rather than suffer it as a built-in rule: implement an
 `std::rc::Rc`-style reference-counted pointer whose borrow invariant is a `#!`
 (`fail`) the verifier must prove unreachable, checking the aliasing/ownership
-condition at compile time. (The design notes in [CLAUDE.md](CLAUDE.md) anticipate exactly this:
+condition at compile time. (The design notes in [DEVELOPMENT.md](DEVELOPMENT.md) anticipate exactly this:
 *"borrow checking is, from this verifier's perspective, just a way to
 invalidate bad paths faster"*: a reference-counted pointer whose invariant is
 a `#!` the proof must show unreachable.) Use such a type throughout

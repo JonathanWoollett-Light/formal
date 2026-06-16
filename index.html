@@ -7,18 +7,21 @@
       name="description"
       content="formal: a verifying compiler for bare-metal RISC-V with Python-like syntax. Every hart interleaving, every admissible type, proven at compile time."
     />
+    <title>formal</title>
+    <!-- Material 3: Roboto / Roboto Mono type and Material Symbols icons. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&family=Material+Symbols+Outlined&display=swap"
     />
-    <title>formal</title>
     <script>
       // Apply the saved (or system) color scheme before first paint, so the
-      // page never flashes the wrong theme. The toggle (end of body) keeps
-      // `picoColorScheme` in sync.
+      // page never flashes the wrong theme. The toggle keeps `colorScheme` in
+      // sync; the M3 color tokens swap under [data-theme="dark"].
       (function () {
         try {
-          var scheme = localStorage.getItem("picoColorScheme");
+          var scheme = localStorage.getItem("colorScheme");
           if (scheme !== "light" && scheme !== "dark") {
             scheme = window.matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
@@ -29,192 +32,366 @@
       })();
     </script>
     <style>
-      /* Smaller base type and a narrower central column than Pico's defaults. */
+      /* ---- Material 3 baseline color tokens (purple seed). The page and the
+         Material Web components both read these `--md-sys-color-*` roles; dark
+         mode just swaps the values under [data-theme="dark"]. ---- */
       :root {
-        font-size: 87.5%;
+        --md-sys-color-primary: #6750a4;
+        --md-sys-color-on-primary: #ffffff;
+        --md-sys-color-primary-container: #eaddff;
+        --md-sys-color-on-primary-container: #21005d;
+        --md-sys-color-secondary: #625b71;
+        --md-sys-color-on-secondary: #ffffff;
+        --md-sys-color-secondary-container: #e8def8;
+        --md-sys-color-on-secondary-container: #1d192b;
+        --md-sys-color-tertiary: #7d5260;
+        --md-sys-color-error: #b3261e;
+        --md-sys-color-surface: #fef7ff;
+        --md-sys-color-on-surface: #1d1b20;
+        --md-sys-color-surface-variant: #e7e0ec;
+        --md-sys-color-on-surface-variant: #49454f;
+        --md-sys-color-surface-container-lowest: #ffffff;
+        --md-sys-color-surface-container-low: #f7f2fa;
+        --md-sys-color-surface-container: #f3edf7;
+        --md-sys-color-surface-container-high: #ece6f0;
+        --md-sys-color-surface-container-highest: #e6e0e9;
+        --md-sys-color-outline: #79747e;
+        --md-sys-color-outline-variant: #cac4d0;
+        --md-sys-color-inverse-surface: #322f35;
+        --md-sys-color-inverse-on-surface: #f5eff7;
+        --md-ref-typeface-plain: "Roboto", system-ui, sans-serif;
+        --md-ref-typeface-code: "Roboto Mono", ui-monospace, monospace;
+        color-scheme: light;
+      }
+      [data-theme="dark"] {
+        --md-sys-color-primary: #d0bcff;
+        --md-sys-color-on-primary: #381e72;
+        --md-sys-color-primary-container: #4f378b;
+        --md-sys-color-on-primary-container: #eaddff;
+        --md-sys-color-secondary: #ccc2dc;
+        --md-sys-color-on-secondary: #332d41;
+        --md-sys-color-secondary-container: #4a4458;
+        --md-sys-color-on-secondary-container: #e8def8;
+        --md-sys-color-tertiary: #efb8c8;
+        --md-sys-color-error: #f2b8b5;
+        --md-sys-color-surface: #141218;
+        --md-sys-color-on-surface: #e6e0e9;
+        --md-sys-color-surface-variant: #49454f;
+        --md-sys-color-on-surface-variant: #cac4d0;
+        --md-sys-color-surface-container-lowest: #0f0d13;
+        --md-sys-color-surface-container-low: #1d1b20;
+        --md-sys-color-surface-container: #211f26;
+        --md-sys-color-surface-container-high: #2b2930;
+        --md-sys-color-surface-container-highest: #36343b;
+        --md-sys-color-outline: #938f99;
+        --md-sys-color-outline-variant: #49454f;
+        --md-sys-color-inverse-surface: #e6e0e9;
+        --md-sys-color-inverse-on-surface: #322f35;
+        color-scheme: dark;
+      }
+
+      /* ---- Base ---- */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--md-sys-color-surface);
+        color: var(--md-sys-color-on-surface);
+        font-family: var(--md-ref-typeface-plain);
+        font-size: 16px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
       .container {
-        max-width: 720px;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 0 1.25rem;
       }
-      /* Soften the light theme: a papery off-white instead of a harsh pure
-         white, with a slightly warmer card/code surface to match. */
-      [data-theme="light"] {
-        --pico-background-color: #f5f2ea;
-        --pico-card-background-color: #fbf9f3;
-        --pico-card-sectioning-background-color: #fbf9f3;
-        --pico-code-background-color: #ece8dd;
+      /* Material 3 type scale (Roboto). */
+      h1 {
+        font: 500 1.75rem/2.25rem var(--md-ref-typeface-plain);
+        margin: 0;
       }
-      pre.asm {
-        font-size: 12px;
-        max-height: 420px;
-        overflow: auto;
-        margin-bottom: 0;
+      h3 {
+        font: 400 1.5rem/2rem var(--md-ref-typeface-plain);
+        margin: 0 0 0.75rem;
       }
-      /* Pico already insets a code block via the inner block `pre > code`
-         (padding: var(--pico-spacing) = 1rem), leaving the `pre` itself
-         unpadded, so the trailing padding survives horizontal scroll. Tune
-         that single knob instead of padding the `pre` on top of it (which
-         doubles up: the text would be inset by both paddings summed). */
-      pre.asm > code {
-        padding: 0.525rem;
+      h4 {
+        font: 500 1.25rem/1.75rem var(--md-ref-typeface-plain);
+        color: var(--md-sys-color-tertiary);
       }
+      h5 {
+        font: 500 0.95rem/1.5rem var(--md-ref-typeface-plain);
+        margin: 0 0 0.5rem;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      p {
+        margin: 0.6rem 0 0;
+      }
+      a {
+        color: var(--md-sys-color-primary);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      small {
+        font-size: 0.8rem;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      b {
+        font-weight: 500;
+      }
+      ul {
+        padding-left: 1.25rem;
+        margin: 0.5rem 0 0;
+      }
+      li {
+        margin: 0.4rem 0;
+      }
+      section {
+        margin: 2.75rem 0;
+      }
+
+      /* ---- Header / nav ---- */
+      header.container {
+        padding-top: 1.5rem;
+      }
+      header nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem 1rem;
+        flex-wrap: wrap;
+      }
+      .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        flex-wrap: wrap;
+      }
+      /* Nav links styled as M3 text buttons; the theme toggle as an M3 icon
+         button (Material Symbols glyph rendered from the icon font). */
+      .nav-actions a {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.4rem 0.75rem;
+        border-radius: 20px;
+        font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain);
+        color: var(--md-sys-color-primary);
+        text-decoration: none;
+      }
+      .nav-actions a:hover {
+        background: color-mix(
+          in srgb,
+          var(--md-sys-color-primary) 10%,
+          transparent
+        );
+        text-decoration: none;
+      }
+      #theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--md-sys-color-on-surface-variant);
+        cursor: pointer;
+      }
+      #theme-toggle:hover {
+        background: color-mix(
+          in srgb,
+          var(--md-sys-color-on-surface) 8%,
+          transparent
+        );
+      }
+      .material-symbols-outlined {
+        font-family: "Material Symbols Outlined";
+        font-weight: normal;
+        font-size: 24px;
+        line-height: 1;
+        font-feature-settings: "liga";
+      }
+      header > p {
+        margin-top: 1rem;
+      }
+
+      /* ---- Inline code ---- */
       .code {
-        font-family: var(--pico-font-family-monospace, monospace);
-        background-color: rgba(100, 100, 100, 0.2);
-        padding: 2px 5px;
-        border-radius: 3px;
+        font-family: var(--md-ref-typeface-code);
+        font-size: 0.875em;
+        background: var(--md-sys-color-surface-container-high);
+        color: var(--md-sys-color-on-surface);
+        padding: 0.1rem 0.35rem;
+        border-radius: 4px;
         white-space: nowrap;
+      }
+
+      /* ---- Two-column grids (comparison + the end-to-end source/emitted) ---- */
+      .cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+      @media (max-width: 640px) {
+        .cols {
+          grid-template-columns: 1fr;
+        }
+      }
+      /* Let `1fr` columns shrink below their content's intrinsic min-width, so a
+         long line in a code/command box scrolls inside the panel instead of
+         stretching the column past the viewport. */
+      .cols > div {
+        min-width: 0;
       }
       .cols > div > h5 {
         margin-bottom: 0.5rem;
       }
+
+      /* ---- Code blocks (M3 surface cards) ---- */
+      pre.asm {
+        font-family: var(--md-ref-typeface-code);
+        font-size: 12px;
+        max-height: 420px;
+        overflow: auto;
+        margin: 0;
+        padding: 0;
+        background: var(--md-sys-color-surface-container);
+        border: 1px solid var(--md-sys-color-outline-variant);
+        border-radius: 12px;
+      }
+      pre.asm > code {
+        display: block;
+        padding: 0.6rem 0.75rem;
+        font-family: inherit;
+      }
+      /* Reproduction-command box under each comparison panel: a fixed four-line
+         box, scrolling for longer or wider commands. */
+      .compare pre.cmd {
+        font-family: var(--md-ref-typeface-code);
+        font-size: 11px;
+        line-height: 1.5;
+        height: calc(4 * 1.5em + 1.2rem);
+        overflow: auto;
+        white-space: pre;
+        margin: 0.5rem 0 0;
+        background: var(--md-sys-color-surface-container-high);
+        color: var(--md-sys-color-on-surface-variant);
+        border: 1px solid var(--md-sys-color-outline-variant);
+        border-radius: 12px;
+      }
+      .compare pre.cmd > code {
+        display: block;
+        padding: 0.6rem 0.75rem;
+        font-family: inherit;
+      }
+
+      /* ---- Comparison tabs: native buttons styled as M3 primary tabs (an
+         active underline indicator), so they work without any component JS. ---- */
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+        border-bottom: 1px solid var(--md-sys-color-outline-variant);
+      }
+      .tabs button {
+        flex: 1 1 0;
+        appearance: none;
+        margin: 0;
+        padding: 0.55rem 0.5rem;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 8px 8px 0 0;
+        font: 500 0.85rem/1.25rem var(--md-ref-typeface-plain);
+        color: var(--md-sys-color-on-surface-variant);
+        cursor: pointer;
+      }
+      .tabs button:hover {
+        background: color-mix(
+          in srgb,
+          var(--md-sys-color-primary) 8%,
+          transparent
+        );
+      }
+      .tabs button[aria-selected="true"] {
+        color: var(--md-sys-color-primary);
+        border-bottom-color: var(--md-sys-color-primary);
+      }
+      .lang-tabs {
+        margin-bottom: 0.25rem;
+      }
+      .prog-tabs {
+        margin-bottom: 1rem;
+      }
+
       .pipeline {
         text-align: center;
-        margin: 0.5rem 0 1.5rem 0;
-        opacity: 0.8;
+        color: var(--md-sys-color-on-surface-variant);
+        margin: 0.75rem 0 1.5rem;
       }
-      section {
-        margin-bottom: 2.5rem;
+      .instr-count {
+        margin: 0.6rem 0 0;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      .instr-count b {
+        font-size: 1.1em;
+        color: var(--md-sys-color-on-surface);
+      }
+
+      /* ---- Directives table ---- */
+      table.directives {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+      }
+      table.directives th,
+      table.directives td {
+        text-align: left;
+        padding: 0.5rem 0.6rem;
+        border-bottom: 1px solid var(--md-sys-color-outline-variant);
+        vertical-align: top;
+      }
+      table.directives th {
+        color: var(--md-sys-color-on-surface-variant);
+        font-weight: 500;
       }
       table.directives td:first-child,
       table.directives td:nth-child(2) {
         white-space: nowrap;
       }
-      /* Theme toggle: the animated sun/moon icon from picocss.com. */
-      #theme-toggle {
-        display: inline-flex;
-        align-items: center;
+
+      footer.container {
+        margin: 3rem auto;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--md-sys-color-outline-variant);
       }
-      svg.icon-theme-toggle {
-        --theme-toggle-duration: 0.4s;
-      }
-      svg.icon-theme-toggle :first-child path {
-        transition-duration: calc(var(--theme-toggle-duration) * 0.6);
-        transition-property: transform, d;
-        transition-timing-function: cubic-bezier(0, 0, 0.5, 1);
-      }
-      svg.icon-theme-toggle g circle,
-      svg.icon-theme-toggle g path {
-        transform-origin: center;
-        transition: transform calc(var(--theme-toggle-duration) * 0.65)
-          cubic-bezier(0, 0, 0, 1.25) calc(var(--theme-toggle-duration) * 0.35);
-      }
-      svg.icon-theme-toggle.moon g circle {
-        transform: scale(1.4);
-        transition-delay: 0s;
-      }
-      svg.icon-theme-toggle.moon g path {
-        transform: scale(0.75);
-        transition-delay: 0s;
-      }
-      svg.icon-theme-toggle.moon :first-child path {
-        d: path("M-9 3h25a1 1 0 0017 13v30H0Z");
-        transition-delay: calc(var(--theme-toggle-duration) * 0.4);
-        transition-timing-function: cubic-bezier(0, 0, 0, 1.25);
-      }
-      @supports not (d: path("")) {
-        svg.icon-theme-toggle.moon :first-child path {
-          transform: translate3d(-9px, 14px, 0);
-        }
-      }
-      /* Language-comparison tab bar. */
-      .tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.3rem;
-        margin-bottom: 1rem;
-      }
-      .tabs button,
-      .tabs a {
-        /* Equal-width boxes that share the row (a `button` for an in-page tab,
-           an `a` when the tab links out, e.g. a benchmark description). */
-        flex: 1 1 0;
-        text-align: center;
-        margin: 0;
-        padding: 0.2rem 0.5rem;
-        font-size: 0.8em;
-        background: transparent;
-        /* `--pico-color` is redefined to the inverse (white) inside buttons, so
-           an unselected tab would be invisible in light mode; `--pico-contrast`
-           is the page text colour and stays readable in both schemes. */
-        color: var(--pico-contrast);
-        border: 1px solid var(--pico-muted-border-color);
-        border-radius: var(--pico-border-radius);
-        text-decoration: none;
-      }
-      .tabs a:hover,
-      .tabs a:focus {
-        color: var(--pico-contrast);
-        text-decoration: none;
-      }
-      .tabs button[aria-selected="true"],
-      .tabs a[aria-selected="true"] {
-        background: var(--pico-primary-background);
-        color: var(--pico-primary-inverse);
-        border-color: var(--pico-primary-background);
-      }
-      /* Two stacked tab rows (language, then program): keep them tight, with the
-         normal gap left below the second row before the panels. */
-      .lang-tabs {
-        margin-bottom: 0.35rem;
-      }
-      .instr-count {
-        margin: 0.5rem 0 0 0;
-        opacity: 0.85;
-      }
-      .instr-count b {
-        font-size: 1.1em;
-      }
-      /* Give every comparison code block the height of the tallest one (the
-         6-line Ada sample), so switching tabs does not resize the row and the
-         two panels always match. Text stays top-left (the `pre` default). The
-         exact height is measured and applied in JS (see the tab script); this
-         is a generous fallback that still fits the tallest sample without it. */
-      .compare pre.asm {
-        min-height: 11rem;
-      }
-      /* The reproduction commands under each comparison panel: a fixed
-         four-line box that scrolls vertically for more lines and horizontally
-         for lines wider than the panel (`white-space: pre` keeps them unwrapped). */
-      .compare pre.cmd {
-        font-size: 11px;
-        line-height: 1.5;
-        height: calc(4 * 1.5em + 0.7rem);
-        overflow: auto;
-        white-space: pre;
-        margin: 0.5rem 0 0 0;
-        color: var(--pico-muted-color);
-        background: var(--pico-code-background-color);
-        border-radius: var(--pico-border-radius);
-      }
-      /* Same single-source padding as `pre.asm`: on the inner `code`, not the
-         `pre`. The height calc above budgets exactly this 0.7rem of vertical
-         padding (2 x 0.35rem); when it also sat on the `pre`, Pico's hidden
-         1rem on `pre > code` pushed the four lines past the box. */
-      pre.cmd > code {
-        padding: 0.35rem 0.5rem;
-      }
-      /* Thinner, more subtle scrollbars on the scrollable code/command boxes:
-         a slim track with a muted, theme-adaptive thumb. `scrollbar-width` is
-         the standard property; the `::-webkit-` rules cover older Chromium. */
+
+      /* ---- Slim, theme-aware scrollbars on the scrollable code boxes ---- */
       pre.asm,
       pre.cmd {
         scrollbar-width: thin;
-        scrollbar-color: var(--pico-muted-border-color) transparent;
+        scrollbar-color: var(--md-sys-color-outline-variant) transparent;
       }
       pre.asm::-webkit-scrollbar,
       pre.cmd::-webkit-scrollbar {
-        width: 7px;
-        height: 7px;
+        width: 8px;
+        height: 8px;
       }
       pre.asm::-webkit-scrollbar-thumb,
       pre.cmd::-webkit-scrollbar-thumb {
-        background: var(--pico-muted-border-color);
+        background: var(--md-sys-color-outline-variant);
         border-radius: 4px;
       }
       pre.asm::-webkit-scrollbar-thumb:hover,
       pre.cmd::-webkit-scrollbar-thumb:hover {
-        background: var(--pico-muted-color);
+        background: var(--md-sys-color-outline);
       }
       pre.asm::-webkit-scrollbar-track,
       pre.cmd::-webkit-scrollbar-track {
@@ -225,59 +402,29 @@
   <body>
     <header class="container">
       <nav>
-        <ul>
-          <li>
-            <h1 style="margin-bottom: 0">formal</h1>
-          </li>
-        </ul>
-        <ul>
-          <li>
-            <a href="https://github.com/JonathanWoollett-Light/formal"
-              >GitHub</a
+        <h1>formal</h1>
+        <div class="nav-actions">
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal"
+            target="_blank"
+            >GitHub</a
+          >
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
+            target="_blank"
+            >README</a
+          >
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
+            target="_blank"
+            >Comparisons</a
+          >
+          <button id="theme-toggle" type="button" aria-label="Toggle dark mode">
+            <span class="material-symbols-outlined" aria-hidden="true"
+              >light_mode</span
             >
-          </li>
-          <li>
-            <a
-              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
-              >README</a
-            >
-          </li>
-          <li>
-            <a
-              href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
-              >Comparisons</a
-            >
-          </li>
-          <li>
-            <a
-              href="#"
-              id="theme-toggle"
-              class="contrast"
-              aria-label="Turn on dark mode"
-              role="button"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 32 32"
-                fill="currentColor"
-                class="icon-theme-toggle"
-                aria-hidden="true"
-              >
-                <clipPath id="theme-toggle-cutout">
-                  <path d="M0-11h25a1 1 0 0017 13v30H0Z"></path>
-                </clipPath>
-                <g clip-path="url(#theme-toggle-cutout)">
-                  <circle cx="16" cy="16" r="8.4"></circle>
-                  <path
-                    d="M18.3 3.2c0 1.3-1 2.3-2.3 2.3s-2.3-1-2.3-2.3S14.7.9 16 .9s2.3 1 2.3 2.3zm-4.6 25.6c0-1.3 1-2.3 2.3-2.3s2.3 1 2.3 2.3-1 2.3-2.3 2.3-2.3-1-2.3-2.3zm15.1-10.5c-1.3 0-2.3-1-2.3-2.3s1-2.3 2.3-2.3 2.3 1 2.3 2.3-1 2.3-2.3 2.3zM3.2 13.7c1.3 0 2.3 1 2.3 2.3s-1 2.3-2.3 2.3S.9 17.3.9 16s1-2.3 2.3-2.3zm5.8-7C9 7.9 7.9 9 6.7 9S4.4 8 4.4 6.7s1-2.3 2.3-2.3S9 5.4 9 6.7zm16.3 21c-1.3 0-2.3-1-2.3-2.3s1-2.3 2.3-2.3 2.3 1 2.3 2.3-1 2.3-2.3 2.3zm2.4-21c0 1.3-1 2.3-2.3 2.3S23 7.9 23 6.7s1-2.3 2.3-2.3 2.4 1 2.4 2.3zM6.7 23C8 23 9 24 9 25.3s-1 2.3-2.3 2.3-2.3-1-2.3-2.3 1-2.3 2.3-2.3z"
-                  ></path>
-                </g>
-              </svg>
-            </a>
-          </li>
-        </ul>
+          </button>
+        </div>
       </nav>
       <p>
         <b
@@ -910,7 +1057,7 @@ while t5 != t2:             # top-tested loop
         >
         ·
         <a
-          href="https://github.com/JonathanWoollett-Light/formal/blob/master/CLAUDE.md"
+          href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
           >internals &amp; design notes</a
         >
         ·
@@ -921,15 +1068,18 @@ while t5 != t2:             # top-tested loop
       </small>
     </footer>
     <script>
-      // Wires the theme toggle: it flips `data-theme` on <html>, persists the
-      // choice under `picoColorScheme`, animates the sun/moon icon, and follows
-      // the system scheme until the user makes an explicit choice.
+      // Wires the theme toggle (an M3 icon button): it flips `data-theme` on
+      // <html> so the M3 color tokens swap, swaps the Material Symbols glyph,
+      // persists the choice under `colorScheme`, and follows the system scheme
+      // until the user makes an explicit choice.
       (function () {
         var root = document.documentElement;
-        var KEY = "picoColorScheme";
+        var KEY = "colorScheme";
         var prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
         var toggle = document.getElementById("theme-toggle");
-        var icon = toggle.querySelector(".icon-theme-toggle");
+        var icon = toggle
+          ? toggle.querySelector(".material-symbols-outlined")
+          : null;
 
         function stored() {
           try {
@@ -943,11 +1093,13 @@ while t5 != t2:             # top-tested loop
         function apply(scheme) {
           root.setAttribute("data-theme", scheme);
           var dark = scheme === "dark";
-          icon.classList.toggle("moon", dark);
-          toggle.setAttribute(
-            "aria-label",
-            dark ? "Turn on light mode" : "Turn on dark mode",
-          );
+          if (icon) icon.textContent = dark ? "dark_mode" : "light_mode";
+          if (toggle) {
+            toggle.setAttribute(
+              "aria-label",
+              dark ? "Switch to light mode" : "Switch to dark mode",
+            );
+          }
         }
 
         apply(
@@ -955,15 +1107,16 @@ while t5 != t2:             # top-tested loop
             (prefersDark.matches ? "dark" : "light"),
         );
 
-        toggle.addEventListener("click", function (event) {
-          event.preventDefault();
-          var next =
-            root.getAttribute("data-theme") === "dark" ? "light" : "dark";
-          try {
-            localStorage.setItem(KEY, next);
-          } catch (e) {}
-          apply(next);
-        });
+        if (toggle) {
+          toggle.addEventListener("click", function () {
+            var next =
+              root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+            try {
+              localStorage.setItem(KEY, next);
+            } catch (e) {}
+            apply(next);
+          });
+        }
 
         prefersDark.addEventListener("change", function () {
           if (!stored()) apply(prefersDark.matches ? "dark" : "light");
@@ -1476,6 +1629,11 @@ end Fannkuch;`;
         }
         renderFormal();
         equalizeHeights();
+        // Re-measure once the web fonts (Roboto Mono) have loaded, since the
+        // initial pass may measure with a fallback font.
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(equalizeHeights);
+        }
         var resizeTimer;
         window.addEventListener("resize", function () {
           clearTimeout(resizeTimer);
