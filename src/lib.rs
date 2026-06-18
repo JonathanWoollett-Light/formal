@@ -11,6 +11,9 @@ pub use verifier::*;
 
 pub mod verifier_types;
 
+pub mod explore;
+pub use explore::*;
+
 pub mod draw;
 
 pub mod optimizer;
