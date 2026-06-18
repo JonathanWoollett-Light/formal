@@ -1,0 +1,50 @@
+# CI for the parallel/distributed verifier work. Runs the build, the clippy
+# policy, and the parallel/distributed cross-check tests against the sequential
+# oracle. windows-latest mirrors the development environment (the parser's
+# line-ending handling is `target_os`-specific, and the project is developed on
+# Windows); the QEMU boot tests are intentionally NOT run here (they need WSL +
+# the RISC-V GNU toolchain).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Build (must stay warning-free)
+        run: cargo build
+      - name: Clippy (verifier.rs is #![deny]-clean)
+        run: cargo clippy
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Parallel/distributed cross-check vs the sequential oracle
+        # The pointer-free step, the rayon single-config inner pool, the config
+        # sweep, the candidate generator, and the postcard distributed-transport
+        # simulation must all reproduce the oracle's outputs (order-independently).
+        run: cargo nt -E 'binary(parallel_oracle_crosscheck)'
+      - name: Verifier-only regression (no QEMU)
+        run: >
+          cargo nt -E 'binary(conflicting_defines) + binary(region_overrun) +
+          binary(region_permissions) + binary(vague_access) +
+          binary(annotated_store_overflow) + binary(raw_access_undeclared) +
+          binary(region_declared_late) + binary(unsupported_construct)'
+
+  # Future: once the rsmpi distributed backend lands, add a Linux job that runs
+  # the distributed verifier under `mpirun` at prime rank counts to exercise the
+  # real transport + termination detection:
+  #
+  #   strategy:
+  #     matrix:
+  #       np: [2, 3, 5, 7]
+  #       mpi: [openmpi, mpich]
+  #   ...
+  #   - run: mpirun --oversubscribe -n ${{ matrix.np }} ./formal verify-dist ...
+  #
+  # asserting byte-identical output across all (np, mpi) cells.

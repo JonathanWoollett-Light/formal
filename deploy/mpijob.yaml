@@ -1,0 +1,65 @@
+# A Kubeflow MPIJob (kubeflow.org/v2beta1) running a distributed `formal`
+# verification: one Launcher (runs `mpirun`) plus N Workers (one MPI rank per
+# node). See deploy/README.md.
+#
+# Prerequisites on the cluster (install once, identical on EKS/AKS/GKE/on-prem):
+#   - the Kubeflow MPI Operator (the MPIJob CRD);
+#   - Volcano, for gang scheduling (a partially-placed MPI job deadlocks);
+#   - optionally Kueue on top for per-tenant quota/admission.
+#
+# This is the deployment target, not a tested artifact: the distributed MPI
+# transport (rsmpi) is still to land (see deploy/README.md). Adjust `image`,
+# `slotsPerWorker` (= node vCPUs), Worker `replicas` (= node count, chosen by the
+# right-sizing step), and the program/config args.
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: formal-verify
+spec:
+  slotsPerWorker: 64           # MPI slots per worker pod = node vCPUs
+  runPolicy:
+    cleanPodPolicy: Running
+    # Hard wall-clock cap; the gateway also pre-admits on nodes x $/hr x deadline.
+    activeDeadlineSeconds: 3600
+    # Gang scheduling via Volcano: the job only starts when all ranks can be placed.
+    schedulingPolicy:
+      minAvailable: 5          # 1 launcher + 4 workers
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          schedulerName: volcano
+          containers:
+            - name: launcher
+              image: <registry>/formal:<tag>
+              # `formal` runs the distributed verification; one rank per worker slot.
+              # (Entry/flags are illustrative; the rsmpi backend defines them.)
+              command:
+                - mpirun
+                - --allow-run-as-root
+                - -bind-to
+                - none
+                - -map-by
+                - slot
+                - formal
+                - verify-dist
+                - /work/program.s
+    Worker:
+      replicas: 4              # node count (right-sized per job)
+      template:
+        spec:
+          schedulerName: volcano
+          containers:
+            - name: worker
+              image: <registry>/formal:<tag>
+              resources:
+                requests:
+                  cpu: "64"
+                  memory: 256Gi      # many in-flight MB-scale States
+                limits:
+                  cpu: "64"
+                  memory: 256Gi
+          # Prefer whole-host, high-memory-bandwidth EPYC nodes (one rank/socket).
+          nodeSelector:
+            node.kubernetes.io/instance-type: c7a.16xlarge
