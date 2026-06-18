@@ -1146,6 +1146,43 @@ exponents: distribution buys a constant factor (more nodes finish the *same* wor
 sooner), never exponent relief - reducing `h^r·2^b·8^v` is a language/annotation
 question ([§11](#11-design-notes--roadmap)), not a scheduling one.
 
+### 7.3 Execution model at a glance
+
+Condensing 7.1-7.2 into the two views most readers want.
+
+**Stages of abstraction** (coarsest to finest; how work flows between them):
+
+- **MPI world / cluster** - N ranks, each holding the same replicated,
+  `AstNodeId`-indexed AST. The outer sweep splits candidate configurations across
+  ranks (rank `r` takes `i % size == r`); an all-reduce(min) picks the lowest-rank
+  valid one, the winning configuration.
+- **Node / MPI rank** - one **single-threaded** process. Owns a private deque of
+  continuations for the winning configuration, steps them one at a time, and when
+  its deque empties steals half a deque from a lifeline hypercube neighbour
+  (`rank XOR 2^k`), continuations crossing as `postcard` bytes; Mattern credit
+  detects when every rank is idle. A node is saturated by running one rank per core.
+- **Core / thread** - one thread per rank in the MPI backends (core ≡ rank). The
+  separate in-process rayon backend instead runs *one* process across all cores,
+  one worker per core pulling from a shared wave frontier; the two are not composed.
+- **Continuation** - the dispatched work item: a pointer-free path state (`state` +
+  per-hart `fronts` + `active_hart`). `step_local` turns one into 0/1/N successors,
+  an optional terminal, and grow-only outputs reduced into the result by union.
+
+**The broadly sequential start-up** (steps 1-8 are serial; the search fans out at 9):
+
+1. Translate the `hl` source to the RISC-V dialect (prelude + lowered control flow).
+2. Parse it into the program-order AST (`new_ast`).
+3. Compress the AST into a contiguous arena (`compress`).
+4. Index it (`Ast::index`): give every node a stable program-order `AstNodeId` - the pointer-free key.
+5. Replicate that image on every rank (deterministic: same source → same ids).
+6. Enumerate candidate configurations (`candidate_configs`: `locality_list × type_list`).
+7. Outer sweep: each rank verifies its share; all-reduce(min) selects the winning configuration.
+8. Seed the inner frontier: one `Continuation` per system at the entry node (rank 0 holds them all, plus all the credit).
+9. Fan out: ranks drain that frontier in parallel (work-stealing, or waves) - no longer sequential.
+
+(The legacy sequential `compile()` path stops after step 3 and hands the raw AST to
+the `Explorerer` oracle, which fuses the sweep and search into one backtracking loop.)
+
 ## 8. Key data structures (quick reference)
 
 | Type                                                     | Location                                                                                                                          | Purpose                                                                                                                  |
