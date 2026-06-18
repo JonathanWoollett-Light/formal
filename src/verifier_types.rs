@@ -1082,12 +1082,9 @@ impl MemoryValue {
                         }
                     }
 
-                    // Use `covers` to apply the change.
-                    println!("size_of_existing: {size_of_existing:?}");
-                    println!("offset: {offset:?}");
-                    println!("diff: {diff:?}");
-                    println!("memrange: {memrange:?}");
-                    println!("len: {len:?}");
+                    // A multi-element list slice update is not yet modelled (see
+                    // DEVELOPMENT.md 9/10): report it rather than printing debug
+                    // state to stdout.
                     Err(MemoryValueSetError::ListMultiple)
                 }
                 MemoryValue::U64(_) => match value {
