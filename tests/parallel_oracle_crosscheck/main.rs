@@ -236,3 +236,53 @@ fn parallel_sweep_all_invalid_is_invalid() {
     let result = unsafe { verify_sweep(ast, &sys, &candidates) }.expect("sweep errored");
     assert!(matches!(result, ExplorePathResult::Invalid));
 }
+
+/// Broaden coverage to an **inferred** program (`racy_store_inferred`): on the
+/// oracle's winning configuration, the three fixed-config inner paths must agree
+/// with each other. (For an inferred program the oracle's grow-only outputs
+/// over-approximate across the candidate types it tried, so the comparison is
+/// pool-vs-`verify_configuration` and parallel-vs-`verify_configuration`, not
+/// vs. the oracle's union.)
+#[test]
+fn inner_paths_agree_on_inferred_program() {
+    let ast = setup_test("racy_store_inferred/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+    let config = &oracle.configuration;
+
+    let as_valid = |result: ExplorePathResult, who: &str| match result {
+        ExplorePathResult::Valid(valid) => valid,
+        _ => panic!("{who} rejected the inferred program's winning configuration"),
+    };
+
+    // The oracle-faithful fixed-config search, and the step pool, must agree
+    // field for field on this exact configuration.
+    let vp = as_valid(
+        unsafe { verify_configuration(ast, &sys, config) }.expect("verify_configuration errored"),
+        "verify_configuration",
+    );
+    let pp = as_valid(
+        unsafe { verify_configuration_pooled(ast, &sys, config) }.expect("pool errored"),
+        "the step pool",
+    );
+    assert_eq!(pp.touched, vp.touched, "pool touched");
+    assert_eq!(pp.jumped, vp.jumped, "pool jumped");
+    assert_eq!(pp.accessed, vp.accessed, "pool accessed");
+    assert_eq!(pp.transitions, vp.transitions, "pool transitions");
+    assert_eq!(pp.uncompactable, vp.uncompactable, "pool uncompactable");
+    assert_eq!(pp.pinned_nodes, vp.pinned_nodes, "pool pinned_nodes");
+
+    // The parallel inner search must equal the (re-keyed) fixed-config search.
+    let expected = unsafe { valid_path_to_local(ast, &vp) }.expect("re-key");
+    let index = Ast::index(ast);
+    let local = unsafe { verify_configuration_parallel(&index, &sys, config) }
+        .expect("parallel errored")
+        .expect("parallel rejected the winning configuration");
+    assert_eq!(
+        local, expected,
+        "parallel vs verify_configuration (inferred)"
+    );
+}
