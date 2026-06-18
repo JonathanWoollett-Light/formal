@@ -47,6 +47,102 @@ impl<T, E: std::fmt::Debug> OrInternal<T> for Result<T, E> {
     }
 }
 
+/// The path-local copies of the verifier's six grow-only outputs, keyed by the
+/// pointer-free [`AstNodeId`]/[`Label`] (not by `NonNull<AstNode>` as the legacy
+/// [`Explorerer`] fields are). Every field is a grow-only set or a map to a
+/// grow-only set, so two `LocalAccumulators` merge by commutative, associative,
+/// idempotent union ([`LocalAccumulators::union_with`]): the property that makes
+/// the parallel/distributed reduce order-independent (the plan's output-level
+/// determinism). A [`Continuation`] carries one of these and folds its successors'
+/// into the global union when a path completes.
+#[derive(Debug, Default, Clone)]
+pub struct LocalAccumulators {
+    /// AST nodes reached (the pointer-free analogue of [`Explorerer::touched`]).
+    pub touched: BTreeSet<AstNodeId>,
+    /// Branch nodes that actually jump (analogue of [`Explorerer::jumped`]).
+    pub jumped: BTreeSet<AstNodeId>,
+    /// Runtime byte ranges accessed per region (analogue of [`AccessedRanges`]).
+    pub accessed: BTreeMap<Label, BTreeSet<(u64, u64)>>,
+    /// Per-node pointer-arithmetic transitions (analogue of [`AccessTransitions`],
+    /// re-keyed on [`AstNodeId`]).
+    pub transitions: BTreeMap<AstNodeId, BTreeSet<(Label, u64, u64)>>,
+    /// Regions accessed through an under-determined offset (analogue of
+    /// [`Explorerer::uncompactable`]).
+    pub uncompactable: BTreeSet<Label>,
+    /// Nodes that must keep their original immediate (analogue of
+    /// [`Explorerer::pinned_nodes`]).
+    pub pinned_nodes: BTreeSet<AstNodeId>,
+}
+
+impl LocalAccumulators {
+    /// Merges `other` into `self` by union. Commutative, associative, and
+    /// idempotent, so the result is independent of merge order or grouping.
+    pub fn union_with(&mut self, other: LocalAccumulators) {
+        self.touched.extend(other.touched);
+        self.jumped.extend(other.jumped);
+        for (label, ranges) in other.accessed {
+            self.accessed.entry(label).or_default().extend(ranges);
+        }
+        for (node, ts) in other.transitions {
+            self.transitions.entry(node).or_default().extend(ts);
+        }
+        self.uncompactable.extend(other.uncompactable);
+        self.pinned_nodes.extend(other.pinned_nodes);
+    }
+}
+
+/// A self-contained, pointer-free item on the parallel verifier's search
+/// frontier: everything needed to resume exploring one interleaving/branch path
+/// under a fixed [`TypeConfiguration`], with no reference into a shared `*mut`
+/// tree. The only external thing a step needs is the immutable [`Ast`], shared
+/// read-only across all workers/nodes and addressed by [`AstNodeId`].
+///
+/// This replaces the legacy `VerifierLeafNode` (which keyed on raw tree
+/// pointers). Because every field is a value type, a `Continuation` is `Clone`
+/// today and will be `serde`-serializable once `State` is (Phase 3), so it can
+/// migrate between threads (Phase 1) and cluster nodes (Phase 3).
+#[derive(Debug, Clone)]
+pub struct Continuation {
+    /// The execution state (registers, memory, configuration, descriptor labels,
+    /// tag counter) before the current per-hart fronts execute.
+    pub state: State,
+    /// The next AST node to execute for each hart (the frontier per hart). A
+    /// hart with no entry has run off the end of the program.
+    pub fronts: BTreeMap<u8, AstNodeId>,
+    /// Variables encountered along this path, most-recent last (the pointer-free
+    /// analogue of [`Explorerer::encountered`]); drives outer backtracking order.
+    pub encountered: Vec<Label>,
+    /// The branch-index choices taken from the root to here (the analogue of the
+    /// record walked by `get_backpath_harts`/`find_state`). This is the compact
+    /// path descriptor used to reconstruct the state by replay in Phase 3.
+    pub path: Vec<usize>,
+    /// The outputs recorded along this path so far, merged into the global union
+    /// when the path completes.
+    pub acc: LocalAccumulators,
+}
+
+/// Why a [`Continuation`] stopped producing successors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminal {
+    /// The path ran to completion with no violation: every hart reached the end
+    /// (no fronts remain). This path is valid for the current configuration.
+    Drained,
+    /// A `#!` (`fail`) or a failed store/load check is reachable on this path
+    /// under the current configuration: the configuration is invalid.
+    Invalid,
+}
+
+/// The result of stepping one [`Continuation`]: the 0, 1, or N successor
+/// continuations it expands into (N on a racy interleaving fork), plus an
+/// optional [`Terminal`] when the path ends here.
+#[derive(Debug, Default)]
+pub struct StepOutcome {
+    /// The successor frontier items to enqueue.
+    pub successors: Vec<Continuation>,
+    /// Set when this path terminates (drained or invalid) rather than expanding.
+    pub terminal: Option<Terminal>,
+}
+
 /// The type to explore in order from best to worst.
 fn type_list() -> Vec<Type> {
     vec![

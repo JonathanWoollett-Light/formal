@@ -1,4 +1,5 @@
 use std::alloc::{alloc, Layout};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::read_to_string;
 use std::path::PathBuf;
@@ -20,6 +21,75 @@ pub struct AstValue {
 impl AsRef<AstValue> for AstNode {
     fn as_ref(&self) -> &AstValue {
         &self.value
+    }
+}
+
+/// A stable, pointer-free identifier for an AST node: its position in program
+/// order (the order `root -> next -> next -> ...` visits nodes). Because it is a
+/// plain index rather than an address, it serializes and compares identically on
+/// any process, which is what lets a `Continuation` (the parallel verifier's
+/// frontier item) cross a thread or a cluster node, and what lets the verifier's
+/// accumulators be keyed by something the determinism contract (DEVELOPMENT.md
+/// §4.3: order by stable keys, never by pointer) permits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AstNodeId(pub u32);
+
+/// A read-only view over a verified-program AST that maps between an
+/// [`AstNodeId`] and the live node pointer. The AST is a `None`-terminated
+/// linked list of [`AstNode`]s (built by [`new_ast`], optionally relaid-out by
+/// [`crate::compress`]); this walks it once in program order so `id -> pointer`
+/// is an array index and `pointer -> id` is a hash lookup.
+///
+/// It holds raw node pointers and so is neither `Send` nor `Sync`; in the
+/// distributed design each process builds its own `Ast` from its own replica of
+/// the (immutable) AST, and only the `AstNodeId`s ever travel between processes.
+pub struct Ast {
+    nodes: Vec<NonNull<AstNode>>,
+    ids: HashMap<NonNull<AstNode>, AstNodeId>,
+}
+
+impl Ast {
+    /// Indexes the AST reachable from `root` in program order.
+    pub fn index(root: Option<NonNull<AstNode>>) -> Self {
+        let mut nodes = Vec::new();
+        let mut ids = HashMap::new();
+        let mut next = root;
+        // SAFETY: `root` heads a valid `None`-terminated AST list (see
+        // `new_ast`); every node is live for the duration of verification.
+        unsafe {
+            while let Some(node) = next {
+                let id = AstNodeId(nodes.len() as u32);
+                nodes.push(node);
+                ids.insert(node, id);
+                next = node.as_ref().next;
+            }
+        }
+        Self { nodes, ids }
+    }
+
+    /// The node pointer for `id`, or `None` if `id` is out of range.
+    pub fn resolve(&self, id: AstNodeId) -> Option<NonNull<AstNode>> {
+        self.nodes.get(id.0 as usize).copied()
+    }
+
+    /// The id for `node`, or `None` if `node` is not part of this AST.
+    pub fn id_of(&self, node: NonNull<AstNode>) -> Option<AstNodeId> {
+        self.ids.get(&node).copied()
+    }
+
+    /// The first node in program order (the verifier's entry point), if any.
+    pub fn head(&self) -> Option<NonNull<AstNode>> {
+        self.nodes.first().copied()
+    }
+
+    /// The number of nodes in the AST.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether the AST has no nodes.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 }
 

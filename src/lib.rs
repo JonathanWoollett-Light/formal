@@ -55,9 +55,12 @@ pub fn compress(root: &mut Option<NonNull<AstNode>>) {
             // Carry
             next = Some(dest);
 
-            // Update root
+            // Update root to the head of the freshly-relaid-out list (`dest`),
+            // not the original head (`prev`); the latter left `*root` pointing at
+            // the old, scattered nodes, so the contiguous block was built and
+            // then leaked (the relayout never took effect).
             if stack.is_empty() {
-                *root = Some(prev);
+                *root = Some(dest);
             }
         }
     }
