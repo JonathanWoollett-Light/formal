@@ -239,6 +239,54 @@ fn local_from_parts(
     })
 }
 
+/// One pointer-free work unit: step `cont` once and return its successors, any
+/// terminal, and its outputs re-keyed onto [`AstNodeId`] (a `Send`
+/// [`LocalAccumulators`]). This is the unit the parallel pool, the
+/// distributed-transport simulation, and the real MPI backend all schedule:
+/// each writes the step into fresh local sinks and re-keys them, so workers
+/// share nothing mutable and their outputs reduce by commutative union.
+///
+/// # Safety
+/// `cont`'s fronts must reference live nodes of `ast`.
+pub unsafe fn step_local(
+    ast: &Ast,
+    configuration: &TypeConfiguration,
+    cont: &Continuation,
+) -> Result<(Vec<Continuation>, Option<Terminal>, LocalAccumulators), CompilerError> {
+    let mut touched = BTreeSet::new();
+    let mut jumped = BTreeSet::new();
+    let mut accessed = AccessedRanges::new();
+    let mut transitions = AccessTransitions::new();
+    let mut uncompactable = BTreeSet::new();
+    let mut pinned = BTreeSet::new();
+    let outcome = {
+        let mut sinks = RecordSinks {
+            accessed: &mut accessed,
+            transitions: &mut transitions,
+            uncompactable: &mut uncompactable,
+            pinned_nodes: &mut pinned,
+        };
+        step(
+            cont,
+            ast,
+            configuration,
+            &mut touched,
+            &mut jumped,
+            &mut sinks,
+        )?
+    };
+    let local = local_from_parts(
+        ast,
+        &touched,
+        &jumped,
+        &accessed,
+        &transitions,
+        &uncompactable,
+        &pinned,
+    )?;
+    Ok((outcome.successors, outcome.terminal, local))
+}
+
 /// Re-keys a [`ValidPathResult`] (the pointer-keyed oracle/`verify_configuration`
 /// output) onto [`AstNodeId`] so it can be compared against the parallel pool's
 /// [`LocalAccumulators`]. This is the boundary the cross-check test uses.
@@ -316,44 +364,9 @@ pub unsafe fn verify_configuration_parallel(
         type WaveItem = (Vec<Continuation>, Option<Terminal>, LocalAccumulators);
         let wave = frontier
             .par_iter()
-            .map(|cont| -> Result<WaveItem, CompilerError> {
-                let mut touched = BTreeSet::new();
-                let mut jumped = BTreeSet::new();
-                let mut accessed = AccessedRanges::new();
-                let mut transitions = AccessTransitions::new();
-                let mut uncompactable = BTreeSet::new();
-                let mut pinned = BTreeSet::new();
-                let outcome = {
-                    let mut sinks = RecordSinks {
-                        accessed: &mut accessed,
-                        transitions: &mut transitions,
-                        uncompactable: &mut uncompactable,
-                        pinned_nodes: &mut pinned,
-                    };
-                    // SAFETY: `ast` is read-only and shared across workers; `cont`
-                    // references its nodes.
-                    unsafe {
-                        step(
-                            cont,
-                            ast,
-                            configuration,
-                            &mut touched,
-                            &mut jumped,
-                            &mut sinks,
-                        )?
-                    }
-                };
-                let local = local_from_parts(
-                    ast,
-                    &touched,
-                    &jumped,
-                    &accessed,
-                    &transitions,
-                    &uncompactable,
-                    &pinned,
-                )?;
-                Ok((outcome.successors, outcome.terminal, local))
-            })
+            // SAFETY: `ast` is read-only and shared across workers; `cont`
+            // references its nodes.
+            .map(|cont| unsafe { step_local(ast, configuration, cont) })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
 
         let mut next = Vec::new();
@@ -508,50 +521,17 @@ pub unsafe fn verify_configuration_distributed_sim(
         let wave = frontier
             .par_iter()
             .map(|bytes| -> Result<WaveItem, CompilerError> {
-                // Receive: deserialize the migrated continuation.
+                // Receive: deserialize the migrated continuation, step it, then
+                // re-serialize the successors for the next hop.
                 let cont = decode(bytes)?;
-
-                let mut touched = BTreeSet::new();
-                let mut jumped = BTreeSet::new();
-                let mut accessed = AccessedRanges::new();
-                let mut transitions = AccessTransitions::new();
-                let mut uncompactable = BTreeSet::new();
-                let mut pinned = BTreeSet::new();
-                let outcome = {
-                    let mut sinks = RecordSinks {
-                        accessed: &mut accessed,
-                        transitions: &mut transitions,
-                        uncompactable: &mut uncompactable,
-                        pinned_nodes: &mut pinned,
-                    };
-                    // SAFETY: `ast` is read-only and shared; `cont` references its nodes.
-                    unsafe {
-                        step(
-                            &cont,
-                            ast,
-                            configuration,
-                            &mut touched,
-                            &mut jumped,
-                            &mut sinks,
-                        )?
-                    }
-                };
-                let local = local_from_parts(
-                    ast,
-                    &touched,
-                    &jumped,
-                    &accessed,
-                    &transitions,
-                    &uncompactable,
-                    &pinned,
-                )?;
-                // Send: re-serialize the successors for the next hop.
-                let successors = outcome
-                    .successors
+                // SAFETY: `ast` is read-only and shared; `cont` references its nodes.
+                let (successors, terminal, local) =
+                    unsafe { step_local(ast, configuration, &cont)? };
+                let successors = successors
                     .iter()
                     .map(&encode)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((successors, outcome.terminal, local))
+                Ok((successors, terminal, local))
             })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
 

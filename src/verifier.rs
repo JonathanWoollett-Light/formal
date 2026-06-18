@@ -55,7 +55,7 @@ impl<T, E: std::fmt::Debug> OrInternal<T> for Result<T, E> {
 /// the parallel/distributed reduce order-independent (the plan's output-level
 /// determinism). A [`Continuation`] carries one of these and folds its successors'
 /// into the global union when a path completes.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LocalAccumulators {
     /// AST nodes reached (the pointer-free analogue of [`Explorerer::touched`]).
     pub touched: BTreeSet<AstNodeId>,
