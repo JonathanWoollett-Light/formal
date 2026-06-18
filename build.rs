@@ -192,21 +192,25 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
 
     if !install {
         for (_, pkgs, human) in &missing {
-            report.note(format!("{human}: missing. Install with:  sudo apt-get install -y {pkgs}"));
+            report.note(format!(
+                "{human}: missing. Install with:  sudo apt-get install -y {pkgs}"
+            ));
         }
         return;
     }
 
     // Best-effort, non-interactive apt install of everything missing in one go.
-    let pkgs: Vec<&str> = missing
-        .iter()
-        .flat_map(|(_, p, _)| p.split(' '))
-        .collect();
+    let pkgs: Vec<&str> = missing.iter().flat_map(|(_, p, _)| p.split(' ')).collect();
     let pkg_list = pkgs.join(" ");
     let apt = format!("sudo -n apt-get update && sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}");
 
     if via_wsl {
-        try_install(report, "WSL apt packages", "wsl", &["-e", "bash", "-lc", &apt]);
+        try_install(
+            report,
+            "WSL apt packages",
+            "wsl",
+            &["-e", "bash", "-lc", &apt],
+        );
     } else {
         try_install(report, "apt packages", "sh", &["-c", &apt]);
     }

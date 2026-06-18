@@ -342,3 +342,99 @@ fn distributed_sim_matches_oracle() {
         );
     }
 }
+
+/// The "cluster at maximal parallelism" run: drive both the distributed-transport
+/// simulation (continuations crossing a postcard serialize/deserialize, as
+/// between nodes) and the in-memory inner pool across **every logical core**, and
+/// **oversubscribed** (2x), confirming both still reproduce the oracle's outputs.
+/// The commutative-union reduce makes the result independent of the rank count,
+/// so 1 rank, all cores, and 2x-oversubscribed all agree with the oracle.
+#[test]
+fn cluster_sim_maximal_parallelism() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+    let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
+    let index = Ast::index(ast);
+
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    for ranks in [1, cores, cores * 2] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(ranks)
+            .build()
+            .expect("build rayon pool");
+        let sim = pool
+            .install(|| unsafe {
+                verify_configuration_distributed_sim(&index, &sys, &oracle.configuration)
+            })
+            .expect("distributed sim returned a compiler error")
+            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {ranks} ranks"));
+        assert_eq!(sim, expected, "distributed sim differs at {ranks} ranks");
+
+        let par = pool
+            .install(|| unsafe {
+                verify_configuration_parallel(&index, &sys, &oracle.configuration)
+            })
+            .expect("parallel pool returned a compiler error")
+            .unwrap_or_else(|| panic!("parallel pool rejected a valid config at {ranks} ranks"));
+        assert_eq!(par, expected, "parallel pool differs at {ranks} ranks");
+    }
+}
+
+/// Heavy "cluster" run on the largest program (`uart_hello`: the full sequential
+/// search is ~2.1M steps with a wide racy UART-write fan-out). Drives its winning
+/// configuration's inner search through the parallel pool across **every core**
+/// and checks it matches the fixed-config reference. `#[ignore]`d because it is
+/// minutes-scale and memory-heavy in the wave-synchronised pool (the
+/// work-stealing pool, future work, removes the per-wave memory peak); run it
+/// with `cargo nt --run-ignored all -E 'test(uart_hello_maximal)'`.
+#[test]
+#[ignore = "heavy: ~2.1M-step program; run explicitly with --run-ignored all"]
+fn uart_hello_maximal_parallelism() {
+    let ast = setup_test("uart_hello/dialect.s");
+    // The QEMU `virt` UART MMIO region, as in tests/uart_hello.
+    let sections = vec![Section {
+        address: MemoryValueI64::from(0x10000000),
+        size: MemoryValueI64::from(1),
+        permissions: Permissions::Write,
+        volatile: true,
+    }];
+    let sys = vec![
+        InnerVerifierConfiguration {
+            sections: sections.clone(),
+            harts: 1,
+        },
+        InnerVerifierConfiguration {
+            sections: sections.clone(),
+            harts: 2,
+        },
+    ];
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+
+    // Fixed-config reference (a subset of the inferred oracle's grow-only union).
+    let vp = match unsafe { verify_configuration(ast, &sys, &oracle.configuration) }
+        .expect("verify_configuration errored")
+    {
+        ExplorePathResult::Valid(valid) => valid,
+        _ => panic!("verify_configuration rejected uart_hello's winning configuration"),
+    };
+    let expected = unsafe { valid_path_to_local(ast, &vp) }.expect("re-key reference");
+
+    // The inner parallel pool across every logical core.
+    let index = Ast::index(ast);
+    let local = unsafe { verify_configuration_parallel(&index, &sys, &oracle.configuration) }
+        .expect("parallel pool errored")
+        .expect("parallel pool rejected uart_hello's winning configuration");
+    assert_eq!(
+        local, expected,
+        "parallel uart_hello outputs differ from the fixed-config reference"
+    );
+}
