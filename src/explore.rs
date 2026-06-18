@@ -49,3 +49,72 @@ pub unsafe fn verify_configuration(
         };
     }
 }
+
+/// A `Send`/`Sync` handle to the immutable, read-only AST so it can be shared
+/// across the rayon worker threads of [`verify_sweep`]. This is sound because the
+/// AST is never mutated during verification: each worker builds its own
+/// `Explorerer` (and its own tree) and only *reads* the shared nodes.
+#[derive(Clone, Copy)]
+struct AstRef(Option<NonNull<AstNode>>);
+// SAFETY: the pointee (the AST) is immutable for the lifetime of verification and
+// only read concurrently; no worker mutates a shared node.
+unsafe impl Send for AstRef {}
+unsafe impl Sync for AstRef {}
+
+impl AstRef {
+    /// The wrapped AST head. Taking `self` by value means a closure that calls
+    /// this captures the whole (`Send`/`Sync`) `AstRef`, not the inner
+    /// `!Sync` `Option<NonNull<AstNode>>` field (2021 disjoint closure capture).
+    fn ptr(self) -> Option<NonNull<AstNode>> {
+        self.0
+    }
+}
+
+/// The **outer configuration sweep**, run in parallel: verifies each candidate
+/// configuration independently across a rayon work-stealing pool and returns the
+/// best-ranked (lowest-index) `Valid` one, matching the sequential oracle's
+/// "first valid in generator order" selection. If no candidate is valid the
+/// program is `Invalid`.
+///
+/// Each candidate is an independent [`verify_configuration`] over the shared,
+/// immutable AST, which is the whole point of the decoupling: the configurations
+/// (and, with the pointer-free inner pool, a single configuration's frontier)
+/// parallelise with no shared mutable state.
+///
+/// The parallel phase only computes *which* configurations are valid (the rank is
+/// `Send`; the pointer-keyed `ValidPathResult` is not, pending the Phase-0d
+/// re-key), then the winner's outputs are materialised with one more sequential
+/// `verify_configuration`. That is a deliberate, documented double-verify of the
+/// single winner, removed once the accumulators are re-keyed on [`AstNodeId`].
+///
+/// # Safety
+/// `ast` must head a live AST that outlives the call (see [`Explorerer::new`]).
+pub unsafe fn verify_sweep(
+    ast: Option<NonNull<AstNode>>,
+    systems: &[InnerVerifierConfiguration],
+    candidates: &[TypeConfiguration],
+) -> Result<ExplorePathResult, CompilerError> {
+    use rayon::prelude::*;
+
+    let ast = AstRef(ast);
+    // Verify candidates concurrently; keep only the ranks that are valid. The
+    // `?`-bearing closure aborts the whole sweep on an internal compiler error.
+    let valid_ranks = candidates
+        .par_iter()
+        .enumerate()
+        .filter_map(move |(rank, configuration)| {
+            // SAFETY: `ast` is read-only across threads (see `AstRef`).
+            match unsafe { verify_configuration(ast.ptr(), systems, configuration) } {
+                Ok(ExplorePathResult::Valid(_)) => Some(Ok(rank)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect::<Result<Vec<usize>, CompilerError>>()?;
+
+    match valid_ranks.into_iter().min() {
+        // Re-run the winner sequentially to obtain its (pointer-keyed) outputs.
+        Some(rank) => verify_configuration(ast.ptr(), systems, &candidates[rank]),
+        None => Ok(ExplorePathResult::Invalid),
+    }
+}

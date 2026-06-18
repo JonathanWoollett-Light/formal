@@ -89,3 +89,55 @@ fn fixed_config_wrong_type_is_invalid() {
         "a u8 configuration must be invalid for a program that stores u32 into `value`"
     );
 }
+
+fn cfg(locality: LabelLocality, ty: Type) -> TypeConfiguration {
+    TypeConfiguration(
+        vec![(Label::from("value"), (locality, ty))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+/// The parallel outer sweep verifies candidates concurrently (rayon) over the
+/// shared immutable AST and returns the valid one, with outputs matching the
+/// oracle. A wrong (`u8`) candidate is included to prove the sweep selects the
+/// valid configuration rather than the first.
+#[test]
+fn parallel_sweep_picks_valid_config() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+
+    // Wrong candidate first, valid candidate second: selection must be by
+    // validity (and rank), not position.
+    let candidates = vec![
+        cfg(LabelLocality::Global, Type::U8),
+        cfg(LabelLocality::Global, Type::U32),
+    ];
+    let result = unsafe { verify_sweep(ast, &sys, &candidates) }.expect("sweep errored");
+    let valid = match result {
+        ExplorePathResult::Valid(valid) => valid,
+        _ => panic!("the parallel sweep failed to find the valid configuration"),
+    };
+
+    assert_eq!(valid.configuration, oracle.configuration, "configuration");
+    assert_eq!(valid.touched, oracle.touched, "touched");
+    assert_eq!(valid.jumped, oracle.jumped, "jumped");
+    assert_eq!(valid.accessed, oracle.accessed, "accessed");
+    assert_eq!(valid.transitions, oracle.transitions, "transitions");
+    assert_eq!(valid.uncompactable, oracle.uncompactable, "uncompactable");
+    assert_eq!(valid.pinned_nodes, oracle.pinned_nodes, "pinned_nodes");
+}
+
+/// A sweep whose every candidate is invalid yields `Invalid`.
+#[test]
+fn parallel_sweep_all_invalid_is_invalid() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+    let candidates = vec![cfg(LabelLocality::Global, Type::U8)];
+    let result = unsafe { verify_sweep(ast, &sys, &candidates) }.expect("sweep errored");
+    assert!(matches!(result, ExplorePathResult::Invalid));
+}

@@ -10,6 +10,9 @@ thiserror = "1.0.63"
 num = "0.4.3"
 sha2 = "0.10.8"
 base64 = "0.22.1"
+# Work-stealing data parallelism for the verifier's configuration sweep / inner
+# pool (Phase 1/2 of the HPC rework). CPU-bound, no async runtime needed.
+rayon = "1.10"
 
 # Optimize test builds: the verifier explores millions of steps for the larger
 # programs (uart_hello). `debug-assertions` stay enabled (the default for the
