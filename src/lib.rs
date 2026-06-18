@@ -1,4 +1,4 @@
-use std::alloc::{alloc, Layout};
+use std::alloc::{alloc, dealloc, Layout};
 use std::ptr::NonNull;
 
 pub mod ast;
@@ -27,49 +27,54 @@ pub use optimizer::*;
 pub mod codegen;
 pub use codegen::*;
 
-/// Re-allocates the AST nodes contiguously to be more cache efficient.
+/// Re-allocates the AST nodes freshly (compacting them after parsing), freeing
+/// the originals.
+///
+/// Each node is given its **own** `Layout::new::<AstNode>()` allocation - the same
+/// per-node contract [`crate::ast::new_ast`] establishes and that the optimizer
+/// relies on: `remove_untouched` / `remove_branches` free dead nodes one at a time
+/// with that layout. (A single `Layout::array` arena would be denser, but freeing
+/// an individual node out of it is a bad-free, so the arena form is unsound here.)
+/// Re-allocating after parsing tends to place the nodes back-to-back in the
+/// allocator, recovering most of the locality benefit.
 pub fn compress(root: &mut Option<NonNull<AstNode>>) {
     unsafe {
-        // Counts
+        // Collect the originals in program order.
+        let mut originals = Vec::new();
         let mut next_opt = *root;
-        let mut stack = Vec::new();
         #[cfg(debug_assertions)]
         let mut check = (0..1000).into_iter();
         while let Some(next) = next_opt {
             debug_assert!(check.next().is_some());
-            let as_ref = next.as_ref();
-            stack.push(next);
-            next_opt = as_ref.next;
+            originals.push(next);
+            next_opt = next.as_ref().next;
         }
 
-        // Re-allocates
-        let ptr = alloc(Layout::array::<AstNode>(stack.len()).unwrap()).cast::<AstNode>();
-        let mut next = None;
-        #[cfg(debug_assertions)]
-        let mut check = (0..1000).into_iter();
-        while let Some(prev) = stack.pop() {
-            debug_assert!(check.next().is_some());
+        // Re-allocate each node into its own fresh allocation (a bitwise move:
+        // `copy_to_nonoverlapping` transfers any heap data the `AstValue` owns to
+        // the fresh node, and the original shell is freed without running `Drop`,
+        // so nothing is double-freed - the same raw-alloc/raw-dealloc discipline
+        // the rest of the AST uses).
+        let fresh: Vec<NonNull<AstNode>> = originals
+            .iter()
+            .map(|orig| {
+                let dest = NonNull::new(alloc(Layout::new::<AstNode>()).cast::<AstNode>()).unwrap();
+                orig.copy_to_nonoverlapping(dest, 1);
+                dest
+            })
+            .collect();
 
-            // Copy
-            let mut dest = NonNull::new(ptr.add(stack.len())).unwrap();
-            prev.copy_to_nonoverlapping(dest, 1);
+        // Relink prev/next among the fresh nodes, preserving program order.
+        for (i, &node) in fresh.iter().enumerate() {
+            let mut node = node;
+            node.as_mut().prev = i.checked_sub(1).map(|p| fresh[p]);
+            node.as_mut().next = fresh.get(i + 1).copied();
+        }
+        *root = fresh.first().copied();
 
-            // Update
-            dest.as_mut().next = next;
-            if let Some(mut next_val) = next {
-                next_val.as_mut().prev = Some(dest);
-            }
-
-            // Carry
-            next = Some(dest);
-
-            // Update root to the head of the freshly-relaid-out list (`dest`),
-            // not the original head (`prev`); the latter left `*root` pointing at
-            // the old, scattered nodes, so the contiguous block was built and
-            // then leaked (the relayout never took effect).
-            if stack.is_empty() {
-                *root = Some(dest);
-            }
+        // Free the original shells (each was a `Layout::new::<AstNode>()`).
+        for orig in originals {
+            dealloc(orig.as_ptr().cast(), Layout::new::<AstNode>());
         }
     }
 }

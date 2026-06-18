@@ -170,11 +170,17 @@ limitations in [§9](#9-conventions--gotchas).
 
 ### 4.2 Compression: `compress` ([src/lib.rs:21](src/lib.rs#L21))
 
-Walks the linked list into a `Vec`, then `alloc`s a single contiguous
-`[AstNode; N]` block and copies every node into it (re-linking `prev`/`next`), so
-the AST is cache-friendly for the many traversals the verifier performs. The
-head pointer is updated in place. Purely a memory-layout pass; semantics are
-unchanged.
+Walks the linked list into a `Vec`, then re-allocates every node into a **fresh
+per-node `Layout::new::<AstNode>()` allocation** (bitwise-moving it, re-linking
+`prev`/`next`) and frees the originals, so the nodes are laid out back-to-back
+after parsing for the many traversals the verifier performs. The head pointer is
+updated in place. Purely a memory-layout pass; semantics are unchanged.
+
+It must use the **same per-node allocation** as [`new_ast`], not one big
+`Layout::array` arena: the optimizer (`remove_untouched` / `remove_branches`)
+frees dead nodes one at a time with `Layout::new::<AstNode>()`, so freeing an
+individual node out of an arena would be a bad-free (it was, once `*root` actually
+pointed into the arena - see [§9](#9-conventions--gotchas)).
 
 <a id="43-verification--explorerer"></a>
 
@@ -985,9 +991,11 @@ sequential `Explorerer` which stays as the reference oracle):
 
 - **Pointer-free addressing.** [`AstNodeId`](src/ast.rs) (a program-order index)
   and the [`Ast`](src/ast.rs) view replace `NonNull<AstNode>` as the stable key
-  for a serialisable frontier item, honouring the §4.3 determinism rule. (Also
-  fixed [`compress`](src/lib.rs), which had left `*root` on the pre-compaction
-  nodes, leaking the contiguous arena.)
+  for a serialisable frontier item, honouring the §4.3 determinism rule. (This
+  also surfaced a latent [`compress`](src/lib.rs) bug: it had left `*root` on the
+  pre-compaction nodes, so making the relayout take effect exposed that its single
+  `Layout::array` arena was incompatible with the optimizer's per-node frees;
+  `compress` now re-allocates per node - see [§4.2](#42-compression-compress).)
 - **Pointer-free primitives.** `apply_node` / `check_store_at` / `check_load_at`
   operate on `(state, hart, node, sinks)`, not the `*mut` tree (the old methods
   are thin wrappers); `compute_next` is the interleaving classification lifted
@@ -1187,7 +1195,7 @@ Condensing 7.1-7.2 into the two views most readers want.
 
 1. Translate the `hl` source to the RISC-V dialect (prelude + lowered control flow).
 2. Parse it into the program-order AST (`new_ast`).
-3. Compress the AST into a contiguous arena (`compress`).
+3. Compact the AST by re-allocating its nodes freshly (`compress`).
 4. Index it (`Ast::index`): give every node a stable program-order `AstNodeId` - the pointer-free key.
 5. Replicate that image on every rank (deterministic: same source → same ids).
 6. Enumerate candidate configurations (`candidate_configs`: `locality_list × type_list`).
@@ -1227,6 +1235,14 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   free. Correctness depends on hand-maintained invariants (e.g. exactly one node
   per hart before the root; the head/tail pointers are accurate). Almost every
   verifier function is `unsafe`.
+- **One `AstNode` = one `Layout::new::<AstNode>()` allocation.** Every AST node is
+  its own allocation: `new_ast` allocates them per node, `compress` re-allocates
+  them per node, and the optimizer frees them per node (`remove_untouched` /
+  `remove_branches`). Do **not** pack the nodes into a single `Layout::array`
+  arena: a later per-node free would then free an interior pointer (a bad-free /
+  heap corruption - exactly the bug a contiguous `compress` arena caused). The
+  raw `dealloc`s never run `Drop`, so a node's `AstValue`-owned heap data is moved
+  by `copy_to_nonoverlapping`, never double-freed.
 - **Debug-only infinite-loop guards.** Many `while` loops over the lists carry
   `#[cfg(debug_assertions)] let mut check = (0..1000).into_iter();` with
   `debug_assert!(check.next().is_some());` (and `(0..100_000)` in a couple of
