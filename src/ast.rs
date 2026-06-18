@@ -48,6 +48,14 @@ pub struct Ast {
     ids: HashMap<NonNull<AstNode>, AstNodeId>,
 }
 
+// SAFETY: `Ast` is a read-only view built once and never mutated; sharing `&Ast`
+// across the verifier's worker threads only ever reads the (immutable) AST, so it
+// is sound to send/share. The raw node pointers are dereferenced read-only and
+// the AST outlives the parallel search (the caller guarantees this, as for
+// `Explorerer::new`).
+unsafe impl Send for Ast {}
+unsafe impl Sync for Ast {}
+
 impl Ast {
     /// Indexes the AST reachable from `root` in program order.
     pub fn index(root: Option<NonNull<AstNode>>) -> Self {

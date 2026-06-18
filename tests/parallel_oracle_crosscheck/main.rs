@@ -164,6 +164,58 @@ fn pooled_step_matches_oracle_annotated() {
     assert_eq!(pooled.pinned_nodes, oracle.pinned_nodes, "pinned_nodes");
 }
 
+/// The DEEP inner parallel search reproduces the oracle's outputs (re-keyed onto
+/// `AstNodeId`) exactly, and does so identically at 1, 2, and 4 worker threads:
+/// the order-independence the commutative-union reduce guarantees. This is the
+/// "a single configuration saturates many cores" result.
+#[test]
+fn parallel_inner_matches_oracle_and_is_order_independent() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+    let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
+
+    // Build the shared, immutable AST index once; `&Ast` is Send/Sync.
+    let index = Ast::index(ast);
+    for threads in [1usize, 2, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("build rayon pool");
+        let outcome = pool
+            .install(|| unsafe {
+                verify_configuration_parallel(&index, &sys, &oracle.configuration)
+            })
+            .expect("verify_configuration_parallel returned a compiler error");
+        let local = outcome.unwrap_or_else(|| {
+            panic!("parallel search rejected a valid configuration ({threads} threads)")
+        });
+        assert_eq!(
+            local, expected,
+            "parallel outputs differ from the oracle at {threads} worker thread(s)"
+        );
+    }
+}
+
+/// The parallel inner search rejects a configuration that conflicts with the
+/// program (returns `None`).
+#[test]
+fn parallel_inner_wrong_type_is_invalid() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+    let wrong = cfg(LabelLocality::Global, Type::U8);
+    let index = Ast::index(ast);
+    let outcome =
+        unsafe { verify_configuration_parallel(&index, &sys, &wrong) }.expect("parallel errored");
+    assert!(
+        outcome.is_none(),
+        "a u8 configuration must be invalid for a program that stores u32"
+    );
+}
+
 /// The step pool rejects a configuration that conflicts with the program.
 #[test]
 fn pooled_step_wrong_type_is_invalid() {

@@ -15,10 +15,10 @@
 //! the in-process pool (Phase 1) replaces the body with a work-stealing loop over
 //! pointer-free `Continuation`s that produces the identical union of outputs.
 
-use crate::ast::{Ast, AstNode, Label};
+use crate::ast::{Ast, AstNode, AstNodeId, Label};
 use crate::verifier::{
     step, CompilerError, Continuation, ExplorePathResult, Explorerer, InnerVerifierConfiguration,
-    RecordSinks, Terminal, ValidPathResult,
+    LocalAccumulators, RecordSinks, Terminal, ValidPathResult,
 };
 use crate::verifier_types::{AccessTransitions, AccessedRanges, State, TypeConfiguration};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -203,4 +203,166 @@ pub unsafe fn verify_configuration_pooled(
         uncompactable,
         pinned_nodes,
     }))
+}
+
+/// Re-keys a set of pointer-keyed sinks onto the pointer-free [`AstNodeId`]
+/// (Phase 0d), producing the `Send` [`LocalAccumulators`] the parallel pool
+/// reduces. `accessed`/`uncompactable` are already `Label`-keyed, so only the
+/// node-keyed sets/maps are translated through `ast`.
+fn local_from_parts(
+    ast: &Ast,
+    touched: &BTreeSet<NonNull<AstNode>>,
+    jumped: &BTreeSet<NonNull<AstNode>>,
+    accessed: &AccessedRanges,
+    transitions: &AccessTransitions,
+    uncompactable: &BTreeSet<Label>,
+    pinned: &BTreeSet<NonNull<AstNode>>,
+) -> Result<LocalAccumulators, CompilerError> {
+    let id = |node: &NonNull<AstNode>| -> Result<AstNodeId, CompilerError> {
+        ast.id_of(*node)
+            .ok_or_else(|| CompilerError::Internal("re-key: node not in AST".to_string()))
+    };
+    let mut transitions_out: BTreeMap<AstNodeId, BTreeSet<(Label, u64, u64)>> = BTreeMap::new();
+    for (node, ts) in transitions {
+        transitions_out.insert(id(node)?, ts.clone());
+    }
+    Ok(LocalAccumulators {
+        touched: touched.iter().map(id).collect::<Result<_, _>>()?,
+        jumped: jumped.iter().map(id).collect::<Result<_, _>>()?,
+        accessed: accessed.clone(),
+        transitions: transitions_out,
+        uncompactable: uncompactable.clone(),
+        pinned_nodes: pinned.iter().map(id).collect::<Result<_, _>>()?,
+    })
+}
+
+/// Re-keys a [`ValidPathResult`] (the pointer-keyed oracle/`verify_configuration`
+/// output) onto [`AstNodeId`] so it can be compared against the parallel pool's
+/// [`LocalAccumulators`]. This is the boundary the cross-check test uses.
+///
+/// # Safety
+/// `ast_head` must head the same live AST the `ValidPathResult` was produced from.
+pub unsafe fn valid_path_to_local(
+    ast_head: Option<NonNull<AstNode>>,
+    valid: &ValidPathResult,
+) -> Result<LocalAccumulators, CompilerError> {
+    let ast = Ast::index(ast_head);
+    local_from_parts(
+        &ast,
+        &valid.touched,
+        &valid.jumped,
+        &valid.accessed,
+        &valid.transitions,
+        &valid.uncompactable,
+        &valid.pinned_nodes,
+    )
+}
+
+/// The **deep inner parallel** search: explore one fixed configuration's
+/// frontier across a rayon work pool, the answer to "a single configuration must
+/// still use many cores". Continuations are pointer-free and `Send`, so a whole
+/// BFS wave of the frontier is stepped in parallel; each worker re-keys its
+/// outputs onto [`AstNodeId`] (so they are `Send`) and they reduce by the
+/// commutative union ([`LocalAccumulators::union_with`]). Returns `Some(union)`
+/// if the configuration is valid (every path drained), or `None` if any path is
+/// `Invalid` for it.
+///
+/// The union is order-independent, so the result is identical for any number of
+/// worker threads or any scheduling (pinned by the cross-check test). This is the
+/// wave-synchronised form; the work-stealing pool (and the distributed layer) are
+/// the same continuation unit with a finer scheduler.
+///
+/// # Safety
+/// The AST `ast` indexes must be live and outlive the call. Build it once with
+/// [`Ast::index`] and share `&Ast` (it is `Send`/`Sync`) across the pool.
+pub unsafe fn verify_configuration_parallel(
+    ast: &Ast,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+) -> Result<Option<LocalAccumulators>, CompilerError> {
+    use rayon::prelude::*;
+
+    let start = ast.head().ok_or_else(|| {
+        CompilerError::Internal("verify_configuration_parallel: empty AST".to_string())
+    })?;
+    let start_id = ast.id_of(start).ok_or_else(|| {
+        CompilerError::Internal("verify_configuration_parallel: entry node not indexed".to_string())
+    })?;
+
+    // Seed: one continuation per system, all harts at the entry, hart 0 active.
+    let mut frontier: Vec<Continuation> = systems
+        .iter()
+        .map(|system| {
+            let state = State::new(system, configuration);
+            let mut fronts = BTreeMap::new();
+            for hart in 0..system.harts {
+                fronts.insert(hart, start_id);
+            }
+            Continuation {
+                state,
+                fronts,
+                active_hart: 0,
+            }
+        })
+        .collect();
+
+    let mut total = LocalAccumulators::default();
+
+    // Process the frontier wave by wave; each wave is stepped in parallel.
+    while !frontier.is_empty() {
+        type WaveItem = (Vec<Continuation>, Option<Terminal>, LocalAccumulators);
+        let wave = frontier
+            .par_iter()
+            .map(|cont| -> Result<WaveItem, CompilerError> {
+                let mut touched = BTreeSet::new();
+                let mut jumped = BTreeSet::new();
+                let mut accessed = AccessedRanges::new();
+                let mut transitions = AccessTransitions::new();
+                let mut uncompactable = BTreeSet::new();
+                let mut pinned = BTreeSet::new();
+                let outcome = {
+                    let mut sinks = RecordSinks {
+                        accessed: &mut accessed,
+                        transitions: &mut transitions,
+                        uncompactable: &mut uncompactable,
+                        pinned_nodes: &mut pinned,
+                    };
+                    // SAFETY: `ast` is read-only and shared across workers; `cont`
+                    // references its nodes.
+                    unsafe {
+                        step(
+                            cont,
+                            ast,
+                            configuration,
+                            &mut touched,
+                            &mut jumped,
+                            &mut sinks,
+                        )?
+                    }
+                };
+                let local = local_from_parts(
+                    ast,
+                    &touched,
+                    &jumped,
+                    &accessed,
+                    &transitions,
+                    &uncompactable,
+                    &pinned,
+                )?;
+                Ok((outcome.successors, outcome.terminal, local))
+            })
+            .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
+
+        let mut next = Vec::new();
+        for (successors, terminal, local) in wave {
+            if let Some(Terminal::Invalid) = terminal {
+                return Ok(None);
+            }
+            total.union_with(local);
+            next.extend(successors);
+        }
+        frontier = next;
+    }
+
+    Ok(Some(total))
 }
