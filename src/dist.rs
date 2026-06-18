@@ -224,6 +224,27 @@ const TOTAL_CREDIT: u64 = 1 << 40;
 /// A typed empty payload for the control messages that carry no data.
 const EMPTY: &[u8] = &[];
 
+/// Per-rank work-stealing instrumentation, gathered to rank 0 at the end so a run
+/// can report **utilisation** (how evenly the frontier spread, how much stealing
+/// it cost). `serde` so it rides the same `all_gather_bytes` primitive as the
+/// accumulators.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug)]
+pub struct RankStats {
+    pub rank: i32,
+    /// Continuations this rank stepped (its share of the search).
+    pub processed: u64,
+    /// `STEAL` requests this rank sent while idle.
+    pub steals_sent: u64,
+    /// Steals this rank served (handed half its deque to a thief).
+    pub steals_served: u64,
+    /// Work chunks this rank received from a victim.
+    pub work_received: u64,
+    /// Loop iterations this rank spent idle (deque empty).
+    pub idle_iters: u64,
+    /// Seconds this rank spent in the search loop.
+    pub seconds: f64,
+}
+
 /// The inner search for one fixed `configuration`, distributed by **lifeline
 /// work-stealing with Mattern credit termination detection** - the load-balanced
 /// successor to the wave-synchronised [`verify_configuration_mpi`].
@@ -251,7 +272,8 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
     ast_head: Option<NonNull<AstNode>>,
     systems: &[InnerVerifierConfiguration],
     configuration: &TypeConfiguration,
-) -> Result<Option<LocalAccumulators>, crate::verifier::CompilerError> {
+    progress: bool,
+) -> Result<Option<(LocalAccumulators, Vec<RankStats>)>, crate::verifier::CompilerError> {
     let rank = world.rank();
     let size = world.size();
 
@@ -296,7 +318,26 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
     let mut victim_idx = 0usize;
     let mut invalid = false;
 
+    // Utilisation counters + a throttle for the optional live progress lines.
+    let mut stats = RankStats {
+        rank,
+        ..Default::default()
+    };
+    let started = std::time::Instant::now();
+    let mut last_print = started;
+
     'run: loop {
+        if progress && last_print.elapsed() >= std::time::Duration::from_millis(250) {
+            last_print = std::time::Instant::now();
+            println!(
+                "[rank {rank} t={:.2}s] processed={} deque={} steals_sent={} work_received={}",
+                started.elapsed().as_secs_f64(),
+                stats.processed,
+                deque.len(),
+                stats.steals_sent,
+                stats.work_received,
+            );
+        }
         // 1. Service all pending messages.
         while let Some((message, status)) = world.any_process().immediate_matched_probe() {
             let source = status.source_rank();
@@ -319,6 +360,7 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
                         world
                             .process_at_rank(source)
                             .send_with_tag(&bytes[..], TAG_WORK);
+                        stats.steals_served += 1;
                     } else {
                         world
                             .process_at_rank(source)
@@ -332,6 +374,7 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
                     credit += work.credit;
                     returned = false;
                     outstanding_steal = false;
+                    stats.work_received += 1;
                 }
                 TAG_NOWORK => outstanding_steal = false,
                 TAG_CREDIT => {
@@ -350,6 +393,7 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
         // 2. Do one unit of work, if any.
         if let Some(cont) = deque.pop_front() {
             let (successors, terminal, local) = step_local(&ast, configuration, &cont)?;
+            stats.processed += 1;
             total.union_with(local);
             if matches!(terminal, Some(Terminal::Invalid)) {
                 for r in 0..size {
@@ -365,6 +409,7 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
         }
 
         // 3. Idle: return credit, detect global termination, then steal.
+        stats.idle_iters += 1;
         if credit > 0 && !returned {
             if rank == 0 {
                 home += credit;
@@ -389,6 +434,7 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
                 .process_at_rank(victim)
                 .send_with_tag(EMPTY, TAG_STEAL);
             outstanding_steal = true;
+            stats.steals_sent += 1;
         }
         // Yield the core while idle. On a real cluster (one rank per core) this
         // returns immediately, so stealing stays low-latency; when ranks share a
@@ -400,6 +446,8 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
     if invalid {
         return Ok(None);
     }
+    stats.seconds = started.elapsed().as_secs_f64();
+
     // Reduce the disjoint per-rank accumulators by union (a collective; reached
     // by every rank only on a valid termination).
     let encoded =
@@ -411,7 +459,20 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
             .map_err(|e| internal(format!("accumulator deserialize: {e}")))?;
         global.union_with(part);
     }
-    Ok(Some(global))
+
+    // Gather the per-rank utilisation the same way (every rank's stats, rank order).
+    let encoded =
+        postcard::to_stdvec(&stats).map_err(|e| internal(format!("stats serialize: {e}")))?;
+    let buffers = all_gather_bytes(world, &encoded)?;
+    let mut all_stats = Vec::with_capacity(buffers.len());
+    for buffer in &buffers {
+        all_stats.push(
+            postcard::from_bytes::<RankStats>(buffer)
+                .map_err(|e| internal(format!("stats deserialize: {e}")))?,
+        );
+    }
+
+    Ok(Some((global, all_stats)))
 }
 
 /// A self-contained **benchmark / cluster test** for launching under `mpirun`:
@@ -450,8 +511,8 @@ pub fn mpi_bench() {
     let configuration = &candidates[winner];
 
     let start = std::time::Instant::now();
-    let distributed =
-        unsafe { verify_configuration_mpi_stealing(&world, ast, &systems, configuration) }
+    let (distributed, _stats) =
+        unsafe { verify_configuration_mpi_stealing(&world, ast, &systems, configuration, false) }
             .expect("distributed work-stealing verification failed")
             .expect("the winning configuration was rejected");
     let elapsed = start.elapsed();
@@ -478,6 +539,99 @@ pub fn mpi_bench() {
             elapsed.as_secs_f64(),
             distributed.touched.len(),
             distributed.accessed,
+        );
+    }
+}
+
+/// Verify the program at `program_path` (a RISC-V dialect file, read relative to
+/// the launch directory) under the lifeline work-stealing backend, emitting
+/// **detailed live progress and a per-rank utilisation breakdown** to stdout -
+/// the HPC counterpart a test pipes to a log file. `harts` lists the systems to
+/// verify under (one per hart count, e.g. `[1, 2]`). Rank 0 prints a parseable
+/// result line: `[mpi-verify] ranks=N program=P config=C touched=T accessed=A`.
+pub fn mpi_verify(program_path: &str, harts: &[u8]) {
+    let universe = mpi::initialize().expect("MPI failed to initialise");
+    let world = universe.world();
+    let rank = world.rank();
+    let size = world.size();
+
+    let source = std::fs::read_to_string(program_path)
+        .unwrap_or_else(|e| panic!("mpi-verify: cannot read program `{program_path}`: {e}"));
+    let dialect = source.replace("\r\n", "\n");
+    let chars: Vec<char> = dialect.chars().collect();
+    let mut ast = crate::ast::new_ast(&chars, std::path::PathBuf::from(program_path));
+    crate::compress(&mut ast);
+
+    let systems: Vec<InnerVerifierConfiguration> = harts
+        .iter()
+        .map(|&harts| InnerVerifierConfiguration {
+            sections: Default::default(),
+            harts,
+        })
+        .collect();
+
+    let index = Ast::index(ast);
+    let candidates = unsafe { candidate_configs(&index).expect("enumerate candidate configs") };
+    if rank == 0 {
+        println!(
+            "[mpi-verify] starting: program={program_path} ranks={size} systems={harts:?} \
+             candidate configurations={}",
+            candidates.len(),
+        );
+    }
+
+    let winner = unsafe { outer_sweep_winner(&world, ast, &systems, &candidates) }
+        .expect("distributed outer sweep failed")
+        .expect("the program has no valid configuration");
+    let configuration = &candidates[winner];
+    if rank == 0 {
+        println!(
+            "[mpi-verify] winning configuration = {configuration} (candidate #{winner}); \
+             distributing the inner search across {size} rank(s)..."
+        );
+    }
+
+    let (result, stats) =
+        unsafe { verify_configuration_mpi_stealing(&world, ast, &systems, configuration, true) }
+            .expect("distributed work-stealing verification failed")
+            .expect("the winning configuration was rejected");
+
+    if rank == 0 {
+        // Per-rank utilisation table + a load-balance summary.
+        println!("[utilisation] per-rank work-stealing breakdown:");
+        println!("  rank  processed  steals_sent  steals_served  work_recv  idle_iters  seconds");
+        let mut total_processed = 0u64;
+        let (mut min_p, mut max_p) = (u64::MAX, 0u64);
+        for s in &stats {
+            total_processed += s.processed;
+            min_p = min_p.min(s.processed);
+            max_p = max_p.max(s.processed);
+            println!(
+                "  {:>4}  {:>9}  {:>11}  {:>13}  {:>9}  {:>10}  {:>7.3}",
+                s.rank,
+                s.processed,
+                s.steals_sent,
+                s.steals_served,
+                s.work_received,
+                s.idle_iters,
+                s.seconds,
+            );
+        }
+        let balance = if min_p == 0 {
+            f64::INFINITY
+        } else {
+            max_p as f64 / min_p as f64
+        };
+        let wall = stats.iter().map(|s| s.seconds).fold(0.0, f64::max);
+        println!(
+            "  total processed={total_processed} across {size} rank(s); \
+             load balance max/min={balance:.2} (max {max_p}, min {min_p}); wall {wall:.3}s"
+        );
+        println!(
+            "[mpi-verify] ranks={size} program={program_path} config={configuration} \
+             touched={} accessed={:?}",
+            result.touched.len(),
+            result.accessed,
         );
     }
 }

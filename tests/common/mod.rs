@@ -11,8 +11,33 @@ use std::io::Write;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-/// Streams a test phase's live progress to `target/tmp/<test>.<phase>.progress`
-/// instead of drawing on the console.
+/// The current test's name, sanitised for use as a path component. libtest /
+/// nextest name the running thread after the test function (e.g.
+/// `uart_hello::uart_hello`); `::` becomes `.` so it is a single path segment.
+pub fn test_name() -> String {
+    std::thread::current()
+        .name()
+        .unwrap_or("test")
+        .replace("::", ".")
+}
+
+/// The per-test log directory `target/tmp/test-logs/<test name>/`, created on
+/// demand. **All** of a test's `target/tmp` output (live progress streams,
+/// blessed traces, HPC run logs) is grouped here, one directory per test, so the
+/// logs are easy to find and do not collide across tests.
+pub fn test_log_dir() -> String {
+    let dir = format!(
+        "{}/target/tmp/test-logs/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        test_name()
+    );
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Streams a test phase's live progress to
+/// `target/tmp/test-logs/<test>/<phase>.progress` instead of drawing on the
+/// console.
 ///
 /// The console belongs to the test runner: interactive output (spinners,
 /// carriage returns) interleaves with nextest's own status display and corrupts
@@ -21,7 +46,7 @@ use std::time::{Duration, Instant};
 /// steps for `uart_hello`; QEMU runs a fixed boot timeout), follow the file:
 ///
 /// ```powershell
-/// Get-Content -Wait target\tmp\uart_hello.verify.progress
+/// Get-Content -Wait target\tmp\test-logs\uart_hello.uart_hello\verify.progress
 /// ```
 ///
 /// Updates are throttled (so calling [`Progress::update`] every verifier step
@@ -35,18 +60,11 @@ pub struct Progress {
 impl Progress {
     const INTERVAL: Duration = Duration::from_millis(250);
 
-    /// Creates `target/tmp/<test>.<phase>.progress` (truncating any previous
-    /// run's file). The test name is taken from the current thread, which
-    /// libtest/nextest name after the test function.
+    /// Creates `target/tmp/test-logs/<test>/<phase>.progress` (truncating any
+    /// previous run's file). The test name is taken from the current thread,
+    /// which libtest/nextest name after the test function.
     pub fn new(phase: &str) -> Self {
-        let test = std::thread::current()
-            .name()
-            .unwrap_or("test")
-            .replace("::", ".");
-        let dir = format!("{}/target/tmp", env!("CARGO_MANIFEST_DIR"));
-        let file = std::fs::create_dir_all(&dir)
-            .ok()
-            .and_then(|()| std::fs::File::create(format!("{dir}/{test}.{phase}.progress")).ok());
+        let file = std::fs::File::create(format!("{}/{phase}.progress", test_log_dir())).ok();
         Self {
             file,
             last: Instant::now() - Self::INTERVAL,
@@ -83,6 +101,16 @@ pub fn setup_test(asset: &str) -> Option<NonNull<AstNode>> {
     let dir = env!("CARGO_MANIFEST_DIR");
     let path = std::path::PathBuf::from(format!("{dir}/tests/{asset}"));
     let source = std::fs::read_to_string(&path).unwrap();
+    // `new_ast` splits lines on the *platform* newline (CRLF on Windows, LF on
+    // Linux; see ast.rs). Normalize so a `dialect.s` with either line ending
+    // parses regardless of how git checked it out: a no-op for a file that
+    // already matches the platform.
+    let unified = source.replace("\r\n", "\n");
+    let source = if cfg!(windows) {
+        unified.replace('\n', "\r\n")
+    } else {
+        unified
+    };
     let chars = source.chars().collect::<Vec<_>>();
     let mut ast = new_ast(&chars, path);
     compress(&mut ast);
@@ -135,7 +163,7 @@ pub unsafe fn trace_valid_path(
     const STEP_CAP: usize = 10_000_000;
     let mut trace = Vec::new();
     // Live progress (the verifier can take millions of steps) streams to
-    // `target/tmp/<test>.verify.progress`, never to the console (see
+    // `target/tmp/test-logs/<test>/verify.progress`, never to the console (see
     // [`Progress`]).
     let mut progress = Progress::new("verify");
     for step in 0..STEP_CAP {
@@ -211,28 +239,18 @@ pub fn bless_asm(rel: &str, actual: String, included: &str) {
 }
 
 /// In [`blessing`] mode writes the trace and its step count to
-/// `target/tmp/<test>.trace` / `target/tmp/<test>.meta` so re-baselining a
-/// pinned trace, step count, or configuration timeline starts from the actual
-/// behaviour. A no-op in a normal run; the test name is taken from the current
-/// thread. Very long traces (e.g. `uart_hello`'s ~2M steps) write only the
-/// `.meta` count, not the full trace.
+/// `target/tmp/test-logs/<test>/trace` and `.../meta` so re-baselining a pinned
+/// trace, step count, or configuration timeline starts from the actual
+/// behaviour. A no-op in a normal run. Very long traces (e.g. `uart_hello`'s ~2M
+/// steps) write only the `meta` count, not the full trace.
 fn dump_trace(trace: &[String]) {
     if !blessing() {
         return;
     }
-    let test = std::thread::current()
-        .name()
-        .unwrap_or("test")
-        .replace("::", ".");
-    let dir = format!("{}/target/tmp", env!("CARGO_MANIFEST_DIR"));
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::write(
-            format!("{dir}/{test}.meta"),
-            format!("steps={}\n", trace.len()),
-        );
-        if trace.len() <= 100_000 {
-            let _ = std::fs::write(format!("{dir}/{test}.trace"), trace.join("\n"));
-        }
+    let dir = test_log_dir();
+    let _ = std::fs::write(format!("{dir}/meta"), format!("steps={}\n", trace.len()));
+    if trace.len() <= 100_000 {
+        let _ = std::fs::write(format!("{dir}/trace"), trace.join("\n"));
     }
 }
 
@@ -618,4 +636,178 @@ pub fn assert_trace(actual: &[String], expected: &[&str]) {
         "trace length differs (first {} steps matched)",
         actual.len().min(expected.len())
     );
+}
+
+// ---------------------------------------------------------------------------
+// Model switch: verify a program either with the simple in-process (sequential)
+// model or the distributed HPC (MPI) model, with one reusable call.
+// ---------------------------------------------------------------------------
+
+/// Which model to verify a program under.
+///
+/// A test picks a default; it can be overridden **before running**, without
+/// editing the test, via the `FORMAL_TEST_MODEL` environment variable:
+/// `sequential` (or `seq`), `hpc`, or `hpc:<ranks>` (e.g. `hpc:16`). So
+/// `FORMAL_TEST_MODEL=sequential cargo nt hpc_demo` runs the same test in-process.
+#[derive(Clone, Copy, Debug)]
+pub enum Model {
+    /// In-process on one machine, no MPI: the simple reference model
+    /// ([`verify_inferred`]).
+    Sequential,
+    /// Distributed across `ranks` MPI processes via `mpirun` (needs WSL + the
+    /// `--features hpc` build, built once into `~/formal-hpc`).
+    Hpc { ranks: usize },
+}
+
+/// The normalised result of verifying a program under a [`Model`]: the inferred
+/// configuration and accessed byte-ranges as their canonical `Display`/`Debug`
+/// strings (so the two models are directly comparable), the touched-node count,
+/// and the path of the detail log written under `target/tmp/test-logs/<test>/`.
+pub struct ModelOutcome {
+    pub model: String,
+    pub configuration: String,
+    pub accessed: String,
+    pub touched: usize,
+    pub log: String,
+}
+
+/// Applies any `FORMAL_TEST_MODEL` override to `default`.
+fn resolve_model(default: Model) -> Model {
+    match std::env::var("FORMAL_TEST_MODEL").ok().as_deref() {
+        Some("sequential") | Some("seq") => Model::Sequential,
+        Some(hpc) if hpc == "hpc" || hpc.starts_with("hpc:") => {
+            let ranks = hpc
+                .strip_prefix("hpc:")
+                .and_then(|r| r.trim().parse().ok())
+                .unwrap_or(match default {
+                    Model::Hpc { ranks } => ranks,
+                    Model::Sequential => 8,
+                });
+            Model::Hpc { ranks }
+        }
+        _ => default,
+    }
+}
+
+/// Builds the `--features hpc` binary in WSL (cached in `~/formal-hpc`) and runs
+/// `formal <args>` under `mpirun -n ranks`, returning the merged stdout.
+///
+/// Requires WSL + a system MPI; like [`run_in_qemu`] it **panics** (failing the
+/// test) if they are absent, rather than skipping.
+pub fn mpirun_formal(ranks: usize, args: &str) -> String {
+    use std::process::Command;
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let script = format!(
+        "set -e\n\
+         cd \"$(wslpath '{dir}')\"\n\
+         FORMAL_NO_SETUP=1 ~/.cargo/bin/cargo build --features hpc --bin formal \
+            --target-dir ~/formal-hpc >/dev/null 2>&1\n\
+         mpirun --mca mpi_yield_when_idle 1 --oversubscribe -n {ranks} \
+            ~/formal-hpc/debug/formal {args}"
+    );
+    let mut command = Command::new("wsl");
+    command.args(["-e", "bash", "-lc", &script]);
+    // Detach WSL from the console (see the note in `run_in_qemu`).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.output().expect(
+        "failed to invoke WSL: WSL with a system MPI (mpirun) and the `--features hpc` build \
+         dependencies is REQUIRED to run the HPC model",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "wsl build/mpirun failed (`formal {args}`, {ranks} rank(s)):\n--- stdout ---\n{stdout}\n\
+         --- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+}
+
+/// Verifies the dialect program `asset` (relative to `tests/`) under `default`
+/// model (overridable via `FORMAL_TEST_MODEL`), writing a detail log under
+/// `target/tmp/test-logs/<test>/`. `harts` lists the systems to verify under (one
+/// per hart count, e.g. `&[1, 2]`). Returns the normalised [`ModelOutcome`] so a
+/// test asserts on the inferred configuration / accessed ranges regardless of
+/// which model actually ran.
+///
+/// - `Sequential`: in-process [`verify_inferred`]; writes `sequential.log`.
+/// - `Hpc`: shells out to `mpirun … formal mpi-verify`, which streams per-rank
+///   progress + a utilisation breakdown; the full output is saved to `hpc.log`.
+pub fn verify_with_model(asset: &str, harts: &[u8], default: Model) -> ModelOutcome {
+    let dir = test_log_dir();
+    match resolve_model(default) {
+        Model::Sequential => {
+            let ast = setup_test(asset);
+            let systems: Vec<InnerVerifierConfiguration> = harts
+                .iter()
+                .map(|&harts| InnerVerifierConfiguration {
+                    sections: Default::default(),
+                    harts,
+                })
+                .collect();
+            let result = unsafe { verify_inferred(ast, &systems) }
+                .expect("sequential verify_inferred failed");
+            let valid = match result {
+                ExplorePathResult::Valid(valid) => valid,
+                _ => panic!("{asset}: the sequential model did not reach a valid configuration"),
+            };
+            let configuration = format!("{}", valid.configuration);
+            let accessed = normalize(format!("{:?}", valid.accessed));
+            let touched = valid.touched.len();
+            let log = format!("{dir}/sequential.log");
+            let _ = std::fs::write(
+                &log,
+                format!(
+                    "model = sequential (in-process)\nprogram = tests/{asset}\nsystems = {harts:?}\n\
+                     configuration = {configuration}\ntouched = {touched}\naccessed = {accessed}\n"
+                ),
+            );
+            ModelOutcome {
+                model: "sequential".into(),
+                configuration,
+                accessed,
+                touched,
+                log,
+            }
+        }
+        Model::Hpc { ranks } => {
+            let harts_csv = harts
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let out = mpirun_formal(ranks, &format!("mpi-verify tests/{asset} {harts_csv}"));
+            let log = format!("{dir}/hpc.log");
+            let _ = std::fs::write(&log, &out);
+            let line = out
+                .lines()
+                .find(|l| l.starts_with("[mpi-verify] ranks="))
+                .unwrap_or_else(|| {
+                    panic!("{asset}: no `[mpi-verify]` result line in the HPC output (see {log})\n{out}")
+                });
+            let configuration = between(line, "config=", " touched=").trim().to_string();
+            let touched = between(line, "touched=", " accessed=")
+                .trim()
+                .parse()
+                .unwrap_or(0);
+            let accessed = normalize(
+                line.split_once("accessed=")
+                    .map(|(_, a)| a)
+                    .unwrap_or("")
+                    .to_string(),
+            );
+            ModelOutcome {
+                model: format!("hpc ({ranks} ranks)"),
+                configuration,
+                accessed,
+                touched,
+                log,
+            }
+        }
+    }
 }

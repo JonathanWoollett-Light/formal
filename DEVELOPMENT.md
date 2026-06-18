@@ -88,8 +88,9 @@ cargo run --example translate -- tests/uart_hello/input.hl tests/uart_hello/dial
 `cargo install cargo-nextest`, or the prebuilt from https://get.nexte.st).
 Tests print **nothing live to the console** (interactive output corrupts the
 runner's display); long phases stream progress to
-`target/tmp/<test>.<phase>.progress` via the `Progress` helper in
-`tests/common/mod.rs` (`Get-Content -Wait` to follow). **`wsl.exe` must be
+`target/tmp/test-logs/<test>/<phase>.progress` via the `Progress` helper in
+`tests/common/mod.rs` (`Get-Content -Wait` to follow). Each test's `target/tmp`
+output is grouped under its own `target/tmp/test-logs/<test>/` directory. **`wsl.exe` must be
 spawned detached from the console** (`CREATE_NO_WINDOW` in `run_in_qemu`): if
 it attaches to the parent console it mutates the console mode and corrupts all
 subsequent runner output in that window (staircased lines; progress bars
@@ -777,8 +778,9 @@ mod common;`) holds the shared helpers:
 - `blessing()` / `bless_asm(rel, actual, included)`: re-baseline mode. With
   `BLESS` set in the environment, `bless_asm` **overwrites** the golden
   `tests/<rel>` with `actual` instead of asserting, `trace_valid_path` dumps
-  the trace + step count to `target/tmp/<test>.trace`/`.meta`, and a test
-  skips its inline trace / step-count assertions (guarded `if !blessing()`).
+  the trace + step count to `target/tmp/test-logs/<test>/trace` and `.../meta`,
+  and a test skips its inline trace / step-count assertions (guarded
+  `if !blessing()`).
   One `BLESS=1` run therefore regenerates every golden **and still boots each
   program in QEMU** (so a blessed program is still proven to run); then paste
   the dumped trace / count back into the test source. Re-baseline
@@ -796,6 +798,19 @@ pinned_nodes)` / `run_in_qemu(name, asm)`:
   user-mode emulator `qemu-riscv64` (bundled in the toolchain `bin/`, invoked as
   `$RISCV_BIN/qemu-riscv64`), returning its **stdout**. Same required-not-skipped
   policy as `run_in_qemu`.
+- `verify_with_model(asset, harts, model) -> ModelOutcome`: verifies a program
+  under a chosen [`Model`] - `Sequential` (in-process [`verify_inferred`]) or
+  `Hpc { ranks }` (distributed under `mpirun`, via `mpirun_formal`) - and returns
+  the inferred configuration + accessed ranges as comparable strings, so one test
+  body covers both. The model is **switchable before running** without an edit:
+  `FORMAL_TEST_MODEL=sequential | hpc | hpc:<ranks>`. Each run writes a detail log
+  under `target/tmp/test-logs/<test>/` (`sequential.log`, or `hpc.log` with the
+  per-rank live progress + utilisation breakdown from `formal mpi-verify`).
+  `mpirun_formal(ranks, args)` builds `--features hpc` in WSL (cached in
+  `~/formal-hpc`) and runs `formal <args>` under `mpirun`; required-not-skipped
+  like `run_in_qemu`. `tests/hpc_demo` is the worked example (`cargo nt hpc_demo`):
+  it verifies the large `racy_stress` program under the HPC model and checks the
+  distributed result equals the oracle's.
 
 A trace line is `h<hart>/<harts> | <instruction> | <config> | q<n> t<n> j<n>`
 (the instruction being processed this step, and the resulting configuration /

@@ -41,13 +41,41 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("mpi-verify") => {
+            #[cfg(feature = "hpc")]
+            {
+                let Some(path) = args.get(2) else {
+                    eprintln!("usage: formal mpi-verify <dialect-file> [harts-csv, e.g. 1,2]");
+                    std::process::exit(1);
+                };
+                // Optional comma-separated hart counts (one system each); default 1 + 2.
+                let harts: Vec<u8> = match args.get(3) {
+                    Some(csv) => csv
+                        .split(',')
+                        .filter_map(|h| h.trim().parse().ok())
+                        .collect(),
+                    None => vec![1, 2],
+                };
+                formal::dist::mpi_verify(path, &harts);
+            }
+            #[cfg(not(feature = "hpc"))]
+            {
+                eprintln!(
+                    "mpi-verify needs the `hpc` feature and a system MPI library; build with \
+                     `cargo build --features hpc` and run under `mpirun` (see build.rs / deploy/)."
+                );
+                std::process::exit(1);
+            }
+        }
         _ => {
             eprintln!(
                 "formal: a verifying compiler for a Python-like RISC-V dialect.\n\n\
                  usage:\n  \
                  formal new <name>      scaffold a project whose `cargo run` verifies and\n                         \
                  compiles its `main.hl` to RISC-V in `build/`\n  \
-                 formal mpi-selftest    (--features hpc) run a distributed verification under MPI"
+                 formal mpi-selftest    (--features hpc) run the two-axis distributed self-test under MPI\n  \
+                 formal mpi-bench       (--features hpc) work-stealing benchmark, self-checked vs the reference\n  \
+                 formal mpi-verify <f>  (--features hpc) verify dialect file <f> distributed, with utilisation logs"
             );
             std::process::exit(1);
         }
