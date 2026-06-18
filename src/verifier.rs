@@ -101,7 +101,7 @@ impl LocalAccumulators {
 /// pointers). Because every field is a value type, a `Continuation` is `Clone`
 /// today and will be `serde`-serializable once `State` is (Phase 3), so it can
 /// migrate between threads (Phase 1) and cluster nodes (Phase 3).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Continuation {
     /// The execution state (registers, memory, configuration, descriptor labels,
     /// tag counter) *before* the active hart's front node executes.
@@ -308,14 +308,14 @@ pub struct InnerVerifierConfiguration {
     pub harts: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Section {
     pub address: MemoryValueI64,
     pub size: MemoryValueI64,
     pub permissions: Permissions,
     pub volatile: bool,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Permissions {
     Read,
     Write,

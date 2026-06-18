@@ -13,7 +13,7 @@ use std::ops::Add;
 use std::ptr::NonNull;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueI8 {
     pub start: i8,
     pub stop: i8,
@@ -40,7 +40,7 @@ impl RangeType for MemoryValueI8 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueU16 {
     pub start: u16,
     pub stop: u16,
@@ -67,7 +67,7 @@ impl RangeType for MemoryValueU16 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueI32 {
     pub start: i32,
     pub stop: i32,
@@ -94,7 +94,7 @@ impl RangeType for MemoryValueI32 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueI16 {
     pub start: i16,
     pub stop: i16,
@@ -121,7 +121,7 @@ impl RangeType for MemoryValueI16 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueU8 {
     pub start: u8,
     pub stop: u8,
@@ -469,7 +469,7 @@ pub enum MemoryValueU32GetError {
     Outside(MemoryValueU64),
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueU64 {
     pub start: u64,
     pub stop: u64,
@@ -555,7 +555,7 @@ impl MemoryValueU64 {
     }
 }
 
-#[derive(Debug, Hash, Clone, Copy)]
+#[derive(Debug, Hash, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueI64 {
     pub start: i64,
     pub stop: i64,
@@ -600,7 +600,7 @@ impl TryFrom<MemoryValueU64> for MemoryValueI64 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryValueU32 {
     pub start: u32,
     pub stop: u32,
@@ -656,7 +656,7 @@ pub enum MemoryValueGetError {
 }
 // It is possible to technically store a 4 byte virtual value (e.g. DATA_END)
 // then edit 2 bytes of it. So we will need additional complexity to support this case
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum MemoryValue {
     U64(MemoryValueU64),
     U32(MemoryValueU32),
@@ -1223,9 +1223,9 @@ impl<'a> From<&'a MemoryLabel> for &'a Locality {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryPtr(pub Option<NonNullMemoryPtr>);
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NonNullMemoryPtr {
     pub tag: MemoryLabel,
     pub offset: MemoryValueU64,
@@ -1270,7 +1270,9 @@ impl MemoryPtr {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum MemoryLabel {
     Global { label: Label },
     Thread { label: Label, hart: u8 },
@@ -1294,7 +1296,7 @@ pub enum SetMemoryMapError {
     #[error("Failed to set the value in main memory: {0}")]
     MemoryValue(MemoryValueSetError),
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryMap {
     /// The contents of the programs `.bss` and `.data` sections.
     pub map: BTreeMap<MemoryLabel, MemoryValue>,
@@ -1303,7 +1305,7 @@ pub struct MemoryMap {
     /// The description of the programs heap (outside the `.bss` and `.data` sections).
     pub sections: Vec<crate::Section>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemorySection {
     pub address: MemoryValueI64,
     pub value: MemoryValue,
@@ -1589,7 +1591,7 @@ pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
 /// observable (same rule as `touched`/`jumped`).
 pub type AccessTransitions = BTreeMap<NonNull<AstNode>, BTreeSet<(Label, u64, u64)>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct State {
     // Each hart has its own registers.
     pub registers: Vec<RegisterValues>,
@@ -1715,7 +1717,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RegisterValues(BTreeMap<Register, MemoryValue>);
 impl RegisterValues {
     pub fn insert(&mut self, key: Register, value: MemoryValue) -> Result<Option<MemoryValue>, ()> {
@@ -1731,13 +1733,15 @@ impl RegisterValues {
 }
 use std::borrow::Borrow;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CsrValue {
     Mhartid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum LabelLocality {
     // If the locality is thread, we want to record which threads need a copy.
     Thread(BTreeSet<u8>),
@@ -1761,7 +1765,9 @@ impl From<Locality> for LabelLocality {
 }
 
 /// Each execution path is based on the types and localities for each variable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct TypeConfiguration(pub BTreeMap<Label, (LabelLocality, Type)>);
 impl TypeConfiguration {
     pub fn append(&mut self, other: TypeConfiguration) {

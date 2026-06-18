@@ -31,7 +31,9 @@ impl AsRef<AstValue> for AstNode {
 /// frontier item) cross a thread or a cluster node, and what lets the verifier's
 /// accumulators be keyed by something the determinism contract (DEVELOPMENT.md
 /// §4.3: order by stable keys, never by pointer) permits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct AstNodeId(pub u32);
 
 /// A read-only view over a verified-program AST that maps between an
@@ -393,7 +395,9 @@ impl From<Type> for FlatType {
 }
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Locality {
     Thread = 1,
     Global = 0,
@@ -412,7 +416,9 @@ impl fmt::Display for Locality {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Type {
     U8,
     I8,
@@ -1145,7 +1151,9 @@ fn new_ascii(_src: &[char]) -> Ascii {
     // }
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy)]
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, serde::Serialize, serde::Deserialize,
+)]
 #[non_exhaustive]
 pub enum Register {
     X0,
@@ -1401,7 +1409,7 @@ fn new_label_instruction(src: &[char]) -> LabelInstruction {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Label {
     pub tag: String,
 }

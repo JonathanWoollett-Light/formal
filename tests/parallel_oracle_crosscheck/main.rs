@@ -309,3 +309,36 @@ fn generator_sweep_infers_oracle_config() {
         "the generator+sweep must infer the oracle's winning configuration"
     );
 }
+
+/// Distributed-transport simulation: every continuation crosses a postcard
+/// serialize/deserialize round-trip (as it would migrating between nodes), yet
+/// the search still reproduces the oracle's outputs exactly, at 1 and 3 "ranks".
+/// This validates the serde interop boundary the real MPI backend depends on.
+#[test]
+fn distributed_sim_matches_oracle() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+    let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
+
+    let index = Ast::index(ast);
+    for ranks in [1usize, 3] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(ranks)
+            .build()
+            .expect("build rayon pool");
+        let local = pool
+            .install(|| unsafe {
+                verify_configuration_distributed_sim(&index, &sys, &oracle.configuration)
+            })
+            .expect("distributed sim returned a compiler error")
+            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {ranks} ranks"));
+        assert_eq!(
+            local, expected,
+            "distributed-sim outputs differ from the oracle at {ranks} simulated rank(s)"
+        );
+    }
+}

@@ -445,3 +445,126 @@ pub unsafe fn verify_inferred(
     let candidates = candidate_configs(&ast)?;
     verify_sweep(ast_head, systems, &candidates)
 }
+
+/// Distributed-transport **simulation** of the deep inner search: identical to
+/// [`verify_configuration_parallel`], except every frontier item crosses a
+/// `postcard` serialize -> deserialize round-trip before it is stepped and every
+/// successor is re-serialized, exactly as a `Continuation` would when migrating
+/// between cluster nodes. The per-worker outputs reduce by the same commutative
+/// union. This exercises the real interop boundary (serde + a compact binary
+/// format) and proves continuations survive the wire with byte-identical results;
+/// the only thing a real MPI/lifeline backend swaps in is the *transport* of
+/// these bytes (validated on a cluster, not here).
+///
+/// Returns `Some(union)` if the configuration is valid, or `None` if invalid.
+///
+/// # Safety
+/// The AST `ast` indexes must be live and outlive the call.
+pub unsafe fn verify_configuration_distributed_sim(
+    ast: &Ast,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+) -> Result<Option<LocalAccumulators>, CompilerError> {
+    use rayon::prelude::*;
+
+    let encode = |cont: &Continuation| -> Result<Vec<u8>, CompilerError> {
+        postcard::to_stdvec(cont)
+            .map_err(|e| CompilerError::Internal(format!("continuation serialize: {e}")))
+    };
+    let decode = |bytes: &[u8]| -> Result<Continuation, CompilerError> {
+        postcard::from_bytes(bytes)
+            .map_err(|e| CompilerError::Internal(format!("continuation deserialize: {e}")))
+    };
+
+    let start = ast.head().ok_or_else(|| {
+        CompilerError::Internal("verify_configuration_distributed_sim: empty AST".to_string())
+    })?;
+    let start_id = ast.id_of(start).ok_or_else(|| {
+        CompilerError::Internal(
+            "verify_configuration_distributed_sim: entry not indexed".to_string(),
+        )
+    })?;
+
+    // The frontier is carried as serialized bytes, as if in transit between nodes.
+    let mut frontier: Vec<Vec<u8>> = systems
+        .iter()
+        .map(|system| {
+            let mut fronts = BTreeMap::new();
+            for hart in 0..system.harts {
+                fronts.insert(hart, start_id);
+            }
+            encode(&Continuation {
+                state: State::new(system, configuration),
+                fronts,
+                active_hart: 0,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    let mut total = LocalAccumulators::default();
+
+    while !frontier.is_empty() {
+        type WaveItem = (Vec<Vec<u8>>, Option<Terminal>, LocalAccumulators);
+        let wave = frontier
+            .par_iter()
+            .map(|bytes| -> Result<WaveItem, CompilerError> {
+                // Receive: deserialize the migrated continuation.
+                let cont = decode(bytes)?;
+
+                let mut touched = BTreeSet::new();
+                let mut jumped = BTreeSet::new();
+                let mut accessed = AccessedRanges::new();
+                let mut transitions = AccessTransitions::new();
+                let mut uncompactable = BTreeSet::new();
+                let mut pinned = BTreeSet::new();
+                let outcome = {
+                    let mut sinks = RecordSinks {
+                        accessed: &mut accessed,
+                        transitions: &mut transitions,
+                        uncompactable: &mut uncompactable,
+                        pinned_nodes: &mut pinned,
+                    };
+                    // SAFETY: `ast` is read-only and shared; `cont` references its nodes.
+                    unsafe {
+                        step(
+                            &cont,
+                            ast,
+                            configuration,
+                            &mut touched,
+                            &mut jumped,
+                            &mut sinks,
+                        )?
+                    }
+                };
+                let local = local_from_parts(
+                    ast,
+                    &touched,
+                    &jumped,
+                    &accessed,
+                    &transitions,
+                    &uncompactable,
+                    &pinned,
+                )?;
+                // Send: re-serialize the successors for the next hop.
+                let successors = outcome
+                    .successors
+                    .iter()
+                    .map(&encode)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((successors, outcome.terminal, local))
+            })
+            .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
+
+        let mut next = Vec::new();
+        for (successors, terminal, local) in wave {
+            if let Some(Terminal::Invalid) = terminal {
+                return Ok(None);
+            }
+            total.union_with(local);
+            next.extend(successors);
+        }
+        frontier = next;
+    }
+
+    Ok(Some(total))
+}
