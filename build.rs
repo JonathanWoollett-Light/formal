@@ -14,10 +14,15 @@
 //!   feature. Every probe/install error becomes a `cargo:warning`, never a panic.
 //! - **Idempotent.** It re-detects each dependency and only acts on what is
 //!   missing; when everything is present it prints nothing.
-//! - **Non-interactive.** It only auto-installs via package managers without an
-//!   elevation prompt (`sudo -n`, so it can't hang on a password). Anything that
-//!   needs admin or a reboot (installing WSL itself, MS-MPI, a multi-GB
-//!   toolchain) is reported as an exact command to run, not executed silently.
+//! - **Escalates only where genuinely required.** On Windows the QEMU / RISC-V
+//!   toolchain / MPI packages install *inside WSL as root* (`wsl -u root`), which
+//!   is privileged in the distribution without any UAC prompt or WSL password.
+//!   Installing WSL itself needs host admin, so that (only) raises a UAC prompt
+//!   (`Start-Process -Verb RunAs`). On a native Linux host the apt install uses
+//!   `sudo`, which prompts for your password on the terminal - attempted only
+//!   when stdin is a terminal, so a non-interactive build (CI) never hangs and
+//!   instructs instead. A multi-GB upstream toolchain release is still reported,
+//!   not downloaded silently.
 //! - **Controllable** via environment variables:
 //!     - `FORMAL_NO_SETUP=1` - skip this script entirely.
 //!     - `FORMAL_SETUP=detect` - detect and report only; never install.
@@ -126,14 +131,19 @@ fn setup_windows(report: &mut Report, install: bool) {
     // reboot), so only detect and instruct.
     let have_wsl = runs("wsl", &["--status"]) || on_path("wsl");
     if !have_wsl {
-        report.note(
-            "WSL is not installed. Install it (admin PowerShell, then reboot):  wsl --install",
-        );
-        report.note("after WSL is up, re-run `cargo build` to provision the Linux side.");
-        // Native (non-WSL) MPI for the future `hpc` feature on Windows:
-        report.note(
-            "MPI (optional, for --features hpc): install Microsoft MPI, or use the MPI inside WSL.",
-        );
+        if install {
+            // Installing WSL needs Windows admin: request elevation (UAC) and run
+            // `wsl --install` in the elevated shell. It also requires a reboot.
+            elevate_windows(report, "WSL", "wsl --install");
+            report.note(
+                "after WSL installs and you reboot, re-run `cargo build` to provision the \
+                 Linux side (QEMU, the RISC-V toolchain, MPI) as root via `wsl -u root`.",
+            );
+        } else {
+            report.note(
+                "WSL is not installed. Install it (admin PowerShell, then reboot):  wsl --install",
+            );
+        }
         return;
     }
 
@@ -199,20 +209,45 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         return;
     }
 
-    // Best-effort, non-interactive apt install of everything missing in one go.
     let pkgs: Vec<&str> = missing.iter().flat_map(|(_, p, _)| p.split(' ')).collect();
     let pkg_list = pkgs.join(" ");
-    let apt = format!("sudo -n apt-get update && sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}");
 
     if via_wsl {
+        // Windows host: install inside WSL as root. `wsl -u root` is privileged in
+        // the distribution without a Windows UAC prompt or a WSL password, so no
+        // escalation dialog is needed for these. `dpkg --configure -a` first
+        // self-heals a previously-interrupted dpkg (a common stuck state).
+        let apt = format!(
+            "DEBIAN_FRONTEND=noninteractive dpkg --configure -a && apt-get update \
+             && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}"
+        );
         try_install(
             report,
-            "WSL apt packages",
+            "WSL apt packages (installed as root via `wsl -u root`)",
             "wsl",
-            &["-e", "bash", "-lc", &apt],
+            &["-u", "root", "-e", "bash", "-lc", &apt],
         );
     } else {
-        try_install(report, "apt packages", "sh", &["-c", &apt]);
+        // Native Linux host: escalate with `sudo`, which prompts for the password
+        // on the terminal. Only attempt it when stdin is a terminal, so a
+        // non-interactive build (CI, no tty) instructs instead of hanging.
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            let apt = format!(
+                "sudo dpkg --configure -a && sudo apt-get update \
+                 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}"
+            );
+            try_install(
+                report,
+                "apt packages (via sudo, will prompt)",
+                "sh",
+                &["-c", &apt],
+            );
+        } else {
+            report.note(format!(
+                "missing packages (no terminal to prompt for sudo); run:  sudo apt-get install -y {pkg_list}"
+            ));
+        }
     }
 
     // The toolchain the QEMU tests default to (`$HOME/riscv-toolchain/...`) is a
@@ -222,4 +257,25 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         "if a QEMU boot test reports a missing toolchain, set RISCV_BIN to the dir holding \
          riscv64-unknown-elf-as/ld (apt installs them on PATH; export RISCV_BIN accordingly).",
     );
+}
+
+/// Request Windows privilege escalation (a UAC prompt) and run `command` in the
+/// elevated shell. Used for the only host-admin action: installing WSL itself.
+fn elevate_windows(report: &mut Report, human: &str, command: &str) {
+    // PowerShell `Start-Process -Verb RunAs` raises the UAC dialog; `-Wait` keeps
+    // us blocked until the elevated `cmd /c <command>` finishes.
+    let ps =
+        format!("Start-Process -Verb RunAs -Wait -FilePath cmd.exe -ArgumentList '/c {command}'");
+    match Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps])
+        .status()
+    {
+        Ok(s) if s.success() => report.note(format!("{human}: elevated install launched (UAC).")),
+        Ok(_) => report.note(format!(
+            "{human}: elevation was declined or failed. Run in an admin shell:  {command}"
+        )),
+        Err(e) => report.note(format!(
+            "{human}: could not request elevation ({e}). Run in an admin shell:  {command}"
+        )),
+    }
 }
