@@ -180,7 +180,14 @@ pub unsafe fn verify_configuration_pooled(
             uncompactable: &mut uncompactable,
             pinned_nodes: &mut pinned_nodes,
         };
-        let outcome = step(&cont, &ast, configuration, &mut touched, &mut jumped, &mut sinks)?;
+        let outcome = step(
+            &cont,
+            &ast,
+            configuration,
+            &mut touched,
+            &mut jumped,
+            &mut sinks,
+        )?;
         if let Some(Terminal::Invalid) = outcome.terminal {
             return Ok(ExplorePathResult::Invalid);
         }
