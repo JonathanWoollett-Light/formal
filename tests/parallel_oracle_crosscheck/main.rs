@@ -132,6 +132,49 @@ fn parallel_sweep_picks_valid_config() {
     assert_eq!(valid.pinned_nodes, oracle.pinned_nodes, "pinned_nodes");
 }
 
+/// The pointer-free `step`-based pool reproduces the oracle's outputs exactly on
+/// the annotated program: this is what proves `step` (and the duplicated
+/// `compute_next`) faithful to the sequential `queue_up` before the worklist is
+/// parallelised.
+#[test]
+fn pooled_step_matches_oracle_annotated() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+
+    let result = unsafe { verify_configuration_pooled(ast, &sys, &oracle.configuration) }
+        .expect("verify_configuration_pooled returned a compiler error");
+    let pooled = match result {
+        ExplorePathResult::Valid(valid) => valid,
+        ExplorePathResult::Invalid => {
+            panic!("the step pool rejected a configuration the oracle accepted")
+        }
+        ExplorePathResult::Continue(_) => panic!("the step pool returned Continue"),
+    };
+
+    assert_eq!(pooled.configuration, oracle.configuration, "configuration");
+    assert_eq!(pooled.touched, oracle.touched, "touched");
+    assert_eq!(pooled.jumped, oracle.jumped, "jumped");
+    assert_eq!(pooled.accessed, oracle.accessed, "accessed");
+    assert_eq!(pooled.transitions, oracle.transitions, "transitions");
+    assert_eq!(pooled.uncompactable, oracle.uncompactable, "uncompactable");
+    assert_eq!(pooled.pinned_nodes, oracle.pinned_nodes, "pinned_nodes");
+}
+
+/// The step pool rejects a configuration that conflicts with the program.
+#[test]
+fn pooled_step_wrong_type_is_invalid() {
+    let ast = setup_test("racy_store_annotated/dialect.s");
+    let sys = systems();
+    let wrong = cfg(LabelLocality::Global, Type::U8);
+    let result = unsafe { verify_configuration_pooled(ast, &sys, &wrong) }
+        .expect("verify_configuration_pooled returned a compiler error");
+    assert!(matches!(result, ExplorePathResult::Invalid));
+}
+
 /// A sweep whose every candidate is invalid yields `Invalid`.
 #[test]
 fn parallel_sweep_all_invalid_is_invalid() {

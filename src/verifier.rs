@@ -104,21 +104,15 @@ impl LocalAccumulators {
 #[derive(Debug, Clone)]
 pub struct Continuation {
     /// The execution state (registers, memory, configuration, descriptor labels,
-    /// tag counter) before the current per-hart fronts execute.
+    /// tag counter) *before* the active hart's front node executes.
     pub state: State,
-    /// The next AST node to execute for each hart (the frontier per hart). A
-    /// hart with no entry has run off the end of the program.
+    /// The current AST node for each hart. `fronts[active_hart]` is the node
+    /// applied this step; the others are each hart's most-recent node, used to
+    /// compute their next step. A hart whose node is `Unreachable` is blocked.
     pub fronts: BTreeMap<u8, AstNodeId>,
-    /// Variables encountered along this path, most-recent last (the pointer-free
-    /// analogue of [`Explorerer::encountered`]); drives outer backtracking order.
-    pub encountered: Vec<Label>,
-    /// The branch-index choices taken from the root to here (the analogue of the
-    /// record walked by `get_backpath_harts`/`find_state`). This is the compact
-    /// path descriptor used to reconstruct the state by replay in Phase 3.
-    pub path: Vec<usize>,
-    /// The outputs recorded along this path so far, merged into the global union
-    /// when the path completes.
-    pub acc: LocalAccumulators,
+    /// The hart whose `fronts` node is applied by the next [`step`] (the analogue
+    /// of the legacy leaf's `prev` branch).
+    pub active_hart: u8,
 }
 
 /// Why a [`Continuation`] stopped producing successors.
@@ -141,6 +135,175 @@ pub struct StepOutcome {
     pub successors: Vec<Continuation>,
     /// Set when this path terminates (drained or invalid) rather than expanding.
     pub terminal: Option<Terminal>,
+}
+
+/// Advances one [`Continuation`] by applying its active hart's front node: the
+/// pointer-free analogue of one `next_step` + `queue_up` of the sequential
+/// [`Explorerer`]. It validates the active node under the fixed `configuration`
+/// (an invalid store/load or a reachable `#!` is [`Terminal::Invalid`]; under a
+/// fixed configuration the inner search never backtracks), applies it to the
+/// successor state, and forks into the next frontier per the same racy/non-racy
+/// rule ([`compute_next`]): one non-racy successor, N racy ones, or
+/// [`Terminal::Drained`] when every hart is blocked. Records reach into the
+/// shared sinks exactly as the oracle does.
+///
+/// # Safety
+/// `cont`'s `fronts` must reference live nodes of `ast`, and `cont.state` be the
+/// state reaching them.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn step(
+    cont: &Continuation,
+    ast: &Ast,
+    configuration: &TypeConfiguration,
+    touched: &mut BTreeSet<NonNull<AstNode>>,
+    jumped: &mut BTreeSet<NonNull<AstNode>>,
+    sinks: &mut RecordSinks,
+) -> Result<StepOutcome, CompilerError> {
+    let hart = cont.active_hart;
+    let active_id = *cont
+        .fronts
+        .get(&hart)
+        .internal("step: active hart has no front")?;
+    let active = ast
+        .resolve(active_id)
+        .internal("step: active front id out of range")?;
+
+    // Reachability: the oracle records `touched` for every node it makes active.
+    touched.insert(active);
+
+    let invalid = || StepOutcome {
+        successors: Vec::new(),
+        terminal: Some(Terminal::Invalid),
+    };
+
+    // Validate the active node under the fixed configuration.
+    match &active.as_ref().as_ref().this {
+        Instruction::Sw(Sw { to, offset, .. }) => {
+            if !check_store_at(&cont.state, hart, active, sinks, to, offset, 4)? {
+                return Ok(invalid());
+            }
+        }
+        Instruction::Sb(Sb { to, offset, .. }) => {
+            if !check_store_at(&cont.state, hart, active, sinks, to, offset, 1)? {
+                return Ok(invalid());
+            }
+        }
+        Instruction::Ld(Ld { from, offset, .. }) => {
+            if !check_load_at(&cont.state, hart, active, sinks, from, offset, 8)? {
+                return Ok(invalid());
+            }
+        }
+        Instruction::Lw(Lw { from, offset, .. }) => {
+            if !check_load_at(&cont.state, hart, active, sinks, from, offset, 4)? {
+                return Ok(invalid());
+            }
+        }
+        Instruction::Lb(Lb { from, offset, .. }) => {
+            if !check_load_at(&cont.state, hart, active, sinks, from, offset, 1)? {
+                return Ok(invalid());
+            }
+        }
+        // A `define`/`la`/`lat` validates against the fixed configuration the way
+        // the oracle's `load_label` does (any annotation must match, and the
+        // variable must be present): a mismatch is `Invalid` for this config.
+        // This also guards `apply_node`'s annotation asserts, which the oracle
+        // only reaches once `load_label` has accepted.
+        Instruction::Define(Define {
+            label,
+            locality,
+            cast,
+        }) => {
+            if !config_accepts(configuration, label, cast.as_ref(), locality.as_ref()) {
+                return Ok(invalid());
+            }
+        }
+        Instruction::La(La { label, .. }) | Instruction::Lat(Lat { label, .. }) => {
+            if !config_accepts(configuration, label, None, None) {
+                return Ok(invalid());
+            }
+        }
+        // A reachable `#!` invalidates the configuration.
+        Instruction::Fail(_) => return Ok(invalid()),
+        // Everything else has no validation step (matches `next_step`).
+        _ => {}
+    }
+
+    // Classify the next node per hart from the PRE-state (as `queue_up` does).
+    let fronts_ptr = cont
+        .fronts
+        .iter()
+        .map(|(&h, &id)| {
+            ast.resolve(id)
+                .internal("step: front id out of range")
+                .map(|node| (h, node))
+        })
+        .collect::<Result<BTreeMap<u8, NonNull<AstNode>>, CompilerError>>()?;
+    let next_nodes = compute_next(&cont.state, &fronts_ptr, jumped)?;
+
+    // Apply the active node to the successor state shared by all successors.
+    let mut successor_state = cont.state.clone();
+    apply_node(&mut successor_state, hart, active, configuration, sinks)?;
+
+    // Build the successor continuation(s): advance the chosen hart to its next.
+    let make = |h: u8, next: NonNull<AstNode>| -> Result<Continuation, CompilerError> {
+        let next_id = ast
+            .id_of(next)
+            .internal("step: successor node is not in the AST")?;
+        let mut fronts = cont.fronts.clone();
+        fronts.insert(h, next_id);
+        Ok(Continuation {
+            state: successor_state.clone(),
+            fronts,
+            active_hart: h,
+        })
+    };
+    let successors = match next_nodes {
+        // A single non-racy successor.
+        Err((h, next)) => vec![make(h, next)?],
+        // All racy: empty means every hart is blocked, so the path completed.
+        Ok(racy) if racy.is_empty() => {
+            return Ok(StepOutcome {
+                successors: Vec::new(),
+                terminal: Some(Terminal::Drained),
+            })
+        }
+        // Otherwise one successor per racy hart.
+        Ok(racy) => racy
+            .into_iter()
+            .map(|(h, next)| make(h, next))
+            .collect::<Result<Vec<_>, CompilerError>>()?,
+    };
+    Ok(StepOutcome {
+        successors,
+        terminal: None,
+    })
+}
+
+/// Whether the fixed `configuration` accepts a `define`/`la`/`lat` of `label`:
+/// the variable must be present and its type/locality must match any annotation
+/// (mirrors the already-defined branch of `load_label`).
+fn config_accepts(
+    configuration: &TypeConfiguration,
+    label: &Label,
+    cast: Option<&Type>,
+    locality: Option<&Locality>,
+) -> bool {
+    match configuration.get(label) {
+        Some((existing_locality, existing_type)) => {
+            if let Some(cast) = cast {
+                if cast != existing_type {
+                    return false;
+                }
+            }
+            if let Some(locality) = locality {
+                if locality != existing_locality {
+                    return false;
+                }
+            }
+            true
+        }
+        None => false,
+    }
 }
 
 /// The type to explore in order from best to worst.
@@ -2276,6 +2439,527 @@ unsafe fn check_load_at(
         }
         x => Err(CompilerError::Unsupported(format!("load from {x:?}"))),
     }
+}
+
+/// Pointer-free reimplementation of `queue_up`'s interleaving classification:
+/// given the pre-state and each hart's current `fronts` node, returns the next
+/// node each hart would execute, collapsed by the non-racy rule (`Err` = one
+/// non-racy successor; `Ok` = all racy successors). Records taken branches into
+/// `jumped`. This is a verbatim copy of the block inside `queue_up`, lifted so
+/// the parallel `step` can share it; the step-vs-oracle cross-check pins that the
+/// two stay in agreement.
+///
+/// # Safety
+/// `fronts` must reference live AST nodes and `state` be consistent with them.
+#[allow(dead_code)]
+unsafe fn compute_next(
+    state: &State,
+    fronts: &std::collections::BTreeMap<u8, NonNull<AstNode>>,
+    jumped: &mut std::collections::BTreeSet<NonNull<AstNode>>,
+) -> Result<Result<Vec<(u8, NonNull<AstNode>)>, (u8, NonNull<AstNode>)>, CompilerError> {
+        type Followup = Option<Result<(u8, NonNull<AstNode>), (u8, NonNull<AstNode>)>>;
+        let followup = |node: NonNull<AstNode>, hart: u8| -> Result<Followup, CompilerError> {
+            let instruction = &node.as_ref().as_ref().this;
+            Ok(match instruction {
+                // Non-racy.
+                Instruction::Label(_)
+                | Instruction::La(_)
+                | Instruction::Lat(_)
+                | Instruction::Li(_)
+                | Instruction::Addi(_)
+                | Instruction::Csrr(_)
+                | Instruction::Define(_)
+                | Instruction::Blt(_)
+                | Instruction::Bne(_)
+                | Instruction::Bnez(_)
+                | Instruction::Beqz(_)
+                | Instruction::Bge(_)
+                | Instruction::Fail(_)
+                | Instruction::Beq(_)
+                // `ecall` has no verifier-modeled effect, so its ordering
+                // against other harts is unobservable here: non-racy.
+                | Instruction::Ecall(_)
+                | Instruction::J(_) => Some(Err((hart, node))),
+                // `#@` is racy: a region only becomes accessible once its declaration
+                // executes, so its order relative to other harts' raw accesses is
+                // observable; collapsing it would skip the (invalid) interleavings
+                // where another hart's access precedes the declaration it needs.
+                Instruction::Region(_) => Some(Ok((hart, node))),
+                // Possibly racy.
+                // If the label is thread local its not racy.
+                Instruction::Sb(Sb { to: register, .. })
+                | Instruction::Sw(Sw { to: register, .. })
+                | Instruction::Ld(Ld { from: register, .. })
+                | Instruction::Lw(Lw { from: register, .. })
+                | Instruction::Lb(Lb { from: register, .. }) => {
+                    let value = state.registers[hart as usize]
+                        .get(register)
+                        .internal("queue_up: racy access register has no value")?;
+                    match value {
+                        MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset: _ }))) => {
+                            match tag {
+                                // Racy
+                                MemoryLabel::Global { label: _ } => Some(Ok((hart, node))),
+                                // Non-racy
+                                MemoryLabel::Thread {
+                                    label: _,
+                                    hart: thart,
+                                } => {
+                                    assert_eq!(*thart, hart);
+                                    Some(Err((hart, node)))
+                                }
+                            }
+                        }
+                        // The assumption here is that this hardcoded memory refers to RAM and does
+                        // not overlap the `.bss` or `.data` section (this will be checked in
+                        // `check_load`) given this assumption it's racy.
+                        MemoryValue::I64(_) => Some(Ok((hart, node))),
+                        // TODO We hit this in `three.s` we should not hit this, the `from` should
+                        // always be `MemoryValue::Ptr`.
+                        _ => {
+                            return Err(CompilerError::Unsupported(format!(
+                                "queue_up followup for {instruction:?} with value {value:?}"
+                            )))
+                        }
+                    }
+                }
+                // See note on `wfi`.
+                Instruction::Wfi(_) => Some(Ok((hart, node))),
+                Instruction::Unreachable(_) => None,
+                x => {
+                    return Err(CompilerError::Unsupported(format!(
+                        "queue_up followup: {x:?}"
+                    )))
+                }
+            })
+        };
+
+        // The lowest hart non-racy node is enqueued.
+        // (or possibly multiples nodes in the case of a conditional jump where
+        // we cannot deteremine the condition).
+
+        let classified = fronts
+            .iter()
+            // TODO Document why reverse order is important here.
+            .rev()
+            .map(|(&hart, &node)| -> Result<Followup, CompilerError> {
+                let node_ref = node.as_ref();
+                Ok(match &node_ref.as_ref().this {
+                    // Conditional.
+                    Instruction::Blt(Blt { rhs, lhs, label }) => {
+                        let lhs = state.registers[hart as usize]
+                            .get(lhs)
+                            .internal("queue_up: blt lhs register has no value")?;
+                        let rhs = state.registers[hart as usize]
+                            .get(rhs)
+                            .internal("queue_up: blt rhs register has no value")?;
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Less) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, label)
+                                    .internal("queue_up: blt target not found")?;
+                                followup(label_node, hart)?
+                            }
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal) => followup(
+                                node_ref.next.internal("queue_up: blt has no next")?,
+                                hart,
+                            )?,
+                            _ => {
+                                return Err(CompilerError::Unsupported(
+                                    "queue_up: indeterminate blt comparison".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    Instruction::Beq(Beq { rhs, lhs, out }) => {
+                        let lhs = state.registers[hart as usize]
+                            .get(lhs)
+                            .internal("queue_up: beq lhs register has no value")?;
+                        let rhs = state.registers[hart as usize]
+                            .get(rhs)
+                            .internal("queue_up: beq rhs register has no value")?;
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Equal) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out)
+                                    .internal("queue_up: beq target not found")?;
+                                followup(label_node, hart)?
+                            }
+                            Some(RangeOrdering::Greater | RangeOrdering::Less) => followup(
+                                node_ref.next.internal("queue_up: beq has no next")?,
+                                hart,
+                            )?,
+                            _ => {
+                                return Err(CompilerError::Unsupported(
+                                    "queue_up: indeterminate beq comparison".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    Instruction::Bne(Bne { rhs, lhs, out }) => {
+                        let lhs = state.registers[hart as usize]
+                            .get(lhs)
+                            .internal("queue_up: bne lhs register has no value")?;
+                        let rhs = state.registers[hart as usize]
+                            .get(rhs)
+                            .internal("queue_up: bne rhs register has no value")?;
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Greater | RangeOrdering::Less) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out)
+                                    .internal("queue_up: bne target not found")?;
+                                trace!("bne jumped: {:?}", label_node.as_ref().value);
+                                followup(label_node, hart)?
+                            }
+                            Some(RangeOrdering::Equal) => {
+                                trace!("bne no jump");
+                                followup(
+                                    node_ref.next.internal("queue_up: bne has no next")?,
+                                    hart,
+                                )?
+                            }
+                            _ => {
+                                return Err(CompilerError::Unsupported(
+                                    "queue_up: indeterminate bne comparison".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    Instruction::Bnez(Bnez { src, dest }) => {
+                        let src = state.registers[hart as usize]
+                            .get(src)
+                            .internal("queue_up: bnez register has no value")?;
+
+                        // In the case the path is determinate, we either queue up the label
+                        // or the next ast node and don't need to actually visit/evaluate
+                        // the branch at runtime.
+                        match src {
+                            MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (i8)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (u8)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            // The wider integer types (`li`/`addi` produce `I64`
+                            // registers, 4-byte loads `U32`): determinate when the
+                            // range is exactly zero (fall through) or entirely
+                            // nonzero (jump); a range straddling zero is
+                            // indeterminate, like the `U8`/`I8` arms above.
+                            MemoryValue::U32(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (u32)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::U64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (u64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::I64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        followup(
+                                            node_ref.next.internal("queue_up: bnez has no next")?,
+                                            hart,
+                                        )?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate bnez (i64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            },
+                            MemoryValue::Csr(CsrValue::Mhartid) => {
+                                if hart == 0 {
+                                    followup(
+                                        node_ref.next.internal("queue_up: bnez has no next")?,
+                                        hart,
+                                    )?
+                                } else {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, dest)
+                                        .internal("queue_up: bnez target not found")?;
+                                    followup(label_node, hart)?
+                                }
+                            }
+                            x => {
+                                return Err(CompilerError::Unsupported(format!(
+                                    "queue_up: bnez on {x:?}"
+                                )))
+                            }
+                        }
+                    }
+                    Instruction::Beqz(Beqz { register, label }) => {
+                        let src = state.registers[hart as usize]
+                            .get(register)
+                            .internal("queue_up: beqz register has no value")?;
+
+                        // In the case the path is determinate, we either queue up the label
+                        // or the next ast node and don't need to actually visit/evaluate
+                        // the branch at runtime.
+                        match src {
+                            MemoryValue::U8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (u8)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::I8(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (i8)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            // Wider integer types, mirroring the `U8`/`I8` arms:
+                            // jump when the range is exactly zero, fall through
+                            // when entirely nonzero, indeterminate if it straddles.
+                            MemoryValue::U32(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (u32)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::U64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (u64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::I64(imm) => match imm.compare_scalar(&0) {
+                                RangeScalarOrdering::Within => {
+                                    if RangeType::eq(imm, &0) {
+                                        jumped.insert(node);
+                                        let label_node = find_label(node, label)
+                                            .internal("queue_up: beqz target not found")?;
+                                        followup(label_node, hart)?
+                                    } else {
+                                        return Err(CompilerError::Unsupported(
+                                            "queue_up: indeterminate beqz (i64)".to_string(),
+                                        ));
+                                    }
+                                }
+                                RangeScalarOrdering::Greater | RangeScalarOrdering::Less => {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            },
+                            MemoryValue::Csr(CsrValue::Mhartid) => {
+                                if hart == 0 {
+                                    jumped.insert(node);
+                                    let label_node = find_label(node, label)
+                                        .internal("queue_up: beqz target not found")?;
+                                    followup(label_node, hart)?
+                                } else {
+                                    followup(
+                                        node_ref.next.internal("queue_up: beqz has no next")?,
+                                        hart,
+                                    )?
+                                }
+                            }
+                            x => {
+                                return Err(CompilerError::Unsupported(format!(
+                                    "queue_up: beqz on {x:?}"
+                                )))
+                            }
+                        }
+                    }
+                    Instruction::Bge(Bge { lhs, rhs, out }) => {
+                        let lhs = state.registers[hart as usize]
+                            .get(lhs)
+                            .internal("queue_up: bge lhs register has no value")?;
+                        let rhs = state.registers[hart as usize]
+                            .get(rhs)
+                            .internal("queue_up: bge rhs register has no value")?;
+                        match lhs.compare(rhs) {
+                            Some(RangeOrdering::Greater | RangeOrdering::Equal) => {
+                                jumped.insert(node);
+                                let label_node = find_label(node, out)
+                                    .internal("queue_up: bge target not found")?;
+                                followup(label_node, hart)?
+                            }
+                            Some(RangeOrdering::Less) => followup(
+                                node_ref.next.internal("queue_up: bge has no next")?,
+                                hart,
+                            )?,
+                            _ => {
+                                return Err(CompilerError::Unsupported(
+                                    "queue_up: indeterminate bge comparison".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    Instruction::J(J { dest }) => {
+                        jumped.insert(node);
+                        let label_node =
+                            find_label(node, dest).internal("queue_up: j target not found")?;
+                        followup(label_node, hart)?
+                    }
+                    // Non-conditional
+                    Instruction::Label(_)
+                    | Instruction::La(_)
+                    | Instruction::Lat(_)
+                    | Instruction::Li(_)
+                    | Instruction::Addi(_)
+                    | Instruction::Csrr(_)
+                    | Instruction::Define(_)
+                    | Instruction::Sw(_)
+                    | Instruction::Sb(_)
+                    | Instruction::Ld(_)
+                    | Instruction::Lw(_)
+                    | Instruction::Lb(_)
+                    | Instruction::Fail(_)
+                    | Instruction::Ecall(_)
+                    | Instruction::Region(_) => followup(
+                        node_ref
+                            .next
+                            .internal("queue_up: instruction has no next")?,
+                        hart,
+                    )?,
+                    // See note on `wfi`.
+                    Instruction::Wfi(_) => Some(Ok((
+                        hart,
+                        node_ref.next.internal("queue_up: wfi has no next")?,
+                    ))),
+                    // Blocking.
+                    Instruction::Unreachable(_) => None,
+                    x => {
+                        return Err(CompilerError::Unsupported(format!(
+                            "queue_up classify: {x:?}"
+                        )))
+                    }
+                })
+            })
+            .collect::<Result<Vec<Followup>, CompilerError>>()?;
+        let next_nodes: Result<Vec<_>, _> = classified.into_iter().flatten().collect();
+    Ok(next_nodes)
 }
 
 unsafe fn apply_node(

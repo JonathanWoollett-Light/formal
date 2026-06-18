@@ -15,9 +15,13 @@
 //! the in-process pool (Phase 1) replaces the body with a work-stealing loop over
 //! pointer-free `Continuation`s that produces the identical union of outputs.
 
-use crate::ast::AstNode;
-use crate::verifier::{CompilerError, ExplorePathResult, Explorerer, InnerVerifierConfiguration};
-use crate::verifier_types::TypeConfiguration;
+use crate::ast::{Ast, AstNode, Label};
+use crate::verifier::{
+    step, CompilerError, Continuation, ExplorePathResult, Explorerer, InnerVerifierConfiguration,
+    RecordSinks, Terminal, ValidPathResult,
+};
+use crate::verifier_types::{AccessTransitions, AccessedRanges, State, TypeConfiguration};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ptr::NonNull;
 
 /// Verifies the program at `ast`, run on `systems`, under the single fixed
@@ -117,4 +121,79 @@ pub unsafe fn verify_sweep(
         Some(rank) => verify_configuration(ast.ptr(), systems, &candidates[rank]),
         None => Ok(ExplorePathResult::Invalid),
     }
+}
+
+/// Fixed-configuration inner search over the pointer-free [`Continuation`]
+/// frontier, the way the parallel pool will: seed one continuation per system,
+/// drive [`step`] over an explicit worklist (no `*mut` tree), and union the
+/// outputs. This is the sequential reference for the work-stealing pool to come;
+/// it must produce the identical [`ValidPathResult`] as [`verify_configuration`]
+/// for the same configuration (pinned by the cross-check test), which is what
+/// proves `step` faithful before parallelising the worklist.
+///
+/// # Safety
+/// `ast_head` must head a live AST that outlives the call.
+pub unsafe fn verify_configuration_pooled(
+    ast_head: Option<NonNull<AstNode>>,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+) -> Result<ExplorePathResult, CompilerError> {
+    let ast = Ast::index(ast_head);
+    let start = ast.head().ok_or_else(|| {
+        CompilerError::Internal("verify_configuration_pooled: empty AST".to_string())
+    })?;
+    let start_id = ast.id_of(start).ok_or_else(|| {
+        CompilerError::Internal("verify_configuration_pooled: entry node not indexed".to_string())
+    })?;
+
+    // The shared, grow-only outputs (single-threaded: one set of sinks, exactly
+    // like the global accumulators the sequential `Explorerer` keeps).
+    let mut touched: BTreeSet<NonNull<AstNode>> = BTreeSet::new();
+    let mut jumped: BTreeSet<NonNull<AstNode>> = BTreeSet::new();
+    let mut accessed: AccessedRanges = AccessedRanges::new();
+    let mut transitions: AccessTransitions = AccessTransitions::new();
+    let mut uncompactable: BTreeSet<Label> = BTreeSet::new();
+    let mut pinned_nodes: BTreeSet<NonNull<AstNode>> = BTreeSet::new();
+
+    // Seed one continuation per system: every hart starts at the entry node,
+    // hart 0 active (the analogue of `build_initial_chain`).
+    let mut work: VecDeque<Continuation> = VecDeque::new();
+    for system in systems {
+        let state = State::new(system, configuration);
+        let mut fronts = BTreeMap::new();
+        for hart in 0..system.harts {
+            fronts.insert(hart, start_id);
+        }
+        work.push_back(Continuation {
+            state,
+            fronts,
+            active_hart: 0,
+        });
+    }
+
+    // Drain the frontier. Any `Invalid` makes the whole configuration invalid
+    // (no backtracking under a fixed configuration); a drained path just ends.
+    while let Some(cont) = work.pop_front() {
+        let mut sinks = RecordSinks {
+            accessed: &mut accessed,
+            transitions: &mut transitions,
+            uncompactable: &mut uncompactable,
+            pinned_nodes: &mut pinned_nodes,
+        };
+        let outcome = step(&cont, &ast, configuration, &mut touched, &mut jumped, &mut sinks)?;
+        if let Some(Terminal::Invalid) = outcome.terminal {
+            return Ok(ExplorePathResult::Invalid);
+        }
+        work.extend(outcome.successors);
+    }
+
+    Ok(ExplorePathResult::Valid(ValidPathResult {
+        configuration: configuration.clone(),
+        touched,
+        jumped,
+        accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
+    }))
 }
