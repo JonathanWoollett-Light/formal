@@ -951,139 +951,30 @@ impl Explorerer {
         offset: impl Borrow<crate::ast::Offset>,
         type_size: u64,
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
-        // Collect the state.
+        // Thin wrapper over the pointer-free `check_store_at`: validate against a
+        // clone of the leaf's state, recording into the explorer's global sinks;
+        // an invalid store backtracks via `outer_invalid_path` (the parallel
+        // `step` instead reports `Terminal::Invalid`).
         let state = self.state_for(leaf_ptr)?.clone();
-
-        // Check the destination is valid.
-        match state.registers[branch.borrow().hart as usize].get(to) {
-            Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                tag: from_label,
-                offset: from_offset,
-            })))) => {
-                let (_locality, ttype) = state
-                    .configuration
-                    .get(<&Label>::from(from_label))
-                    .internal("store: label missing from configuration")?;
-                // If attempting to access outside the memory space for the label.
-                let full_offset = MemoryValueU64::from(type_size)
-                    .add(from_offset)
-                    .internal("store: offset overflow")?
-                    .add(&MemoryValueU64::from(
-                        u64::try_from(offset.borrow().value.value)
-                            .internal("store: negative offset")?,
-                    ))
-                    .internal("store: offset overflow")?;
-                let size = size(ttype);
-
-                match full_offset.lte(&size) {
-                    false => {
-                        // The path is invalid, so we add the current types to the
-                        // excluded list and restart exploration.
-                        info!("reached invalid store in path due to attempting to accress memory space past a label, size: {size:?}, offset: {full_offset:?}, node: {:?}", branch.borrow().node.as_ref().value);
-                        Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                    }
-                    true => {
-                        // Else we found the label and we can validate that the loading
-                        // of a word with the given offset is within the address space.
-                        // So we continue exploration.
-                        //
-                        // Record this store's own bytes directly: `find_state` replays
-                        // exclude the instruction being processed, so a store whose
-                        // successors all halt (`#?`) would otherwise never enter
-                        // `accessed`, and dead-data elimination would elide bytes the
-                        // emitted program still writes at runtime.
-                        let start_offset = from_offset
-                            .clone()
-                            .add(&MemoryValueU64::from(
-                                u64::try_from(offset.borrow().value.value)
-                                    .internal("store: negative offset")?,
-                            ))
-                            .internal("store: offset overflow")?;
-                        record_access_into(
-                            &state.descriptor_labels,
-                            &mut self.accessed,
-                            from_label,
-                            &start_offset,
-                            type_size,
-                        );
-                        record_transition_into(
-                            &state.descriptor_labels,
-                            &mut self.transitions,
-                            &mut self.uncompactable,
-                            &mut self.pinned_nodes,
-                            branch.borrow().node,
-                            from_label,
-                            from_offset,
-                            &start_offset,
-                        );
-                        Ok(ControlFlow::Continue(self))
-                    }
-                }
-            }
-            // For acceses to main memory, we need to validate this is in `sections`.
-            Some(MemoryValue::I64(x)) => {
-                let start = x
-                    .add(&MemoryValueI64::from(offset.borrow().value.value))
-                    .internal("store: address overflow")?;
-                // Validate against the replayed state's sections: they start as the
-                // system-configured ones and grow as the path executes `#@` region
-                // declarations.
-                let sections = &state.memory.sections;
-
-                // Find a section that the store would be within.
-                let mut section_opt = None;
-                for s in sections {
-                    let required_size = start
-                        .sub(&s.address)
-                        .internal("store: section offset underflow")?
-                        .add(&MemoryValueI64::from(
-                            i64::try_from(type_size).internal("store: type size overflow")?,
-                        ))
-                        .internal("store: section size overflow")?;
-                    // Within iff the access starts at/after the section and the bytes
-                    // it needs (`required_size`) do not exceed the section's size.
-                    let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
-                        (
-                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
-                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
-                        ) => true,
-                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
-                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
-                        pair => {
-                            return Err(CompilerError::Unsupported(format!(
-                                "store: indeterminate section comparison {pair:?}"
-                            )))
-                        }
-                    };
-                    if within {
-                        section_opt = Some(s);
-                        break;
-                    }
-                }
-
-                // Check this section supports writing.
-                if let Some(section) = section_opt {
-                    match section.permissions {
-                        Permissions::ReadWrite | Permissions::Write => {
-                            // Raw execution of this node: it must keep its
-                            // original immediate even if another execution is a
-                            // pointer access into a compacted region. (Replays
-                            // exclude the checked instruction, so a terminal raw
-                            // access pins here or never.)
-                            self.pinned_nodes.insert(branch.borrow().node);
-                            Ok(ControlFlow::Continue(self))
-                        }
-                        Permissions::Read => {
-                            info!("reached invalid path due to attempt to write to read-only");
-                            Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                        }
-                    }
-                } else {
-                    info!("reached invalid path due to attempt to write to undescribed memory");
-                    Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                }
-            }
-            x => Err(CompilerError::Unsupported(format!("store to {x:?}"))),
+        let (hart, node) = (branch.borrow().hart, branch.borrow().node);
+        let valid = check_store_at(
+            &state,
+            hart,
+            node,
+            &mut RecordSinks {
+                accessed: &mut self.accessed,
+                transitions: &mut self.transitions,
+                uncompactable: &mut self.uncompactable,
+                pinned_nodes: &mut self.pinned_nodes,
+            },
+            to.borrow(),
+            offset.borrow(),
+            type_size,
+        )?;
+        if valid {
+            Ok(ControlFlow::Continue(self))
+        } else {
+            Ok(ControlFlow::Break(self.outer_invalid_path()?))
         }
     }
 
@@ -1096,133 +987,28 @@ impl Explorerer {
         offset: impl Borrow<crate::ast::Offset>,
         type_size: u64,
     ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
-        // Collect the state.
+        // Thin wrapper over the pointer-free `check_load_at` (the load analogue
+        // of the wrapper in `check_store`).
         let state = self.state_for(leaf_ptr)?.clone();
-
-        // Check the destination is valid.
-        match state.registers[branch.borrow().hart as usize].get(from) {
-            Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
-                tag: from_label,
-                offset: from_offset,
-            })))) => {
-                let (_locality, ttype) = state
-                    .configuration
-                    .get(<&Label>::from(from_label))
-                    .internal("load: label missing from configuration")?;
-
-                // If attempting to access outside the memory space for the label.
-                let offset_value = offset.borrow().value.value;
-                let full_offset = MemoryValueU64::from(type_size)
-                    .add(&MemoryValueU64::from(
-                        u64::try_from(offset_value).internal("load: negative offset")?,
-                    ))
-                    .internal("load: offset overflow")?
-                    .add(from_offset)
-                    .internal("load: offset overflow")?;
-                let size = size(ttype);
-                match full_offset.lte(&size) {
-                    false => {
-                        // The path is invalid, so we add the current types to the
-                        // excluded list and restart exploration.
-                        info!("reached invalid load in path due to attempting to accress memory space past a label, size: {size:?}, offset: {full_offset:?} ({type_size:?} + {offset_value} + {from_offset:?}), node: {:?}", branch.borrow().node.as_ref().value);
-                        Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                    }
-                    true => {
-                        // Else, we found the label and we can validate that the loading
-                        // of a word with the given offset is within the address space.
-                        // So we continue exploration.
-                        //
-                        // Record this load's own bytes directly: `find_state` replays
-                        // exclude the instruction being processed, so a load whose
-                        // successors all halt (`#?`) would otherwise never enter
-                        // `accessed`, and dead-data elimination would elide bytes the
-                        // emitted program still reads at runtime.
-                        let start_offset = from_offset
-                            .clone()
-                            .add(&MemoryValueU64::from(
-                                u64::try_from(offset_value).internal("load: negative offset")?,
-                            ))
-                            .internal("load: offset overflow")?;
-                        record_access_into(
-                            &state.descriptor_labels,
-                            &mut self.accessed,
-                            from_label,
-                            &start_offset,
-                            type_size,
-                        );
-                        record_transition_into(
-                            &state.descriptor_labels,
-                            &mut self.transitions,
-                            &mut self.uncompactable,
-                            &mut self.pinned_nodes,
-                            branch.borrow().node,
-                            from_label,
-                            from_offset,
-                            &start_offset,
-                        );
-                        Ok(ControlFlow::Continue(self))
-                    }
-                }
-            }
-            // For accesses to main memory (raw addresses), every access must be
-            // verifiable as safe: the load must fall within a described section,
-            // one from the system configuration or one declared by `#@`.
-            Some(MemoryValue::I64(x)) => {
-                let start = x
-                    .add(&MemoryValueI64::from(offset.borrow().value.value))
-                    .internal("load: address overflow")?;
-                let sections = &state.memory.sections;
-
-                // Find a section that the load would be within.
-                let mut section_opt = None;
-                for s in sections {
-                    let required_size = start
-                        .sub(&s.address)
-                        .internal("load: section offset underflow")?
-                        .add(&MemoryValueI64::from(
-                            i64::try_from(type_size).internal("load: type size overflow")?,
-                        ))
-                        .internal("load: section size overflow")?;
-                    // Within iff the load starts at/after the section and the bytes
-                    // it needs (`required_size`) do not exceed the section's size.
-                    let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
-                        (
-                            RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
-                            RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
-                        ) => true,
-                        (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
-                        (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
-                        pair => {
-                            return Err(CompilerError::Unsupported(format!(
-                                "load: indeterminate section comparison {pair:?}"
-                            )))
-                        }
-                    };
-                    if within {
-                        section_opt = Some(s);
-                        break;
-                    }
-                }
-
-                // Check this section supports reading.
-                if let Some(section) = section_opt {
-                    match section.permissions {
-                        Permissions::ReadWrite | Permissions::Read => {
-                            // Raw execution pins the node (see the store arm).
-                            self.pinned_nodes.insert(branch.borrow().node);
-                            Ok(ControlFlow::Continue(self))
-                        }
-                        Permissions::Write => {
-                            info!("reached invalid path due to attempt to read write-only memory");
-                            Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                        }
-                    }
-                } else {
-                    info!("reached invalid path due to attempt to read undescribed memory");
-                    Ok(ControlFlow::Break(self.outer_invalid_path()?))
-                }
-            }
-            x => Err(CompilerError::Unsupported(format!("load from {x:?}"))),
+        let (hart, node) = (branch.borrow().hart, branch.borrow().node);
+        let valid = check_load_at(
+            &state,
+            hart,
+            node,
+            &mut RecordSinks {
+                accessed: &mut self.accessed,
+                transitions: &mut self.transitions,
+                uncompactable: &mut self.uncompactable,
+                pinned_nodes: &mut self.pinned_nodes,
+            },
+            from.borrow(),
+            offset.borrow(),
+            type_size,
+        )?;
+        if valid {
+            Ok(ControlFlow::Continue(self))
+        } else {
+            Ok(ControlFlow::Break(self.outer_invalid_path()?))
         }
     }
 
@@ -1812,9 +1598,11 @@ impl Explorerer {
         // This is what makes a step O(1) in path depth; the replay in
         // `find_state` is only the post-backtrack fallback.
         let mut successor_state = state;
+        let prev = leaf.prev.as_ref().internal("queue_up: null leaf prev")?;
         apply_node(
             &mut successor_state,
-            leaf.prev.as_ref().internal("queue_up: null leaf prev")?,
+            prev.hart,
+            prev.node,
             &self.configuration,
             &mut RecordSinks {
                 accessed: &mut self.accessed,
@@ -2223,7 +2011,7 @@ unsafe fn find_state(
     let mut current = root.as_ref().internal("find_state: null root")?.next;
     for next in record.iter().rev() {
         let vnode = current.as_ref().internal("find_state: null node")?;
-        apply_node(&mut state, vnode, configuration, sinks)?;
+        apply_node(&mut state, vnode.hart, vnode.node, configuration, sinks)?;
         current = match &current.as_ref().internal("find_state: null node")?.next {
             InnerNextVerifierNode::Branch(b) => b[*next],
             InnerNextVerifierNode::Leaf(_) => {
@@ -2244,15 +2032,261 @@ unsafe fn find_state(
 /// explorer's current global configuration, used to seed variables this state
 /// has not yet encountered (see [`seed_label`]); accesses/transitions are
 /// recorded straight into `sinks`.
+/// The pointer-free core of [`Explorerer::check_store`]: validates a store of
+/// `type_size` bytes through register `to` + `offset` against `state` (under its
+/// fixed configuration), recording the access into `sinks`. Returns `Ok(true)`
+/// when the store is valid (and recorded) and `Ok(false)` when it is invalid for
+/// this configuration. The legacy method turns `false` into `outer_invalid_path`
+/// (a backtrack); the parallel `step` turns it into [`Terminal::Invalid`].
+///
+/// # Safety
+/// `node` must be a live AST node and `state` consistent with the path that
+/// reached it.
+unsafe fn check_store_at(
+    state: &State,
+    hart: u8,
+    node: NonNull<AstNode>,
+    sinks: &mut RecordSinks,
+    to: &Register,
+    offset: &crate::ast::Offset,
+    type_size: u64,
+) -> Result<bool, CompilerError> {
+    match state.registers[hart as usize].get(to) {
+        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+            tag: from_label,
+            offset: from_offset,
+        })))) => {
+            let (_locality, ttype) = state
+                .configuration
+                .get(<&Label>::from(from_label))
+                .internal("store: label missing from configuration")?;
+            let full_offset = MemoryValueU64::from(type_size)
+                .add(from_offset)
+                .internal("store: offset overflow")?
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset.value.value).internal("store: negative offset")?,
+                ))
+                .internal("store: offset overflow")?;
+            let size = size(ttype);
+            match full_offset.lte(&size) {
+                false => {
+                    info!(
+                        "reached invalid store: access past label, size: {size:?}, offset: {full_offset:?}, node: {:?}",
+                        node.as_ref().value
+                    );
+                    Ok(false)
+                }
+                true => {
+                    let start_offset = from_offset
+                        .clone()
+                        .add(&MemoryValueU64::from(
+                            u64::try_from(offset.value.value).internal("store: negative offset")?,
+                        ))
+                        .internal("store: offset overflow")?;
+                    record_access_into(
+                        &state.descriptor_labels,
+                        sinks.accessed,
+                        from_label,
+                        &start_offset,
+                        type_size,
+                    );
+                    record_transition_into(
+                        &state.descriptor_labels,
+                        sinks.transitions,
+                        sinks.uncompactable,
+                        sinks.pinned_nodes,
+                        node,
+                        from_label,
+                        from_offset,
+                        &start_offset,
+                    );
+                    Ok(true)
+                }
+            }
+        }
+        Some(MemoryValue::I64(x)) => {
+            let start = x
+                .add(&MemoryValueI64::from(offset.value.value))
+                .internal("store: address overflow")?;
+            let sections = &state.memory.sections;
+            let mut section_opt = None;
+            for s in sections {
+                let required_size = start
+                    .sub(&s.address)
+                    .internal("store: section offset underflow")?
+                    .add(&MemoryValueI64::from(
+                        i64::try_from(type_size).internal("store: type size overflow")?,
+                    ))
+                    .internal("store: section size overflow")?;
+                let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
+                    (
+                        RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
+                        RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                    ) => true,
+                    (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                    (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                    pair => {
+                        return Err(CompilerError::Unsupported(format!(
+                            "store: indeterminate section comparison {pair:?}"
+                        )))
+                    }
+                };
+                if within {
+                    section_opt = Some(s);
+                    break;
+                }
+            }
+            if let Some(section) = section_opt {
+                match section.permissions {
+                    Permissions::ReadWrite | Permissions::Write => {
+                        sinks.pinned_nodes.insert(node);
+                        Ok(true)
+                    }
+                    Permissions::Read => {
+                        info!("reached invalid path due to attempt to write to read-only");
+                        Ok(false)
+                    }
+                }
+            } else {
+                info!("reached invalid path due to attempt to write to undescribed memory");
+                Ok(false)
+            }
+        }
+        x => Err(CompilerError::Unsupported(format!("store to {x:?}"))),
+    }
+}
+
+/// The pointer-free core of [`Explorerer::check_load`]; the load analogue of
+/// [`check_store_at`]. Returns `Ok(true)` if the load is valid (and recorded),
+/// `Ok(false)` if it is invalid for this configuration.
+///
+/// # Safety
+/// `node` must be a live AST node and `state` consistent with the path that
+/// reached it.
+unsafe fn check_load_at(
+    state: &State,
+    hart: u8,
+    node: NonNull<AstNode>,
+    sinks: &mut RecordSinks,
+    from: &Register,
+    offset: &crate::ast::Offset,
+    type_size: u64,
+) -> Result<bool, CompilerError> {
+    match state.registers[hart as usize].get(from) {
+        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
+            tag: from_label,
+            offset: from_offset,
+        })))) => {
+            let (_locality, ttype) = state
+                .configuration
+                .get(<&Label>::from(from_label))
+                .internal("load: label missing from configuration")?;
+            let offset_value = offset.value.value;
+            let full_offset = MemoryValueU64::from(type_size)
+                .add(&MemoryValueU64::from(
+                    u64::try_from(offset_value).internal("load: negative offset")?,
+                ))
+                .internal("load: offset overflow")?
+                .add(from_offset)
+                .internal("load: offset overflow")?;
+            let size = size(ttype);
+            match full_offset.lte(&size) {
+                false => {
+                    info!(
+                        "reached invalid load: access past label, size: {size:?}, offset: {full_offset:?}, node: {:?}",
+                        node.as_ref().value
+                    );
+                    Ok(false)
+                }
+                true => {
+                    let start_offset = from_offset
+                        .clone()
+                        .add(&MemoryValueU64::from(
+                            u64::try_from(offset_value).internal("load: negative offset")?,
+                        ))
+                        .internal("load: offset overflow")?;
+                    record_access_into(
+                        &state.descriptor_labels,
+                        sinks.accessed,
+                        from_label,
+                        &start_offset,
+                        type_size,
+                    );
+                    record_transition_into(
+                        &state.descriptor_labels,
+                        sinks.transitions,
+                        sinks.uncompactable,
+                        sinks.pinned_nodes,
+                        node,
+                        from_label,
+                        from_offset,
+                        &start_offset,
+                    );
+                    Ok(true)
+                }
+            }
+        }
+        Some(MemoryValue::I64(x)) => {
+            let start = x
+                .add(&MemoryValueI64::from(offset.value.value))
+                .internal("load: address overflow")?;
+            let sections = &state.memory.sections;
+            let mut section_opt = None;
+            for s in sections {
+                let required_size = start
+                    .sub(&s.address)
+                    .internal("load: section offset underflow")?
+                    .add(&MemoryValueI64::from(
+                        i64::try_from(type_size).internal("load: type size overflow")?,
+                    ))
+                    .internal("load: section size overflow")?;
+                let within = match (start.compare(&s.address), required_size.compare(&s.size)) {
+                    (
+                        RangeOrdering::Greater | RangeOrdering::Equal | RangeOrdering::Matches,
+                        RangeOrdering::Less | RangeOrdering::Equal | RangeOrdering::Matches,
+                    ) => true,
+                    (RangeOrdering::Less | RangeOrdering::Cover, _) => false,
+                    (_, RangeOrdering::Greater | RangeOrdering::Cover) => false,
+                    pair => {
+                        return Err(CompilerError::Unsupported(format!(
+                            "load: indeterminate section comparison {pair:?}"
+                        )))
+                    }
+                };
+                if within {
+                    section_opt = Some(s);
+                    break;
+                }
+            }
+            if let Some(section) = section_opt {
+                match section.permissions {
+                    Permissions::ReadWrite | Permissions::Read => {
+                        sinks.pinned_nodes.insert(node);
+                        Ok(true)
+                    }
+                    Permissions::Write => {
+                        info!("reached invalid path due to attempt to read write-only memory");
+                        Ok(false)
+                    }
+                }
+            } else {
+                info!("reached invalid path due to attempt to read undescribed memory");
+                Ok(false)
+            }
+        }
+        x => Err(CompilerError::Unsupported(format!("load from {x:?}"))),
+    }
+}
+
 unsafe fn apply_node(
     state: &mut State,
-    vnode: &VerifierNode,
+    hart: u8,
+    node: NonNull<AstNode>,
     configuration: &TypeConfiguration,
     sinks: &mut RecordSinks,
 ) -> Result<(), CompilerError> {
-    let hart = vnode.hart;
     let hartu = hart as usize;
-    match &vnode.node.as_ref().as_ref().this {
+    match &node.as_ref().as_ref().this {
         // Instructions with no side affects.
         Instruction::Label(_)
         | Instruction::Blt(_)
@@ -2360,19 +2394,19 @@ unsafe fn apply_node(
                 .internal("apply: la register insert failed")?;
         }
         Instruction::Sw(Sw { to, from, offset }) => {
-            find_state_store(state, sinks, vnode.node, hartu, to, from, offset, 4)?;
+            find_state_store(state, sinks, node, hartu, to, from, offset, 4)?;
         }
         Instruction::Sb(Sb { to, from, offset }) => {
-            find_state_store(state, sinks, vnode.node, hartu, to, from, offset, 1)?;
+            find_state_store(state, sinks, node, hartu, to, from, offset, 1)?;
         }
         Instruction::Ld(Ld { to, from, offset }) => {
-            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 8)?;
+            find_state_load(state, sinks, node, hartu, to, from, offset, 8)?;
         }
         Instruction::Lw(Lw { to, from, offset }) => {
-            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 4)?;
+            find_state_load(state, sinks, node, hartu, to, from, offset, 4)?;
         }
         Instruction::Lb(Lb { to, from, offset }) => {
-            find_state_load(state, sinks, vnode.node, hartu, to, from, offset, 1)?;
+            find_state_load(state, sinks, node, hartu, to, from, offset, 1)?;
         }
         Instruction::Addi(Addi { out, lhs, rhs }) => {
             let lhs_value = state.registers[hartu]
@@ -2399,7 +2433,7 @@ unsafe fn apply_node(
                     sinks.transitions,
                     sinks.uncompactable,
                     sinks.pinned_nodes,
-                    vnode.node,
+                    node,
                     tag,
                     from_offset,
                     to_offset,
@@ -2409,7 +2443,7 @@ unsafe fn apply_node(
                 // immediate is a plain number compaction must never rewrite
                 // (another execution of the same node may be a recorded
                 // pointer transition on a compacted region).
-                sinks.pinned_nodes.insert(vnode.node);
+                sinks.pinned_nodes.insert(node);
             }
             state.registers[hartu]
                 .insert(*out, out_value)
