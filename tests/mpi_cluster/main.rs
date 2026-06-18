@@ -18,9 +18,9 @@
 use std::process::Command;
 
 /// Build the `--features hpc` binary in WSL (idempotent; cached after the first
-/// call) and run `formal mpi-selftest` under `mpirun -n ranks`, returning the
+/// call) and run `formal <subcommand>` under `mpirun -n ranks`, returning the
 /// merged stdout (only rank 0 prints the result line).
-fn mpirun_selftest(ranks: usize) -> String {
+fn mpirun(ranks: usize, subcommand: &str) -> String {
     // One WSL bash session: locate the repo via `wslpath`, build (quietly, with
     // setup skipped so build.rs does not interfere), then launch under mpirun.
     let dir = env!("CARGO_MANIFEST_DIR");
@@ -29,7 +29,7 @@ fn mpirun_selftest(ranks: usize) -> String {
          cd \"$(wslpath '{dir}')\"\n\
          FORMAL_NO_SETUP=1 ~/.cargo/bin/cargo build --features hpc --bin formal \
             --target-dir ~/formal-hpc >/dev/null 2>&1\n\
-         mpirun --oversubscribe -n {ranks} ~/formal-hpc/debug/formal mpi-selftest"
+         mpirun --oversubscribe -n {ranks} ~/formal-hpc/debug/formal {subcommand}"
     );
 
     let mut command = Command::new("wsl");
@@ -65,7 +65,7 @@ fn mpirun_selftest(ranks: usize) -> String {
 #[ignore = "heavy: builds --features hpc in WSL and runs under mpirun; run with --run-ignored all"]
 fn distributed_verification_matches_oracle_across_ranks() {
     for ranks in [1usize, 4, 24] {
-        let out = mpirun_selftest(ranks);
+        let out = mpirun(ranks, "mpi-selftest");
         assert!(
             out.contains("VALID"),
             "ranks={ranks}: expected a valid result, got:\n{out}"
@@ -79,6 +79,26 @@ fn distributed_verification_matches_oracle_across_ranks() {
         assert!(
             out.contains("\"value\": {(0, 4)}"),
             "ranks={ranks}: expected accessed = value bytes 0..4, got:\n{out}"
+        );
+    }
+}
+
+/// The **load-balanced** path on a **relatively large** program: under `mpirun`
+/// at 8, 16, and 24 ranks (a simulated multi-node cluster), the lifeline
+/// work-stealing inner backend ([`verify_configuration_mpi_stealing`]) verifies
+/// `racy_stress` (a racy interleaving search with a frontier in the hundreds of
+/// thousands of continuations) and **self-checks** its distributed result against
+/// the single-process reference. `mpi-bench` prints `OK` only on a match, so the
+/// test confirms the steal/migrate/terminate protocol produces the reference
+/// result at every cluster size. Runs comfortably under a minute per rank count.
+#[test]
+#[ignore = "heavy: builds --features hpc in WSL and runs under mpirun; run with --run-ignored all"]
+fn work_stealing_cluster_matches_reference_on_large_program() {
+    for ranks in [8usize, 16, 24] {
+        let out = mpirun(ranks, "mpi-bench");
+        assert!(
+            out.contains("OK (matches single-process reference)"),
+            "ranks={ranks}: distributed work-stealing result did not match the reference:\n{out}"
         );
     }
 }

@@ -1022,7 +1022,8 @@ backends that all produce the identical outputs:
 | Fixed-config | `verify_configuration` / `verify_configuration_pooled` | none |
 | In-process pool | `verify_configuration_parallel` / `verify_sweep` / `verify_inferred` | rayon (all cores) |
 | Distributed simulation | `verify_configuration_distributed_sim` | rayon + per-continuation serialize round-trip |
-| Real MPI (`--features hpc`) | `outer_sweep_winner` + `verify_configuration_mpi` | `mpirun -n N` processes |
+| Real MPI, wave | `outer_sweep_winner` + `verify_configuration_mpi` | `mpirun -n N`, barrier per wave |
+| Real MPI, work-stealing | `verify_configuration_mpi_stealing` | `mpirun -n N`, barrier-free + load-balanced |
 
 The flow is the same in every backend: seed one `Continuation` per system at the
 program entry; `step` each frontier item (validate the active node, `apply_node`
@@ -1035,12 +1036,115 @@ continuations and the output union move between workers (shared memory, a
 Every backend is pinned against the sequential oracle by
 [`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs)
 (in-process, annotated + inferred programs, identical across worker counts) and,
-for the real MPI path, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), which
-launches the verifier under `mpirun` at 1/4/24 ranks (each process a simulated
-node) and checks it infers the oracle's configuration and accessed byte-ranges.
+for the real MPI paths, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), which
+launches the verifier under `mpirun` (each process a simulated node): the wave
+backend at 1/4/24 ranks (checking it infers the oracle's configuration and
+accessed byte-ranges), and the work-stealing backend at 8/16/24 ranks on the
+larger `racy_stress` program (self-checked against the single-process reference).
 That output-level determinism rests on the six accumulators being
 commutative-union monoids and configuration selection being by generator rank,
 not completion order.
+
+### 7.2 Performance: how each change scales compilation
+
+The cost of verification is fixed by the program (the `n · h^r · 2^b · 8^v`
+exponents of [§7](#7-the-cost-of-verification)); no engineering reduces it. What
+the changes below do is let that fixed work be **spread over more hardware** and
+**finish in less wall-clock**, while keeping the output bit-identical. Each change
+removes one specific obstacle to that. The order matters: each depends on the ones
+above it.
+
+1. **Pointer-free `Continuation` + `AstNodeId` - the enabler.** Re-keying the
+   frontier and the six accumulators on program-order `u32` indices (instead of
+   `NonNull<AstNode>` / `*mut VerifierNode`) makes a frontier item `serde`/
+   `postcard`-serialisable and position-independent. *Why it scales:* without it
+   there is no distribution at all - you cannot ship a raw pointer to another
+   process. It also makes every ordering key stable across machines, which is the
+   precondition for independently-scheduled workers to agree on the output. *Cost:*
+   one immutable AST image per rank; a re-key on each accumulator merge.
+
+2. **Two-axis decoupling (outer config sweep vs inner fixed-config frontier) -
+   exposing the parallelism.** The original `Explorerer` fused both axes into one
+   chronological loop with a global `configuration` and **backtracking** - an
+   inherently serial dependency, and the source of three serial hot-paths (a
+   full-path `find_state` replay, a `state_cache.clear()` on every backtrack, a
+   whole-frontier `invalid_path` scan). For a *fixed* configuration the inner
+   search never backtracks (a failed check is just "invalid for this config"), so
+   it becomes an embarrassingly-parallel tree expansion: any continuation can be
+   stepped by any worker, in any order, with no shared mutable state. *Why it
+   scales:* this is the change that turns one serial walk into N independent ones.
+   The serial hot-paths disappear with the backtracking that needed them.
+
+3. **Commutative-union monoid outputs - parallelism without coordination.** The six
+   accumulators are grow-only sets merged by union (associative, commutative,
+   idempotent); the winning configuration is chosen by generator rank (min), never
+   by completion order. *Why it scales:* the result is therefore independent of how
+   the work is partitioned, what order pieces finish in, or how many workers/ranks
+   exist - so workers need **no** coordination to produce a deterministic answer,
+   and the reduce can run as an unordered tree. Without this you would need a fixed
+   global reduction order, which is itself a serial bottleneck. This is what makes
+   "identical output at any worker/rank count" true rather than hoped-for.
+
+4. **In-process rayon pool (`verify_configuration_parallel`) - all cores of one
+   node.** A wave-synchronised BFS over the frontier across a work-stealing thread
+   pool. *Why it scales:* a single configuration now uses every core on a node;
+   speedup tracks core count until the frontier is narrower than the pool (ramp /
+   tail) or the per-fork `State` clone dominates. *Limit:* one node; a barrier per
+   wave; deep-clone cost per fork.
+
+5. **Wave-synchronised MPI (`verify_configuration_mpi`) - more than one node.** Each
+   wave, every rank steps its share (`index % size`) and an MPI all-gather rebuilds
+   the frontier on every rank. *Why it scales:* it is the first backend that puts
+   **one configuration's** frontier on many nodes. *What limits it, and motivates
+   the next change:* (a) a **barrier every wave** - each wave waits for the slowest
+   rank, so when per-rank work is uneven (which racy-interleaving subtrees always
+   are - sibling branches differ by orders of magnitude in size) the fast ranks sit
+   idle a large fraction of the time, and that idle fraction *grows* with both the
+   imbalance and the rank count; (b) the frontier is **replicated** on every rank,
+   so per-rank memory is the whole frontier (not `frontier/N`) and the all-gather
+   moves the entire frontier every wave (bandwidth ∝ frontier-width × waves).
+
+6. **Lifeline work-stealing + Mattern credit termination
+   (`verify_configuration_mpi_stealing`) - load balance at scale.** Each rank owns a
+   private deque (rank 0 seeded); an idle rank *steals* from its **lifeline**
+   hypercube neighbours (`rank XOR 2^k`); there is no global barrier. Termination is
+   detected by **Mattern's conserved-credit** scheme: credit starts at rank 0,
+   travels with stolen work, and returns to rank 0 when a rank goes idle - all
+   credit home means no rank holds work and none is in flight, so the search is
+   globally done. Three distinct wins over the wave backend, each growing with
+   scale:
+   - **No barrier ⇒ no idle-waiting.** A rank that drains its subtree immediately
+     steals more instead of waiting at a wave edge. Because the subtrees are wildly
+     uneven, this reclaims exactly the fast-rank idle time the wave barrier wasted;
+     the bigger the cluster and the imbalance, the larger the saving.
+   - **Partitioned frontier ⇒ less memory and less traffic.** Each rank holds only
+     its own deque (≈ `frontier/N`), so per-rank memory scales *down* with N.
+     Continuations cross the wire only on an actual steal (an idle event), not the
+     whole frontier every wave - bandwidth is proportional to steals, not to
+     frontier-width × waves.
+   - **`O(log N)` steal targeting and constant-size termination.** Lifeline
+     neighbours bound steal fan-out to `log N` per idle rank (vs probing all N);
+     Mattern credit is a handful of `u64` messages, so detecting global completion
+     does not get more expensive as the frontier grows.
+
+   *Measured* (`tests/mpi_cluster`, `racy_stress`, a ~48k-continuation racy search):
+   under `mpirun` the work-stealing inner search finishes in **~0.65 s across 16
+   ranks**, versus the **~10 s single-process reference** it self-checks against -
+   the same answer, an order of magnitude faster. *When it does not pay:* tiny
+   problems, where steal/termination overhead exceeds the work (`racy_store_inferred`
+   completes in ~0 s either way), and oversubscribed hosts, where idle stealers would
+   busy-spin - so the idle loop calls `yield_now` (a no-op with one rank per core,
+   a core hand-off when ranks share one). The rough break-even is ~10³ fresh `step`s
+   per inter-node steal.
+
+A supporting change underpins 4-6: **`step_local` is the single work unit** (one
+continuation → successors + terminal + outputs), shared verbatim by the rayon pool,
+the transport simulation, and both MPI backends, so they provably compute the same
+thing and the cross-checks are meaningful; continuations cross the wire as compact
+`postcard` bytes. The honest limit on all of this is [§7](#7-the-cost-of-verification)'s
+exponents: distribution buys a constant factor (more nodes finish the *same* work
+sooner), never exponent relief - reducing `h^r·2^b·8^v` is a language/annotation
+question ([§11](#11-design-notes--roadmap)), not a scheduling one.
 
 ## 8. Key data structures (quick reference)
 

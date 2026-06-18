@@ -23,15 +23,19 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        Some("mpi-selftest") => {
+        Some(cmd @ ("mpi-selftest" | "mpi-bench")) => {
             #[cfg(feature = "hpc")]
             {
-                formal::dist::mpi_selftest();
+                match cmd {
+                    "mpi-selftest" => formal::dist::mpi_selftest(),
+                    _ => formal::dist::mpi_bench(),
+                }
             }
             #[cfg(not(feature = "hpc"))]
             {
+                let _ = cmd;
                 eprintln!(
-                    "mpi-selftest needs the `hpc` feature and a system MPI library; build with \
+                    "{cmd} needs the `hpc` feature and a system MPI library; build with \
                      `cargo build --features hpc` and run under `mpirun` (see build.rs / deploy/)."
                 );
                 std::process::exit(1);

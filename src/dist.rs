@@ -22,7 +22,7 @@
 #![cfg(feature = "hpc")]
 
 use crate::ast::{Ast, AstNode};
-use crate::explore::{candidate_configs, step_local, verify_configuration};
+use crate::explore::{candidate_configs, step_local, valid_path_to_local, verify_configuration};
 use crate::verifier::{
     Continuation, ExplorePathResult, InnerVerifierConfiguration, LocalAccumulators, Terminal,
 };
@@ -30,8 +30,8 @@ use crate::verifier_types::{State, TypeConfiguration};
 use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::traits::*;
-use mpi::Count;
-use std::collections::BTreeMap;
+use mpi::{Count, Tag};
+use std::collections::{BTreeMap, VecDeque};
 use std::ptr::NonNull;
 
 fn internal(message: impl Into<String>) -> crate::verifier::CompilerError {
@@ -200,6 +200,286 @@ pub unsafe fn verify_configuration_mpi<C: Communicator>(
         global.union_with(part);
     }
     Ok(Some(global))
+}
+
+/// A work message: a chunk of stolen continuations plus the Mattern credit that
+/// travels with them (so credit is conserved as work migrates).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WorkMsg {
+    continuations: Vec<Continuation>,
+    credit: u64,
+}
+
+const TAG_STEAL: Tag = 1; // thief -> victim: "send me work"
+const TAG_WORK: Tag = 2; // victim -> thief: a `WorkMsg`
+const TAG_NOWORK: Tag = 3; // victim -> thief: "I have none"
+const TAG_CREDIT: Tag = 4; // idle rank -> rank 0: returned credit (u64 LE)
+const TAG_STOP: Tag = 5; // rank 0 -> all (or any -> all on Invalid): terminate
+
+/// The total Mattern credit, held entirely by rank 0 at the start (it owns the
+/// seed). Large and power-of-two so halving on each work hand-off never
+/// underflows at any realistic steal depth.
+const TOTAL_CREDIT: u64 = 1 << 40;
+
+/// A typed empty payload for the control messages that carry no data.
+const EMPTY: &[u8] = &[];
+
+/// The inner search for one fixed `configuration`, distributed by **lifeline
+/// work-stealing with Mattern credit termination detection** - the load-balanced
+/// successor to the wave-synchronised [`verify_configuration_mpi`].
+///
+/// Each rank owns a local deque of continuations (rank 0 seeded with all of
+/// them). A rank works its deque (step, push successors); when it empties, it
+/// becomes a thief and sends a `STEAL` to a victim, cycling its **lifeline**
+/// hypercube neighbours (`rank XOR 2^k`); a victim with surplus replies with half
+/// its deque. There is no per-wave barrier, so a rank never idles waiting for the
+/// slowest one - the load rebalances continuously.
+///
+/// Termination is detected with **Mattern's credit scheme**: the conserved total
+/// credit starts at rank 0; work hand-offs carry half the sender's credit, and a
+/// rank returns its credit to rank 0 when it goes idle. When rank 0 has all the
+/// credit back it knows no rank holds work and none is in flight (credit travels
+/// with work), so it broadcasts `STOP`. A reachable `#!` short-circuits with an
+/// invalidating `STOP`. Continuations move (never copy) between deques, so each
+/// is stepped exactly once and the per-rank [`LocalAccumulators`] are disjoint
+/// contributions that reduce by commutative union.
+///
+/// # Safety
+/// `ast_head` heads each rank's live (replicated) AST.
+pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
+    world: &C,
+    ast_head: Option<NonNull<AstNode>>,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+) -> Result<Option<LocalAccumulators>, crate::verifier::CompilerError> {
+    let rank = world.rank();
+    let size = world.size();
+
+    let ast = Ast::index(ast_head);
+    let start_id = ast
+        .id_of(
+            ast.head()
+                .ok_or_else(|| internal("verify_configuration_mpi_stealing: empty AST"))?,
+        )
+        .ok_or_else(|| internal("verify_configuration_mpi_stealing: entry not indexed"))?;
+
+    // Rank 0 seeds all continuations and holds all the credit; others start empty.
+    let mut deque: VecDeque<Continuation> = VecDeque::new();
+    let mut credit: u64 = 0;
+    if rank == 0 {
+        for system in systems {
+            let mut fronts = BTreeMap::new();
+            for hart in 0..system.harts {
+                fronts.insert(hart, start_id);
+            }
+            deque.push_back(Continuation {
+                state: State::new(system, configuration),
+                fronts,
+                active_hart: 0,
+            });
+        }
+        credit = TOTAL_CREDIT;
+    }
+
+    // Lifeline victims: the hypercube neighbours of this rank.
+    let lifelines: Vec<i32> = (0..)
+        .map(|k| 1i32 << k)
+        .take_while(|&d| d < size)
+        .map(|d| rank ^ d)
+        .filter(|&v| v < size)
+        .collect();
+
+    let mut total = LocalAccumulators::default();
+    let mut home: u64 = 0; // rank 0: credit returned so far (plus its own when idle)
+    let mut returned = false; // returned our credit since last becoming active?
+    let mut outstanding_steal = false;
+    let mut victim_idx = 0usize;
+    let mut invalid = false;
+
+    'run: loop {
+        // 1. Service all pending messages.
+        while let Some((message, status)) = world.any_process().immediate_matched_probe() {
+            let source = status.source_rank();
+            let tag = status.tag();
+            let count = status.count(u8::equivalent_datatype()) as usize;
+            let mut buf = vec![0u8; count];
+            message.matched_receive_into(&mut buf[..]);
+            match tag {
+                TAG_STEAL => {
+                    if deque.len() >= 2 && credit >= 2 {
+                        let half = deque.len() / 2;
+                        let continuations: Vec<Continuation> = deque.drain(..half).collect();
+                        let give = credit / 2;
+                        credit -= give;
+                        let bytes = postcard::to_stdvec(&WorkMsg {
+                            continuations,
+                            credit: give,
+                        })
+                        .map_err(|e| internal(format!("work serialize: {e}")))?;
+                        world
+                            .process_at_rank(source)
+                            .send_with_tag(&bytes[..], TAG_WORK);
+                    } else {
+                        world
+                            .process_at_rank(source)
+                            .send_with_tag(EMPTY, TAG_NOWORK);
+                    }
+                }
+                TAG_WORK => {
+                    let work: WorkMsg = postcard::from_bytes(&buf)
+                        .map_err(|e| internal(format!("work deserialize: {e}")))?;
+                    deque.extend(work.continuations);
+                    credit += work.credit;
+                    returned = false;
+                    outstanding_steal = false;
+                }
+                TAG_NOWORK => outstanding_steal = false,
+                TAG_CREDIT => {
+                    let mut bytes = [0u8; 8];
+                    bytes.copy_from_slice(&buf[..8]);
+                    home += u64::from_le_bytes(bytes);
+                }
+                TAG_STOP => {
+                    invalid = buf.first() == Some(&1);
+                    break 'run;
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Do one unit of work, if any.
+        if let Some(cont) = deque.pop_front() {
+            let (successors, terminal, local) = step_local(&ast, configuration, &cont)?;
+            total.union_with(local);
+            if matches!(terminal, Some(Terminal::Invalid)) {
+                for r in 0..size {
+                    if r != rank {
+                        world.process_at_rank(r).send_with_tag(&[1u8][..], TAG_STOP);
+                    }
+                }
+                invalid = true;
+                break 'run;
+            }
+            deque.extend(successors);
+            continue;
+        }
+
+        // 3. Idle: return credit, detect global termination, then steal.
+        if credit > 0 && !returned {
+            if rank == 0 {
+                home += credit;
+            } else {
+                world
+                    .process_at_rank(0)
+                    .send_with_tag(&credit.to_le_bytes()[..], TAG_CREDIT);
+            }
+            credit = 0;
+            returned = true;
+        }
+        if rank == 0 && home == TOTAL_CREDIT {
+            for r in 1..size {
+                world.process_at_rank(r).send_with_tag(&[0u8][..], TAG_STOP);
+            }
+            break 'run;
+        }
+        if size > 1 && !outstanding_steal {
+            let victim = lifelines[victim_idx % lifelines.len()];
+            victim_idx += 1;
+            world
+                .process_at_rank(victim)
+                .send_with_tag(EMPTY, TAG_STEAL);
+            outstanding_steal = true;
+        }
+        // Yield the core while idle. On a real cluster (one rank per core) this
+        // returns immediately, so stealing stays low-latency; when ranks share a
+        // core (oversubscribed testing) it hands the core to a rank that has work,
+        // so idle stealers do not starve the busy ones.
+        std::thread::yield_now();
+    }
+
+    if invalid {
+        return Ok(None);
+    }
+    // Reduce the disjoint per-rank accumulators by union (a collective; reached
+    // by every rank only on a valid termination).
+    let encoded =
+        postcard::to_stdvec(&total).map_err(|e| internal(format!("accumulator serialize: {e}")))?;
+    let buffers = all_gather_bytes(world, &encoded)?;
+    let mut global = LocalAccumulators::default();
+    for buffer in &buffers {
+        let part: LocalAccumulators = postcard::from_bytes(buffer)
+            .map_err(|e| internal(format!("accumulator deserialize: {e}")))?;
+        global.union_with(part);
+    }
+    Ok(Some(global))
+}
+
+/// A self-contained **benchmark / cluster test** for launching under `mpirun`:
+/// it verifies the embedded program with the lifeline-work-stealing inner
+/// backend ([`verify_configuration_mpi_stealing`]) and, on rank 0, **self-checks**
+/// the distributed result against the single-process reference
+/// ([`verify_configuration`]). Prints `OK` (and the wall-clock time + node count)
+/// only when they match, so a wrapping test need only look for `OK`.
+pub fn mpi_bench() {
+    let universe = mpi::initialize().expect("MPI failed to initialise");
+    let world = universe.world();
+    let rank = world.rank();
+    let size = world.size();
+
+    let dialect = include_str!("../tests/racy_stress/dialect.s").replace("\r\n", "\n");
+    let chars: Vec<char> = dialect.chars().collect();
+    let mut ast = crate::ast::new_ast(&chars, std::path::PathBuf::from("mpi-bench"));
+    crate::compress(&mut ast);
+
+    let systems = vec![
+        InnerVerifierConfiguration {
+            sections: Default::default(),
+            harts: 1,
+        },
+        InnerVerifierConfiguration {
+            sections: Default::default(),
+            harts: 2,
+        },
+    ];
+
+    let index = Ast::index(ast);
+    let candidates = unsafe { candidate_configs(&index).expect("enumerate candidate configs") };
+    let winner = unsafe { outer_sweep_winner(&world, ast, &systems, &candidates) }
+        .expect("distributed outer sweep failed")
+        .expect("the program has no valid configuration");
+    let configuration = &candidates[winner];
+
+    let start = std::time::Instant::now();
+    let distributed =
+        unsafe { verify_configuration_mpi_stealing(&world, ast, &systems, configuration) }
+            .expect("distributed work-stealing verification failed")
+            .expect("the winning configuration was rejected");
+    let elapsed = start.elapsed();
+
+    if rank == 0 {
+        // Single-process reference for the same fixed configuration.
+        let reference = match unsafe { verify_configuration(ast, &systems, configuration) }
+            .expect("sequential reference failed")
+        {
+            ExplorePathResult::Valid(valid) => {
+                unsafe { valid_path_to_local(ast, &valid) }.expect("re-key reference")
+            }
+            _ => unreachable!("reference rejected a configuration the sweep accepted"),
+        };
+        let status = if distributed == reference {
+            "OK (matches single-process reference)"
+        } else {
+            "MISMATCH"
+        };
+        println!(
+            "[mpi-bench] {size} rank(s); winning configuration = {} (candidate #{winner}); \
+             work-stealing inner search took {:.3}s; touched {} node(s); accessed = {:?}; {status}",
+            configuration,
+            elapsed.as_secs_f64(),
+            distributed.touched.len(),
+            distributed.accessed,
+        );
+    }
 }
 
 /// A self-contained distributed run for launching under `mpirun`: it verifies an

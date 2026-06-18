@@ -19,25 +19,38 @@ The **logic** the distributed backend needs is implemented and unit-tested in
 - `verify_configuration_distributed_sim` — the same search where every
   continuation crosses a `postcard` serialize/deserialize round-trip, exactly as
   it would migrating between nodes, with the commutative-union reduce;
-- **`src/dist.rs` (real MPI, `--features hpc`)** — the outer configuration sweep
-  across actual MPI ranks (rsmpi). `formal mpi-selftest` under `mpirun -n N`
-  verifies `racy_store_inferred` and infers `value:Gu32` identically at 1, 4, and
-  24 ranks, matching the sequential oracle. Build/run on Linux or under WSL:
-  `cargo build --features hpc` then `mpirun -n <N> target/debug/formal mpi-selftest`
-  (`build.rs` provisions the system MPI + libclang when `--features hpc` is set).
+- **`src/dist.rs` (real MPI, `--features hpc`)** — both distributed axes over
+  actual MPI ranks (rsmpi):
+  - the **outer configuration sweep** (`outer_sweep_winner`) and the
+    **wave-synchronised inner frontier** with continuation migration
+    (`verify_configuration_mpi`). `formal mpi-selftest` under `mpirun -n N` verifies
+    `racy_store_inferred` and infers `value:Gu32` (and its accessed byte-ranges)
+    identically at 1, 4, and 24 ranks, matching the sequential oracle;
+  - the **lifeline work-stealing inner backend with Mattern credit termination**
+    (`verify_configuration_mpi_stealing`) — the load-balanced, barrier-free path:
+    private per-rank deques, idle ranks stealing from hypercube-neighbour
+    lifelines, real point-to-point continuation migration, and conserved-credit
+    termination detection. `formal mpi-bench` under `mpirun -n N` runs it on the
+    larger `racy_stress` program and self-checks the distributed result against the
+    single-process reference.
+
+  Both are exercised by [`tests/mpi_cluster`](../tests/mpi_cluster/main.rs) under
+  `mpirun` (the work-stealing path at 8/16/24 ranks). Build/run on Linux or under
+  WSL: `cargo build --features hpc` then `mpirun -n <N> target/debug/formal
+  mpi-bench` (`build.rs` provisions the system MPI + libclang when `--features hpc`
+  is set).
 
 What remains, and **requires a multi-node cluster to validate** (so it is not
 exercised by `cargo test`):
 
-- real MPI migration of **continuations** for a single huge configuration
-  (`rsmpi` point-to-point + a lifeline work-stealing overlay + a Mattern credit
-  termination detector). The continuation bytes and the union reduce are already
-  validated by `verify_configuration_distributed_sim`; only the byte *transport*
-  differs from the working outer-sweep backend;
+- the load-balancing *speedup* of work-stealing over the wave backend, which only
+  shows with one rank per core on real nodes (a single oversubscribed host
+  time-slices the ranks, masking it); the single-host tests confirm *correctness*
+  (the distributed result equals the reference), not the multi-node economics;
 - this `deploy/` manifest set running on a real MPI Operator cluster.
 
-So the MPI backend itself is implemented and exercised under `mpirun` on one
-host; the manifests here are the ready-to-use multi-node target.
+So both MPI backends are implemented and exercised under `mpirun` on one host; the
+manifests here are the ready-to-use multi-node target.
 
 ## Pieces
 
