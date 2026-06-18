@@ -944,6 +944,49 @@ the base: keep shared mutation rare, keep branches determinate, annotate types
 Planned (unimplemented) scaling modes trade soundness or precision for those
 exponents; see [§11](#11-design-notes--roadmap).
 
+### 7.1 Parallel decoupling (in progress)
+
+The cost has two independent axes that the original `Explorerer` fused into one
+sequential loop via a global `configuration` plus chronological backtracking:
+
+- **Outer**: the type/locality configuration search (`8^v · 2^v`).
+- **Inner**: hart interleavings (`h^r`) and the branch tree (`2^b`) for a
+  *fixed* configuration.
+
+Once a configuration is fixed the inner search never backtracks (a `#!` or a
+failed check is simply *Invalid for this configuration*), so it is an
+independent subproblem: the unit that can be parallelised across cores and,
+later, cluster nodes. The decoupling has been started:
+
+- **Pointer-free addressing.** [`AstNodeId`](src/ast.rs) (a program-order index)
+  and the [`Ast`](src/ast.rs) view replace `NonNull<AstNode>` as the stable key
+  for a serialisable frontier item, honouring the §4.3 determinism rule (order by
+  stable key, never by address). [`compress`](src/lib.rs) was also fixed to make
+  its contiguous arena actually live (it had left `*root` on the pre-compaction
+  nodes).
+- **Pointer-free primitives.** [`Continuation`](src/verifier.rs) (a value-type
+  frontier item: `State` + per-hart fronts + path-local
+  [`LocalAccumulators`](src/verifier.rs)) and the transfer/validation functions
+  it will use: `apply_node`, `check_store_at`, `check_load_at` now operate on
+  `(state, hart, node, sinks)` rather than the `*mut` tree (the old methods are
+  thin wrappers).
+- **Fixed-config inner search.** [`verify_configuration`](src/explore.rs) runs
+  the inner exploration for one seeded configuration with the outer search
+  removed (`load_label` validates each `define` against the seeded config and
+  never advances a type iterator). It reuses the inner machinery verbatim, so it
+  is faithful by construction, and [`tests/parallel_oracle_crosscheck`] pins this:
+  on an annotated program it reproduces the sequential oracle's `ValidPathResult`
+  (configuration + all six accumulators) exactly.
+
+Remaining (the roadmap the above unblocks): a pointer-free `step(Continuation)`
+and a work-stealing pool for **in-process inner parallelism**; an outer candidate
+generator with branch-and-bound for the **configuration sweep**; and an
+MPI + lifeline work-stealing layer for **multi-node** distribution, all over the
+same `Continuation` unit (so one fixed configuration's frontier can saturate a
+whole cluster). The output-level determinism this rests on (the six accumulators
+are commutative-union monoids; selection is by generator rank) is what makes the
+parallel/distributed outputs order-independent.
+
 ## 8. Key data structures (quick reference)
 
 | Type                                                     | Location                                                                                                                          | Purpose                                                                                                                  |
