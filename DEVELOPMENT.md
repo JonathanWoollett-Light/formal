@@ -991,28 +991,56 @@ sequential `Explorerer` which stays as the reference oracle):
 - **Distributed transport (simulated).** `verify_configuration_distributed_sim`
   runs the parallel inner search with every continuation crossing a `postcard`
   serialize/deserialize round-trip, exactly as it would migrating between nodes;
-  the union reduce is unchanged.
-- **Distributed backend (real MPI, `--features hpc`).** [`src/dist.rs`](src/dist.rs)
-  is the real-transport backend over rsmpi. It implements the **outer
-  configuration sweep across MPI ranks**: each rank verifies its share of
-  candidate configurations and an MPI all-reduce selects the lowest-rank valid
-  one (only a `u64` index crosses the wire). `formal mpi-selftest`, launched with
-  `mpirun -n N`, runs it; verified to infer `racy_store_inferred`'s `value:Gu32`
-  identically at 1, 4, and 24 ranks - the same answer the sequential oracle
-  gives. Building it needs a system MPI + libclang (provisioned by `build.rs`
-  when `--features hpc` is set), so it builds and runs on Linux / under WSL (see
-  [`deploy/`](deploy/) for the k8s + Kubeflow MPI Operator target). The remaining
-  distributed piece is real MPI migration of *continuations* for a single huge
-  configuration (lifeline work-stealing), which the simulation above already
-  validates the serialize/reduce logic of.
+  the union reduce is unchanged. A pure-Rust cluster stand-in, in the normal
+  test suite.
+- **Distributed backend (real MPI, `--features hpc`, [`src/dist.rs`](src/dist.rs)).**
+  Both axes run over rsmpi across `mpirun -n N` processes:
+    - *Outer* (`outer_sweep_winner`): each rank verifies its share of candidate
+      configurations; an MPI all-reduce(min) selects the lowest-rank valid one
+      (only a `u64` crosses).
+    - *Inner* (`verify_configuration_mpi`): one fixed configuration's frontier is
+      distributed across ranks - each rank steps the continuations it owns, the
+      successors are MPI all-gathered (so a continuation produced on one rank
+      *migrates* to whichever rank owns its slot next - the real `postcard` bytes
+      a node ships), and the per-rank `LocalAccumulators` reduce by commutative
+      union. `all_gather_bytes` is the var-count all-gather both use.
 
-Every one of these is pinned against the sequential oracle by
-[`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs):
-on annotated and inferred programs they reproduce the oracle's `ValidPathResult`
-(configuration + all six accumulators) **exactly**, and the parallel/distributed
-forms do so **identically across worker/rank counts**. That output-level
-determinism rests on the six accumulators being commutative-union monoids and
-configuration selection being by generator rank (not completion order).
+  `formal mpi-selftest` runs both axes end to end. Building needs a system MPI +
+  libclang (provisioned by `build.rs` under `--features hpc`), so it builds/runs
+  on Linux / under WSL (see [`deploy/`](deploy/) for the k8s + Kubeflow MPI
+  Operator target). The remaining work is purely a *scheduling* upgrade -
+  replacing the per-wave barrier with lifeline work-stealing + Mattern
+  termination detection for better load balance at scale; the transport and the
+  reduce are done.
+
+**How a verification executes** - the same exploration, exposed through five
+backends that all produce the identical outputs:
+
+| Backend | Entry point | Parallelism |
+| --- | --- | --- |
+| Sequential oracle | `Explorerer::next_step` | none (the reference) |
+| Fixed-config | `verify_configuration` / `verify_configuration_pooled` | none |
+| In-process pool | `verify_configuration_parallel` / `verify_sweep` / `verify_inferred` | rayon (all cores) |
+| Distributed simulation | `verify_configuration_distributed_sim` | rayon + per-continuation serialize round-trip |
+| Real MPI (`--features hpc`) | `outer_sweep_winner` + `verify_configuration_mpi` | `mpirun -n N` processes |
+
+The flow is the same in every backend: seed one `Continuation` per system at the
+program entry; `step` each frontier item (validate the active node, `apply_node`
+it, classify the next interleaving via `compute_next`, fork into 0/1/N
+successors); union the grow-only outputs; a configuration drains to `Valid` or
+hits `Invalid`. The backends differ only in *where* the `step`s run and *how* the
+continuations and the output union move between workers (shared memory, a
+`postcard` round-trip, or MPI messages).
+
+Every backend is pinned against the sequential oracle by
+[`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs)
+(in-process, annotated + inferred programs, identical across worker counts) and,
+for the real MPI path, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), which
+launches the verifier under `mpirun` at 1/4/24 ranks (each process a simulated
+node) and checks it infers the oracle's configuration and accessed byte-ranges.
+That output-level determinism rests on the six accumulators being
+commutative-union monoids and configuration selection being by generator rank,
+not completion order.
 
 ## 8. Key data structures (quick reference)
 
