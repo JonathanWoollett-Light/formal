@@ -36,7 +36,7 @@ fn systems() -> Vec<InnerVerifierConfiguration> {
 /// annotated program (no outer backtracking, so the oracle explores one config).
 #[test]
 fn fixed_config_matches_oracle_annotated() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     // Oracle: the full sequential explorer (outer type search + inner search).
@@ -73,7 +73,7 @@ fn fixed_config_matches_oracle_annotated() {
 /// `Invalid` for that configuration, never accepted.
 #[test]
 fn fixed_config_wrong_type_is_invalid() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let wrong = TypeConfiguration(
@@ -104,7 +104,7 @@ fn cfg(locality: LabelLocality, ty: Type) -> TypeConfiguration {
 /// valid configuration rather than the first.
 #[test]
 fn parallel_sweep_picks_valid_config() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -138,7 +138,7 @@ fn parallel_sweep_picks_valid_config() {
 /// parallelised.
 #[test]
 fn pooled_step_matches_oracle_annotated() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -170,7 +170,7 @@ fn pooled_step_matches_oracle_annotated() {
 /// "a single configuration saturates many cores" result.
 #[test]
 fn parallel_inner_matches_oracle_and_is_order_independent() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -204,7 +204,7 @@ fn parallel_inner_matches_oracle_and_is_order_independent() {
 /// program (returns `None`).
 #[test]
 fn parallel_inner_wrong_type_is_invalid() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
     let wrong = cfg(LabelLocality::Global, Type::U8);
     let index = Ast::index(ast);
@@ -219,7 +219,7 @@ fn parallel_inner_wrong_type_is_invalid() {
 /// The step pool rejects a configuration that conflicts with the program.
 #[test]
 fn pooled_step_wrong_type_is_invalid() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
     let wrong = cfg(LabelLocality::Global, Type::U8);
     let result = unsafe { verify_configuration_pooled(ast, &sys, &wrong) }
@@ -230,7 +230,7 @@ fn pooled_step_wrong_type_is_invalid() {
 /// A sweep whose every candidate is invalid yields `Invalid`.
 #[test]
 fn parallel_sweep_all_invalid_is_invalid() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
     let candidates = vec![cfg(LabelLocality::Global, Type::U8)];
     let result = unsafe { verify_sweep(ast, &sys, &candidates) }.expect("sweep errored");
@@ -245,7 +245,7 @@ fn parallel_sweep_all_invalid_is_invalid() {
 /// vs. the oracle's union.)
 #[test]
 fn inner_paths_agree_on_inferred_program() {
-    let ast = setup_test("racy_store_inferred/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/inferred.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -292,7 +292,7 @@ fn inner_paths_agree_on_inferred_program() {
 /// does for an inferred program.
 #[test]
 fn generator_sweep_infers_oracle_config() {
-    let ast = setup_test("racy_store_inferred/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/inferred.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -316,7 +316,7 @@ fn generator_sweep_infers_oracle_config() {
 /// This validates the serde interop boundary the real MPI backend depends on.
 #[test]
 fn distributed_sim_matches_oracle() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -351,7 +351,7 @@ fn distributed_sim_matches_oracle() {
 /// so 1 rank, all cores, and 2x-oversubscribed all agree with the oracle.
 #[test]
 fn cluster_sim_maximal_parallelism() {
-    let ast = setup_test("racy_store_annotated/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
     let sys = systems();
 
     let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
@@ -396,7 +396,7 @@ fn cluster_sim_maximal_parallelism() {
 #[test]
 #[ignore = "heavy: ~2.1M-step program; run explicitly with --run-ignored all"]
 fn uart_hello_maximal_parallelism() {
-    let ast = setup_test("uart_hello/dialect.s");
+    let ast = setup_test("parallel_oracle_crosscheck/uart_hello.s");
     // The QEMU `virt` UART MMIO region, as in tests/uart_hello.
     let sections = vec![Section {
         address: MemoryValueI64::from(0x10000000),

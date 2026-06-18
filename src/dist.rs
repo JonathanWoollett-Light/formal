@@ -487,7 +487,7 @@ pub fn mpi_bench() {
     let rank = world.rank();
     let size = world.size();
 
-    let dialect = include_str!("../tests/racy_stress/dialect.s").replace("\r\n", "\n");
+    let dialect = include_str!("../tests/hpc_demo/dialect.s").replace("\r\n", "\n");
     let chars: Vec<char> = dialect.chars().collect();
     let mut ast = crate::ast::new_ast(&chars, std::path::PathBuf::from("mpi-bench"));
     crate::compress(&mut ast);

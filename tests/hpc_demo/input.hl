@@ -1,0 +1,38 @@
+# A racy program much larger than "Hello World!", for exercising the HPC
+# (distributed) verifier: a shared global `value` is stored, loaded, and proven
+# `== 0` repeatedly. Each racy load/store is an interleaving point, so under the
+# 2-hart system the verifier explores a tree of hundreds of thousands of
+# continuations - a search worth distributing across a cluster.
+#
+# `global` locality makes the loads/stores racy (they would otherwise default to
+# thread-local); the inferred word-sized accesses fix `value: u32`.
+value: global _
+t0 = &value
+t2 = 0
+
+# Block 1: racy store, racy load, proof obligation `value == 0`.
+t0[0:4] = t2
+t1 = t0[0:4]
+require t1 == t2
+
+# Block 2.
+t0[0:4] = t2
+t1 = t0[0:4]
+require t1 == t2
+
+# Block 3.
+t0[0:4] = t2
+t1 = t0[0:4]
+require t1 == t2
+
+# Block 4.
+t0[0:4] = t2
+t1 = t0[0:4]
+require t1 == t2
+
+# A final racy load + obligation (an odd number of racy accesses widens the
+# interleaving tree further).
+t1 = t0[0:4]
+require t1 == t2
+
+unreachable

@@ -86,8 +86,8 @@ fn distributed_verification_matches_oracle_across_ranks() {
 /// The **load-balanced** path on a **relatively large** program: under `mpirun`
 /// at 8, 16, and 24 ranks (a simulated multi-node cluster), the lifeline
 /// work-stealing inner backend ([`verify_configuration_mpi_stealing`]) verifies
-/// `racy_stress` (a racy interleaving search with a frontier in the hundreds of
-/// thousands of continuations) and **self-checks** its distributed result against
+/// the embedded `hpc_demo` program (a racy interleaving search with a frontier in
+/// the hundreds of thousands of continuations) and **self-checks** its result against
 /// the single-process reference. `mpi-bench` prints `OK` only on a match, so the
 /// test confirms the steal/migrate/terminate protocol produces the reference
 /// result at every cluster size. Runs comfortably under a minute per rank count.

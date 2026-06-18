@@ -815,8 +815,9 @@ pinned_nodes)` / `run_in_qemu(name, asm)`:
   `mpirun_formal(ranks, args)` builds `--features hpc` in WSL (cached in
   `~/formal-hpc`) and runs `formal <args>` under `mpirun`; required-not-skipped
   like `run_in_qemu`. `tests/hpc_demo` is the worked example (`cargo nt hpc_demo`):
-  it verifies the large `racy_stress` program under the HPC model and checks the
-  distributed result equals the oracle's.
+  a self-contained directory whose large racy program (`input.hl` → `dialect.s`)
+  it verifies both in-process (lower + boot, pinning `emitted.s`) and under the HPC
+  model, checking the distributed result equals the in-process one.
 
 A trace line is `h<hart>/<harts> | <instruction> | <config> | q<n> t<n> j<n>`
 (the instruction being processed this step, and the resulting configuration /
@@ -1063,7 +1064,7 @@ for the real MPI paths, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), whi
 launches the verifier under `mpirun` (each process a simulated node): the wave
 backend at 1/4/24 ranks (checking it infers the oracle's configuration and
 accessed byte-ranges), and the work-stealing backend at 8/16/24 ranks on the
-larger `racy_stress` program (self-checked against the single-process reference).
+larger `hpc_demo` program (self-checked against the single-process reference).
 That output-level determinism rests on the six accumulators being
 commutative-union monoids and configuration selection being by generator rank,
 not completion order.
@@ -1150,10 +1151,10 @@ above it.
      Mattern credit is a handful of `u64` messages, so detecting global completion
      does not get more expensive as the frontier grows.
 
-   *Measured* (`tests/mpi_cluster`, `racy_stress`, a ~48k-continuation racy search):
-   under `mpirun` the work-stealing inner search finishes in **~0.65 s across 16
-   ranks**, versus the **~10 s single-process reference** it self-checks against -
-   the same answer, an order of magnitude faster. *When it does not pay:* tiny
+   *Measured* (`tests/hpc_demo`, a ~500k-continuation racy search): under `mpirun`
+   the work-stealing inner search finishes in **~0.65 s across 16 ranks**, versus
+   the **~10 s single-process reference** it self-checks against - the same answer,
+   an order of magnitude faster. *When it does not pay:* tiny
    problems, where steal/termination overhead exceeds the work (`racy_store_inferred`
    completes in ~0 s either way), and oversubscribed hosts, where idle stealers would
    busy-spin - so the idle loop calls `yield_now` (a no-op with one rank per core,
