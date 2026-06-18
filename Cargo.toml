@@ -18,6 +18,15 @@ rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 # Compact binary serde format; `use-std` gives `to_stdvec`/`from_bytes`.
 postcard = { version = "1", features = ["use-std"] }
+# The distributed backend's MPI bindings (rsmpi), behind `--features hpc`; links
+# a system MPI library at build time (see build.rs). Optional so the default
+# build needs no MPI.
+mpi = { version = "0.8", optional = true }
+
+[features]
+# The multi-node distributed backend (src/dist.rs). Requires a system MPI
+# library + a C compiler to build; `build.rs` provisions them.
+hpc = ["dep:mpi"]
 
 # Optimize test builds: the verifier explores millions of steps for the larger
 # programs (uart_hello). `debug-assertions` stay enabled (the default for the

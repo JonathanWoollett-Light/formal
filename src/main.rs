@@ -23,12 +23,27 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Some("mpi-selftest") => {
+            #[cfg(feature = "hpc")]
+            {
+                formal::dist::mpi_selftest();
+            }
+            #[cfg(not(feature = "hpc"))]
+            {
+                eprintln!(
+                    "mpi-selftest needs the `hpc` feature and a system MPI library; build with \
+                     `cargo build --features hpc` and run under `mpirun` (see build.rs / deploy/)."
+                );
+                std::process::exit(1);
+            }
+        }
         _ => {
             eprintln!(
                 "formal: a verifying compiler for a Python-like RISC-V dialect.\n\n\
                  usage:\n  \
-                 formal new <name>   scaffold a project whose `cargo run` verifies and\n                      \
-                 compiles its `main.hl` to RISC-V in `build/`"
+                 formal new <name>      scaffold a project whose `cargo run` verifies and\n                         \
+                 compiles its `main.hl` to RISC-V in `build/`\n  \
+                 formal mpi-selftest    (--features hpc) run a distributed verification under MPI"
             );
             std::process::exit(1);
         }

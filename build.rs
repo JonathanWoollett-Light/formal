@@ -177,7 +177,7 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         || [ -x \"$HOME/riscv-toolchain/riscv/bin/riscv64-unknown-elf-as\" ]";
 
     // (presence probe, apt packages that provide it, human name).
-    let deps: &[(&str, &str, &str)] = &[
+    let mut deps: Vec<(&str, &str, &str)> = vec![
         (
             "command -v qemu-system-riscv64",
             "qemu-system-misc",
@@ -191,9 +191,19 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         (
             "command -v mpicc",
             "libopenmpi-dev openmpi-bin",
-            "system MPI (optional, for the --features hpc distributed backend)",
+            "system MPI (for the --features hpc distributed backend)",
         ),
     ];
+    // When building `--features hpc`, rsmpi's `mpi-sys` runs bindgen, which needs
+    // libclang. Cargo sets `CARGO_FEATURE_HPC` for the build script when the
+    // feature is enabled, so pull in clang/libclang only then.
+    if std::env::var_os("CARGO_FEATURE_HPC").is_some() {
+        deps.push((
+            "ldconfig -p 2>/dev/null | grep -q libclang || command -v clang",
+            "clang libclang-dev",
+            "libclang (for rsmpi's bindgen, --features hpc)",
+        ));
+    }
 
     let missing: Vec<&(&str, &str, &str)> = deps.iter().filter(|(p, _, _)| !present(p)).collect();
     if missing.is_empty() {

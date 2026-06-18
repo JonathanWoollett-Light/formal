@@ -18,18 +18,26 @@ The **logic** the distributed backend needs is implemented and unit-tested in
   across a rayon pool, order-independent;
 - `verify_configuration_distributed_sim` — the same search where every
   continuation crosses a `postcard` serialize/deserialize round-trip, exactly as
-  it would migrating between nodes, with the commutative-union reduce.
+  it would migrating between nodes, with the commutative-union reduce;
+- **`src/dist.rs` (real MPI, `--features hpc`)** — the outer configuration sweep
+  across actual MPI ranks (rsmpi). `formal mpi-selftest` under `mpirun -n N`
+  verifies `racy_store_inferred` and infers `value:Gu32` identically at 1, 4, and
+  24 ranks, matching the sequential oracle. Build/run on Linux or under WSL:
+  `cargo build --features hpc` then `mpirun -n <N> target/debug/formal mpi-selftest`
+  (`build.rs` provisions the system MPI + libclang when `--features hpc` is set).
 
-What remains, and **requires a cluster to validate** (so it is not exercised by
-`cargo test`):
+What remains, and **requires a multi-node cluster to validate** (so it is not
+exercised by `cargo test`):
 
-- the **MPI transport**: replace the in-process byte hand-off in
-  `verify_configuration_distributed_sim` with `rsmpi` point-to-point + a
-  lifeline work-stealing overlay and a Mattern credit termination detector (the
-  continuation bytes and the union reduce are unchanged);
+- real MPI migration of **continuations** for a single huge configuration
+  (`rsmpi` point-to-point + a lifeline work-stealing overlay + a Mattern credit
+  termination detector). The continuation bytes and the union reduce are already
+  validated by `verify_configuration_distributed_sim`; only the byte *transport*
+  differs from the working outer-sweep backend;
 - this `deploy/` manifest set running on a real MPI Operator cluster.
 
-So treat the manifests here as the ready-to-use target, not a tested artifact.
+So the MPI backend itself is implemented and exercised under `mpirun` on one
+host; the manifests here are the ready-to-use multi-node target.
 
 ## Pieces
 

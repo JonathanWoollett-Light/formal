@@ -14,6 +14,11 @@ pub mod verifier_types;
 pub mod explore;
 pub use explore::*;
 
+/// The distributed (MPI) backend, compiled only with `--features hpc` (which
+/// links a system MPI library via rsmpi). See [`dist`] / `build.rs`.
+#[cfg(feature = "hpc")]
+pub mod dist;
+
 pub mod draw;
 
 pub mod optimizer;

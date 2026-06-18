@@ -988,12 +988,23 @@ sequential `Explorerer` which stays as the reference oracle):
   concurrently and selects the lowest-rank valid one; `candidate_configs` +
   `verify_inferred` enumerate the candidates (`locality_list × type_list`) so the
   caller supplies only the AST and systems.
-- **Distributed transport.** `verify_configuration_distributed_sim` runs the
-  parallel search with every continuation crossing a `postcard`
+- **Distributed transport (simulated).** `verify_configuration_distributed_sim`
+  runs the parallel inner search with every continuation crossing a `postcard`
   serialize/deserialize round-trip, exactly as it would migrating between nodes;
-  the union reduce is unchanged. A real MPI + lifeline work-stealing backend only
-  swaps this byte transport (it is the remaining piece, validated on a cluster;
-  see [`deploy/`](deploy/) for the k8s + Kubeflow MPI Operator target).
+  the union reduce is unchanged.
+- **Distributed backend (real MPI, `--features hpc`).** [`src/dist.rs`](src/dist.rs)
+  is the real-transport backend over rsmpi. It implements the **outer
+  configuration sweep across MPI ranks**: each rank verifies its share of
+  candidate configurations and an MPI all-reduce selects the lowest-rank valid
+  one (only a `u64` index crosses the wire). `formal mpi-selftest`, launched with
+  `mpirun -n N`, runs it; verified to infer `racy_store_inferred`'s `value:Gu32`
+  identically at 1, 4, and 24 ranks - the same answer the sequential oracle
+  gives. Building it needs a system MPI + libclang (provisioned by `build.rs`
+  when `--features hpc` is set), so it builds and runs on Linux / under WSL (see
+  [`deploy/`](deploy/) for the k8s + Kubeflow MPI Operator target). The remaining
+  distributed piece is real MPI migration of *continuations* for a single huge
+  configuration (lifeline work-stealing), which the simulation above already
+  validates the serialize/reduce logic of.
 
 Every one of these is pinned against the sequential oracle by
 [`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs):
