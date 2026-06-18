@@ -286,3 +286,26 @@ fn inner_paths_agree_on_inferred_program() {
         "parallel vs verify_configuration (inferred)"
     );
 }
+
+/// End-to-end outer sweep with the candidate generator: `verify_inferred` (no
+/// hand-written candidate list) infers the same winning configuration the oracle
+/// does for an inferred program.
+#[test]
+fn generator_sweep_infers_oracle_config() {
+    let ast = setup_test("racy_store_inferred/dialect.s");
+    let sys = systems();
+
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+
+    let result = unsafe { verify_inferred(ast, &sys) }.expect("verify_inferred errored");
+    let valid = match result {
+        ExplorePathResult::Valid(valid) => valid,
+        _ => panic!("verify_inferred failed to infer a valid configuration"),
+    };
+    assert_eq!(
+        valid.configuration, oracle.configuration,
+        "the generator+sweep must infer the oracle's winning configuration"
+    );
+}

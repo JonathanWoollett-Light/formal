@@ -15,12 +15,15 @@
 //! the in-process pool (Phase 1) replaces the body with a work-stealing loop over
 //! pointer-free `Continuation`s that produces the identical union of outputs.
 
-use crate::ast::{Ast, AstNode, AstNodeId, Label};
+use crate::ast::{Ast, AstNode, AstNodeId, Instruction, Label, Type};
 use crate::verifier::{
-    step, CompilerError, Continuation, ExplorePathResult, Explorerer, InnerVerifierConfiguration,
-    LocalAccumulators, RecordSinks, Terminal, ValidPathResult,
+    locality_list, step, type_list, CompilerError, Continuation, ExplorePathResult, Explorerer,
+    InnerVerifierConfiguration, LocalAccumulators, RecordSinks, Terminal, ValidPathResult,
 };
-use crate::verifier_types::{AccessTransitions, AccessedRanges, State, TypeConfiguration};
+use crate::verifier_types::{
+    AccessTransitions, AccessedRanges, LabelLocality, State, TypeConfiguration,
+};
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ptr::NonNull;
 
@@ -365,4 +368,80 @@ pub unsafe fn verify_configuration_parallel(
     }
 
     Ok(Some(total))
+}
+
+/// Enumerate candidate configurations for the program's variables, in the order
+/// the sequential explorer prefers (`locality_list` x `type_list` per variable,
+/// locality outer), so the parallel sweep's lowest-rank valid match is the
+/// configuration the oracle would infer. Every variable referenced by a
+/// `define`/`la`/`lat` gets the full locality x type product; an annotation is
+/// not special-cased here, it simply makes all but the annotated assignment
+/// invalid during verification.
+///
+/// The product is `(2 x 8)^v` for `v` variables, fine for the small `v` of real
+/// programs; large `v` wants lazy generation and branch-and-bound pruning
+/// (future work, noted in the plan).
+///
+/// # Safety
+/// `ast` must index a live AST.
+pub unsafe fn candidate_configs(ast: &Ast) -> Result<Vec<TypeConfiguration>, CompilerError> {
+    // Variables the program references, deduplicated and ordered by label.
+    let mut labels: BTreeSet<Label> = BTreeSet::new();
+    for i in 0..ast.len() {
+        let node = ast.resolve(AstNodeId(i as u32)).ok_or_else(|| {
+            CompilerError::Internal("candidate_configs: index out of range".to_string())
+        })?;
+        match &node.as_ref().as_ref().this {
+            Instruction::Define(define) => {
+                labels.insert(define.label.clone());
+            }
+            Instruction::La(la) => {
+                labels.insert(la.label.clone());
+            }
+            Instruction::Lat(lat) => {
+                labels.insert(lat.label.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // A program with no variables verifies under the single empty configuration.
+    if labels.is_empty() {
+        return Ok(vec![TypeConfiguration::new()]);
+    }
+
+    // Per-variable options in `locality_list` x `type_list` order (the explorer's
+    // `load_label` enumeration order).
+    let options: Vec<(LabelLocality, Type)> = locality_list()
+        .into_iter()
+        .flat_map(|locality| {
+            type_list()
+                .into_iter()
+                .map(move |ty| (LabelLocality::from(locality), ty))
+        })
+        .collect();
+
+    Ok(labels
+        .iter()
+        .map(|label| options.iter().map(move |opt| (label.clone(), opt.clone())))
+        .multi_cartesian_product()
+        .map(|assignment| TypeConfiguration(assignment.into_iter().collect()))
+        .collect())
+}
+
+/// End-to-end **inferred** verification: enumerate candidate configurations
+/// ([`candidate_configs`]) and run the parallel outer sweep ([`verify_sweep`]),
+/// returning the best-ranked valid configuration (the one the oracle would infer)
+/// or `Invalid`. This closes the outer axis: the caller supplies only the AST and
+/// systems, no hand-written candidate list.
+///
+/// # Safety
+/// `ast_head` must head a live AST that outlives the call.
+pub unsafe fn verify_inferred(
+    ast_head: Option<NonNull<AstNode>>,
+    systems: &[InnerVerifierConfiguration],
+) -> Result<ExplorePathResult, CompilerError> {
+    let ast = Ast::index(ast_head);
+    let candidates = candidate_configs(&ast)?;
+    verify_sweep(ast_head, systems, &candidates)
 }

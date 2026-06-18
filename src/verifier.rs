@@ -283,7 +283,7 @@ fn config_accepts(
 }
 
 /// The type to explore in order from best to worst.
-fn type_list() -> Vec<Type> {
+pub(crate) fn type_list() -> Vec<Type> {
     vec![
         Type::U8,
         Type::I8,
@@ -373,7 +373,7 @@ pub struct VerifierLeafNode {
 }
 
 /// Localites in order of best to worst
-fn locality_list() -> Vec<Locality> {
+pub(crate) fn locality_list() -> Vec<Locality> {
     vec![Locality::Thread, Locality::Global]
 }
 
