@@ -14,12 +14,33 @@ reachable) then build and shrink the binary.
 
 ## Requirements
 
-- **Rust** (stable) and Cargo (<https://rustup.rs>) to build the compiler.
-- A **RISC-V QEMU** (`qemu-riscv64`) to run the compiled programs.
+You need only **Rust** (stable) and Cargo (<https://rustup.rs>). Everything else
+is handled by the build script.
 
-You do **not** need to install a RISC-V cross-toolchain yourself: a scaffolded
-project downloads a pinned one on its first build (and, on Windows, runs it
-through WSL).
+### Setup is `cargo build` (the single entry point)
+
+The repo's [`build.rs`](build.rs) is the one place that provisions the **system**
+dependencies the test suite and the distributed backend need, which Cargo cannot
+install itself: a WSL Linux environment on Windows, `qemu-system-riscv64` and a
+RISC-V GNU toolchain for the bare-metal boot tests, and a system MPI library for
+the (planned) `--features hpc` distributed backend. So:
+
+```sh
+cargo build      # builds the compiler AND sets up the environment
+```
+
+build.rs detects each dependency and best-effort installs the ones it can do
+non-interactively (via the platform package manager); anything that needs admin
+or a reboot (installing WSL itself, MS-MPI, a large toolchain) is reported as the
+exact command to run. It **never fails the build** (the compiler builds fine with
+none of these present; they only enable the QEMU boots / the `hpc` feature) and
+is idempotent (it acts only on what is missing). Control it with:
+
+- `FORMAL_NO_SETUP=1` - skip the setup step entirely.
+- `FORMAL_SETUP=detect` - report what is missing without installing anything.
+- `FORMAL_SETUP=install` - install even under `CI` (the default does not).
+
+The Rust crate dependencies are installed by Cargo as normal.
 
 ## Install
 

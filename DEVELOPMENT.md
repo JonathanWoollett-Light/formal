@@ -64,8 +64,17 @@ through `formal::compile` / the generated project's `cargo run`.
 
 ## 2. Commands
 
+`cargo build` is the **single setup entry point**: [build.rs](build.rs) detects
+(and best-effort, non-interactively installs) the system dependencies the tests
+and the distributed backend need (WSL on Windows, `qemu-system-riscv64`, the
+RISC-V GNU toolchain, a system MPI library), reporting an exact command for
+anything needing admin/reboot. It never fails the build and is idempotent;
+control it with `FORMAL_NO_SETUP=1` (skip), `FORMAL_SETUP=detect` (report only),
+or `FORMAL_SETUP=install` (install even under CI). See the README "Setup"
+section.
+
 ```sh
-cargo build           # compile lib + binary
+cargo build           # compile lib + binary (and provision system deps via build.rs)
 cargo run -- new foo  # the `formal` CLI: scaffold a project `foo` (see §4.9)
 cargo nt              # run tests
 cargo nt uart_hello   # run a specific test
