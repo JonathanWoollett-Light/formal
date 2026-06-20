@@ -1,0 +1,47 @@
+# Sum and count a zero-terminated u32 array, the classic data-driven loop
+# (`while *p != 0`, as C string / sentinel-terminated processing uses) rather
+# than a counted one. The array is [3 1 4 1 5 9 0 ...]; the loop walks it until
+# the 0 sentinel, and the closing `require`s prove the running sum (23) and the
+# element count (6) at compile time. Boots under `qemu-riscv64` and exits 0.
+#
+# Registers: a1 = 4 (element size), a2 = sum, a3 = count, t0 = pointer,
+#            t1 = the loaded element.
+
+data: thread [u32]*8
+
+a1 = 4
+
+# --- lay down [3 1 4 1 5 9 0] (the rest stays 0, an extra sentinel) ---
+t0 = &data
+t1 = 3
+t0[0:4] = t1
+t1 = 1
+t0[4:8] = t1
+t1 = 4
+t0[8:12] = t1
+t1 = 1
+t0[12:16] = t1
+t1 = 5
+t0[16:20] = t1
+t1 = 9
+t0[20:24] = t1
+t1 = 0
+t0[24:28] = t1
+
+# --- walk to the sentinel, accumulating the sum and the count ---
+a2 = 0
+a3 = 0
+t0 = &data
+t1 = t0[0:4]
+while t1 != 0:
+    a2 = a2 + t1
+    a3 = a3 + 1
+    t0 = t0 + a1
+    t1 = t0[0:4]
+
+# --- prove sum = 3+1+4+1+5+9 = 23 over 6 elements ---
+t5 = 23
+require a2 == t5
+t5 = 6
+require a3 == t5
+exit(0)

@@ -84,6 +84,18 @@ const MALFORMED: &[(&str, &str)] = &[
         "def f(x):\n    f(x)\nf(0)\n",
         "unbounded recursive inlining",
     ),
+    // Verifier-only directives and blocks.
+    ("forget x9\nexit(0)\n", "`forget` of a non-register"),
+    ("asm:\nexit(0)\n", "an empty `asm:` block"),
+    ("section 0x100\nexit(0)\n", "a malformed `section`"),
+    (
+        "section bad 0x200 rw\nexit(0)\n",
+        "an invalid `section` bound",
+    ),
+    (
+        "section 0x100 0x200 xyz\nexit(0)\n",
+        "invalid `section` permissions",
+    ),
 ];
 
 #[test]
