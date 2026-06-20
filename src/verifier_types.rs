@@ -797,6 +797,10 @@ impl Add for MemoryValue {
             // (matching RV64, where `lw` sign-extends and `addi` is 64-bit), so a
             // negative immediate no longer underflows an unsigned slot.
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
+            // Two loaded `U32`s combine in 64-bit registers, so widen to `I64`.
+            (U32(a), U32(b)) => I64(MemoryValueI64::from(a)
+                .add(&MemoryValueI64::from(b))
+                .unwrap()),
             (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
                 // dbg!(&b);
                 let c = MemoryValueI64::try_from(a.offset).unwrap();
@@ -817,7 +821,10 @@ impl Mul for MemoryValue {
             // `I64 * I64` in the common case; widen narrower operands to match.
             (I64(a), I64(b)) => I64(a.mul(&b).unwrap()),
             (U64(a), U64(b)) => U64(a.mul(&b).unwrap()),
-            (U32(a), U32(b)) => U32(a.mul(&b).unwrap()),
+            // Two loaded `U32`s multiply in 64-bit registers, so widen to `I64`.
+            (U32(a), U32(b)) => I64(MemoryValueI64::from(a)
+                .mul(&MemoryValueI64::from(b))
+                .unwrap()),
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a).mul(&b).unwrap()),
             (I64(a), U32(b)) => I64(a.mul(&MemoryValueI64::from(b)).unwrap()),
             x => todo!("{x:?}"),

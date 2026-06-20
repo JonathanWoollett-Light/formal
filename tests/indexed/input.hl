@@ -1,0 +1,33 @@
+# Indexed array access with *computed* indices, the point of adding multiply and
+# register-register addition: `arr[i]` is `base + i*4` (u32 elements), so there
+# is no pointer-walk loop. Write arr[1] and arr[3] at computed addresses, read
+# them back, and prove their sum at compile time.
+arr: thread [u32]*4
+t0 = &arr
+t2 = 4            # element size (u32)
+
+t1 = 1
+t3 = t1 * t2      # byte offset of arr[1] = 4
+t4 = t0 + t3      # &arr[1]
+t5 = 10
+t4[0:4] = t5      # arr[1] = 10
+
+t1 = 3
+t3 = t1 * t2      # byte offset of arr[3] = 12
+t4 = t0 + t3      # &arr[3]
+t5 = 30
+t4[0:4] = t5      # arr[3] = 30
+
+t1 = 1
+t3 = t1 * t2
+t4 = t0 + t3
+a1 = t4[0:4]      # read arr[1] = 10
+t1 = 3
+t3 = t1 * t2
+t4 = t0 + t3
+a2 = t4[0:4]      # read arr[3] = 30
+
+a1 = a1 + a2      # 40
+a0 = 40
+require a1 == a0
+exit(0)
