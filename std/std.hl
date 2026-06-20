@@ -4,31 +4,55 @@
 # prelude costs nothing: a program that never calls `print` lowers exactly as
 # if this file were not there.
 
-# print(msg): write the string literal `msg` to standard output with the Linux
-# `write(2, fd=1, ...)` system call. This targets **Linux** (a hosted RISC-V
-# process), not bare metal: it uses `ecall`, so a bare-metal program (no OS to
-# answer the `ecall`) cannot use it and must write to its device directly (see
-# the `uart_hello` test, which poke the QEMU UART with raw assembly).
+# print(msg): write a value to standard output (Linux `write(2)`, fd 1). `print`
+# is **polymorphic over its argument's type, resolved at compile time**: a call
+# binds `msg` to a string's storage label or to an integer, and the matching arm
+# below is the only one translated. The `if typeof` dispatch is evaluated by the
+# front-end (it emits no branch and drops the other arm), so `print("hi")` lowers
+# to the string walk and `print(42)` to the integer formatter, with no runtime
+# type check and no separate `print_int`.
 #
-# `print` is inlined at each call site; the call lays the string down in `.bss`
-# first (clobbering t0 and t1), then this body measures and writes it
-# (clobbering a0, a1, a2, a7, and t0). Minimal and specific for now: a fuller
-# library would take the output stream and handle partial writes.
+# Targets **Linux** (a hosted RISC-V process): it uses `ecall`, so a bare-metal
+# program (no OS to answer the `ecall`) must write to its device directly (see
+# the `uart_hello` test, which pokes the QEMU UART with raw assembly).
 def print(msg):
-    # a2 = strlen(msg): walk to the NUL the compiler appended.
-    a1 = &msg
-    a2 = 0
-    t0 = a1[0:1]
-    while t0 != 0:
-        a2 = a2 + 1
-        a1 = a1 + 1
+    # A byte array (string): walk to the NUL the compiler appended, then write it.
+    # Clobbers a0, a1, a2, t0.
+    if typeof msg == [u8]:
+        a1 = &msg
+        a2 = 0
         t0 = a1[0:1]
-    # write(fd = 1, buf = &msg, count = a2)  (syscall 64).
-    a0 = 1
-    a1 = &msg
-    a7 = 64
-    asm:
-        ecall
+        while t0 != 0:
+            a2 = a2 + 1
+            a1 = a1 + 1
+            t0 = a1[0:1]
+        a0 = 1
+        a1 = &msg
+        a7 = 64
+        asm:
+            ecall
+    # An integer: peel decimal digits off the back of a scratch buffer (div/rem),
+    # convert each to ASCII, and write the slice. Assumes a non-negative value;
+    # zero and signed handling are future work. Clobbers a0, a1, a2, t0, t1, t2, t5.
+    if typeof msg == i64:
+        __print_buf: thread [u8]*20
+        t0 = &__print_buf
+        t0 = t0 + 20
+        t5 = msg
+        t1 = 10
+        a2 = 0
+        while t5 != 0:
+            t2 = t5 % t1
+            t5 = t5 / t1
+            t2 = t2 + 48
+            t0 = t0 - 1
+            t0[0:1] = t2
+            a2 = a2 + 1
+        a1 = t0 + 0
+        a0 = 1
+        a7 = 64
+        asm:
+            ecall
 
 # exit(code): end the process with the Linux `exit` system call (syscall 93).
 # Like `print` this targets Linux (it uses `ecall`); the call never returns, so

@@ -455,6 +455,36 @@ impl Translator {
             return Ok(());
         }
 
+        // `if typeof X == TYPE:` block: a **compile-time** type dispatch, resolved
+        // here rather than at runtime. The front-end knows X's category (an integer
+        // or a register holds a scalar; a label names string/array storage) and the
+        // literal TYPE, compares them, and either translates the body inline (no
+        // branch emitted) or skips it entirely. Skipping is what lets `print` carry
+        // a string arm and an integer arm in one body: the arm that does not match
+        // the argument is never translated, so e.g. the string arm's `&msg` is not
+        // emitted (and cannot fail) when `msg` is an integer. (Checked before the
+        // plain `if` below, which it also prefix-matches.)
+        if let Some(rest) = stripped.strip_prefix("if typeof ") {
+            let cond = rest
+                .strip_suffix(':')
+                .ok_or_else(|| err("`if typeof ...:` needs a trailing `:`".to_string()))?;
+            let (operand, type_text) = cond
+                .split_once("==")
+                .ok_or_else(|| err("expected `if typeof X == TYPE:`".to_string()))?;
+            let operand = operand.trim();
+            // Reuse the type-expression parser (the one `define` uses) to validate
+            // and canonicalise the literal; a leading `[` marks an array type.
+            let resolved = translate_type(type_text.trim()).map_err(err)?;
+            let type_is_array = resolved.trim_start().starts_with('[');
+            let operand_is_array = parse_int(operand).is_none() && !is_register(operand);
+            if operand_is_array == type_is_array {
+                self.body(lines, position, line)?;
+            } else {
+                skip_block(lines, position, line);
+            }
+            return Ok(());
+        }
+
         // `if <cond>:` block: branch over the body when the condition fails.
         if let Some(rest) = stripped.strip_prefix("if ") {
             let condition = header_condition(rest).map_err(err)?;
@@ -939,4 +969,15 @@ fn substitute_token(text: &str, from: &str, to: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Advances `position` past the indented block under `header` without
+/// translating it: the not-taken arm of a compile-time `if typeof` dispatch.
+fn skip_block(lines: &[Line], position: &mut usize, header: &Line) {
+    while let Some(l) = lines.get(*position) {
+        if l.indent <= header.indent {
+            break;
+        }
+        *position += 1;
+    }
 }
