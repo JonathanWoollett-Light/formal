@@ -815,12 +815,16 @@ and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly)
   `#(` / `#)` `Assume` (bracket a block the verifier executes to narrow state and
   codegen drops; the `assume:` escape hatch). Plain `#…` comments and inline
   `# …` comments are stripped.
-- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 33
+- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 34
   variants): `csrr`, `bnez`, `j`, `wfi`, `ecall`, labels (`foo:`), `.global`,
   `.data`, `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `addi`,
   `add`, `sub`, `mul`, `div`, `rem` (register-register RV64M arithmetic),
+  `amoadd.w rd, rs2, (rs1)` (RV64A atomic fetch-add, the lock-free
+  work-claiming primitive: `rd = mem[rs1]; mem[rs1] += rs2` in one racy step),
   `blt`, `lb`, `beqz`, `sb`, `bge`, `ld`, `bne`, `beq`, plus the directives
-  above. `ecall` is the boundary to the host/OS: the verifier does not model
+  above. There is no `amoadd.w` surface form; it is written in an `asm:` block
+  and parsed back from the emitted dialect (so the verifier models it, rather
+  than treating the `asm:` block as opaque). `ecall` is the boundary to the host/OS: the verifier does not model
   its effect (it is a no-op for checking, non-racy, no state change) and
   codegen emits it verbatim, so the syscall ABI lives entirely in the registers
   the surrounding code sets (the std `print`'s `write`, and a program's `exit`).
@@ -1025,6 +1029,25 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   Boots under QEMU; the UART receives `2\n2` (fannkuch(3)). `n` is kept small
   because the leader runs a long solo stretch while the workers sit parked far
   back -- the O(N^2) worst case for the front-search (see [§9](#9-conventions--gotchas)).
+- `atomic_add` ([tests/atomic_add/](tests/atomic_add/)): `amoadd.w` end to end --
+  an inline-asm atomic parsed back from the `asm:` block and modeled as a
+  read-modify-write; proven (old value returned, counter incremented) and booted.
+- `global_zero_init` ([tests/global_zero_init/](tests/global_zero_init/)): reads
+  an **unwritten global** and proves it is 0. Globals live in `.bss` (zero at
+  boot: the hosted loader zeroes it, and QEMU's ELF loader zeroes the NOBITS span
+  of a bare-metal image), so the verifier models a global's initial value as 0
+  (`zero_value` in `State::new`/`seed_label`). This is what lets a hart read a
+  shared counter before any write -- lock-free work claiming with no start barrier.
+- `atomic_claim` ([tests/atomic_claim/](tests/atomic_claim/)): two harts atomically
+  fetch-add a zero-init global counter to each claim a unique rank; proven in
+  range across every interleaving (the racy atomic on top of zero-init globals).
+- `parallel_probe` ([tests/parallel_probe/](tests/parallel_probe/)): the full
+  lock-free work-sharing pattern across **2 harts**, end to end -- claim a rank,
+  do per-hart work, write a slot, and the last finisher (found by the atomic's
+  return value, no spin) combines the slots and writes the total to the UART. The
+  verifier proves it across every interleaving; QEMU boots two harts
+  (`run_program_smp` -> `-smp 2`) and the UART gets `3`. (Three harts is not yet
+  feasible: the racy interleaving x front-search cost exceeds the 10M-step bound.)
 - `heap_regions` ([tests/heap_regions/](tests/heap_regions/)): `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them; the latter would panic in
