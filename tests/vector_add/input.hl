@@ -1,0 +1,14 @@
+# vector_add: a SIMD vector add via the RISC-V V (vector) extension -- the
+# register-only subset (no vector loads/stores yet). Set the active vector length
+# to 4 (32-bit lanes), splat 1 into every lane of v0 and 2 into v1, add them
+# lane-wise into v2, extract lane 0 (= 3) into a0, and print it. Demonstrates that
+# the vector instructions verify (the verifier models each vector register as a
+# list of lanes and computes the add) and run under QEMU.
+asm:
+    vsetivli t0, 4, e32, m1, ta, ma
+    vmv.v.i v0, 1
+    vmv.v.i v1, 2
+    vadd.vv v2, v0, v1
+    vmv.x.s a0, v2
+print(a0)
+exit(0)

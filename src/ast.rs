@@ -280,6 +280,10 @@ pub enum Instruction {
     Div(Div),
     Rem(Rem),
     Amoadd(Amoadd),
+    Vsetivli(Vsetivli),
+    Vmvvi(Vmvvi),
+    Vaddvv(Vaddvv),
+    Vmvxs(Vmvxs),
     Blt(Blt),
     Lb(Lb),
     Beqz(Beqz),
@@ -334,6 +338,12 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['a', 'm', 'o', 'm', 'a', 'x', '.', 'w', ' ', rem @ ..] => {
             Instruction::Amoadd(new_amo(rem, AmoOp::Max))
         }
+        ['v', 's', 'e', 't', 'i', 'v', 'l', 'i', ' ', rem @ ..] => {
+            Instruction::Vsetivli(new_vsetivli(rem))
+        }
+        ['v', 'm', 'v', '.', 'v', '.', 'i', ' ', rem @ ..] => Instruction::Vmvvi(new_vmvvi(rem)),
+        ['v', 'a', 'd', 'd', '.', 'v', 'v', ' ', rem @ ..] => Instruction::Vaddvv(new_vaddvv(rem)),
+        ['v', 'm', 'v', '.', 'x', '.', 's', ' ', rem @ ..] => Instruction::Vmvxs(new_vmvxs(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
@@ -374,6 +384,10 @@ impl fmt::Display for Instruction {
             Div(div) => write!(f, "{div}"),
             Rem(rem) => write!(f, "{rem}"),
             Amoadd(x) => write!(f, "{x}"),
+            Vsetivli(x) => write!(f, "{x}"),
+            Vmvvi(x) => write!(f, "{x}"),
+            Vaddvv(x) => write!(f, "{x}"),
+            Vmvxs(x) => write!(f, "{x}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
@@ -1133,6 +1147,105 @@ fn new_amo(src: &[char], op: AmoOp) -> Amoadd {
     }
 }
 
+// --- RISC-V V (vector) extension: a minimal register-only subset (no vector
+// loads/stores yet) sufficient to express and verify a SIMD reduction. ---
+
+/// `vsetivli rd, vl, e32, m1, ta, ma`: set the active vector length to `vl`
+/// (32-bit elements, LMUL=1), also written to `rd`.
+#[derive(Debug, Clone)]
+pub struct Vsetivli {
+    pub rd: Register,
+    pub vl: Immediate,
+}
+impl fmt::Display for Vsetivli {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "vsetivli {}, {}, e32, m1, ta, ma", self.rd, self.vl)
+    }
+}
+
+/// `vmv.v.i vd, imm`: splat the immediate into every active lane of `vd`.
+#[derive(Debug, Clone)]
+pub struct Vmvvi {
+    pub vd: Register,
+    pub imm: Immediate,
+}
+impl fmt::Display for Vmvvi {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "vmv.v.i {}, {}", self.vd, self.imm)
+    }
+}
+
+/// `vadd.vv vd, vs1, vs2`: lane-wise add.
+#[derive(Debug, Clone)]
+pub struct Vaddvv {
+    pub vd: Register,
+    pub vs1: Register,
+    pub vs2: Register,
+}
+impl fmt::Display for Vaddvv {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "vadd.vv {}, {}, {}", self.vd, self.vs1, self.vs2)
+    }
+}
+
+/// `vmv.x.s rd, vs`: move lane 0 of `vs` into the scalar register `rd`.
+#[derive(Debug, Clone)]
+pub struct Vmvxs {
+    pub rd: Register,
+    pub vs: Register,
+}
+impl fmt::Display for Vmvxs {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "vmv.x.s {}, {}", self.rd, self.vs)
+    }
+}
+
+fn vec_operands(src: &[char]) -> Vec<String> {
+    src.iter()
+        .collect::<String>()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect()
+}
+fn vec_reg(s: &str) -> Register {
+    new_register(&s.chars().collect::<Vec<_>>()).unwrap()
+}
+fn vec_imm(s: &str) -> Immediate {
+    Immediate {
+        radix: 10,
+        value: s.parse().unwrap(),
+    }
+}
+fn new_vsetivli(src: &[char]) -> Vsetivli {
+    let p = vec_operands(src);
+    Vsetivli {
+        rd: vec_reg(&p[0]),
+        vl: vec_imm(&p[1]),
+    }
+}
+fn new_vmvvi(src: &[char]) -> Vmvvi {
+    let p = vec_operands(src);
+    Vmvvi {
+        vd: vec_reg(&p[0]),
+        imm: vec_imm(&p[1]),
+    }
+}
+fn new_vaddvv(src: &[char]) -> Vaddvv {
+    let p = vec_operands(src);
+    Vaddvv {
+        vd: vec_reg(&p[0]),
+        vs1: vec_reg(&p[1]),
+        vs2: vec_reg(&p[2]),
+    }
+}
+fn new_vmvxs(src: &[char]) -> Vmvxs {
+    let p = vec_operands(src);
+    Vmvxs {
+        rd: vec_reg(&p[0]),
+        vs: vec_reg(&p[1]),
+    }
+}
+
 /// An `assume:` block marker: `#(` opens, `#)` closes. The instructions between
 /// them are **verified** (they narrow the symbolic state, e.g. `n = n % 4` bounds
 /// an otherwise-unknown runtime value) but are **not emitted** to the binary, so
@@ -1428,6 +1541,11 @@ pub enum Register {
     X29,
     X30,
     X31,
+    /// A vector register `v0`..`v31` (RISC-V V extension), carried as the index.
+    V(u8),
+    /// The vector-length CSR `vl` (set by `vsetivli`); tracked per hart like a
+    /// register so the vector ops know how many lanes are active.
+    Vl,
 }
 
 impl fmt::Display for Register {
@@ -1465,6 +1583,8 @@ impl fmt::Display for Register {
             Self::X29 => write!(f, "t4"),
             Self::X30 => write!(f, "t5"),
             Self::X31 => write!(f, "t6"),
+            Self::V(n) => write!(f, "v{n}"),
+            Self::Vl => write!(f, "vl"),
         }
     }
 }
@@ -1504,6 +1624,8 @@ impl fmt::Debug for Register {
             Self::X29 => write!(f, "x29/t4"),
             Self::X30 => write!(f, "x30/t5"),
             Self::X31 => write!(f, "x31/t6"),
+            Self::V(n) => write!(f, "v{n}"),
+            Self::Vl => write!(f, "vl"),
         }
     }
 }
@@ -1524,6 +1646,15 @@ fn new_register(src: &[char]) -> Result<Register, Vec<char>> {
         ['a', '5'] => Ok(Register::X15),
         ['a', '6'] => Ok(Register::X16),
         ['a', '7'] => Ok(Register::X17),
+        // Vector registers v0..v31 (RISC-V V extension).
+        ['v', rest @ ..] => rest
+            .iter()
+            .collect::<String>()
+            .parse::<u8>()
+            .ok()
+            .filter(|n| *n < 32)
+            .map(Register::V)
+            .ok_or_else(|| Vec::from(src)),
         _ => Err(Vec::from(src)),
     }
 }

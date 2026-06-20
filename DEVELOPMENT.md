@@ -1070,6 +1070,20 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   verifier proves it across every interleaving; QEMU boots two harts
   (`run_program_smp` -> `-smp 2`) and the UART gets `3`. (Three harts is not yet
   feasible: the racy interleaving x front-search cost exceeds the 10M-step bound.)
+- `tls_probe` ([tests/tls_probe/](tests/tls_probe/)): per-hart thread-local storage
+  end to end. Two harts each store a distinct value (`rank + 1`) in a `thread`
+  variable, read it back, and combine (`1 + 2 = 3`) -- which only holds if codegen
+  gives each hart its own copy. The runtime check behind the per-hart TLS lowering
+  ([§4.8](#48-code-generation--emit_executable-srccodegenrs)).
+- `vector_add` ([tests/vector_add/](tests/vector_add/)): a SIMD vector add via the
+  RISC-V **V (vector) extension** (register-only subset). `vsetivli` sets vl = 4,
+  `vmv.v.i` splats 1 and 2 into `v0`/`v1`, `vadd.vv` adds lane-wise into `v2`,
+  `vmv.x.s` extracts lane 0 (= 3). The verifier models a vector register as a
+  `MemoryValue::List` of lanes and `vl` as a tracked register, computing the
+  lane-wise add concretely; the program is assembled with `-march=rv64gcv` and run
+  under `qemu-riscv64` (which enables V by default), printing `3`. (Vector
+  loads/stores and `vrgather` -- the SIMD pancake-flip primitive -- are a further
+  step toward a vectorised fannkuch.)
 - `heap_regions` ([tests/heap_regions/](tests/heap_regions/)): `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them; the latter would panic in

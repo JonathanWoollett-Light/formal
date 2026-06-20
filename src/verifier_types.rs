@@ -1871,8 +1871,9 @@ impl State {
 pub struct RegisterValues(BTreeMap<Register, MemoryValue>);
 impl RegisterValues {
     pub fn insert(&mut self, key: Register, value: MemoryValue) -> Result<Option<MemoryValue>, ()> {
-        // Attempting to store a list that is larger than 64 bits into a 64 bit register will fail.
-        if let MemoryValue::List(_) = value {
+        // A `List` value (multiple vector lanes) is only valid in a vector register
+        // (`v0`..`v31`); a scalar register holds at most 64 bits.
+        if matches!(value, MemoryValue::List(_)) && !matches!(key, Register::V(_)) {
             todo!()
         }
         Ok(self.0.insert(key, value))

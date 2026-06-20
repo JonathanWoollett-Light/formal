@@ -684,6 +684,10 @@ impl Explorerer {
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
             | Instruction::Fence(_)
+            | Instruction::Vsetivli(_)
+            | Instruction::Vmvvi(_)
+            | Instruction::Vaddvv(_)
+            | Instruction::Vmvxs(_)
             // `ecall` is the boundary to the host/OS; the verifier does not
             // model the call's effect, so it cannot itself be invalid.
             | Instruction::Ecall(_)
@@ -2023,6 +2027,11 @@ unsafe fn compute_next(
                 // A fence accesses no memory; it is a no-op for the SC verifier
                 // and only orders the emitted program, so it is non-racy here.
                 | Instruction::Fence(_)
+                // Vector ops are register-only (no memory): non-racy.
+                | Instruction::Vsetivli(_)
+                | Instruction::Vmvvi(_)
+                | Instruction::Vaddvv(_)
+                | Instruction::Vmvxs(_)
                 | Instruction::J(_) => Some(Err((hart, node))),
                 // `#@` is racy: a region only becomes accessible once its declaration
                 // executes, so its order relative to other harts' raw accesses is
@@ -2478,6 +2487,10 @@ unsafe fn compute_next(
                 | Instruction::Forget(_)
                 // A fence is transparent to the exploration (non-racy); proceed.
                 | Instruction::Fence(_)
+                | Instruction::Vsetivli(_)
+                | Instruction::Vmvvi(_)
+                | Instruction::Vaddvv(_)
+                | Instruction::Vmvxs(_)
                 | Instruction::Region(_) => followup(
                     node_ref
                         .next
@@ -2671,6 +2684,70 @@ unsafe fn apply_node(
             };
             store_value_at(state, sinks, node, hartu, rs1, &zero, 4, updated)?;
             sinks.pinned_nodes.insert(node);
+        }
+        // --- RISC-V V (vector) extension: register-only lane operations. The
+        // verifier models each vector register as a `List` of lane values and the
+        // active length `vl` as a tracked register; the lanes are computed
+        // concretely so a later `vmv.x.s` result is bounded for downstream use. ---
+        Instruction::Vsetivli(Vsetivli { rd, vl }) => {
+            let len = MemoryValue::U32(MemoryValueU32::from(vl.value as u32));
+            state.registers[hartu]
+                .insert(Register::Vl, len.clone())
+                .internal("apply: vsetivli vl insert failed")?;
+            state.registers[hartu]
+                .insert(*rd, len)
+                .internal("apply: vsetivli rd insert failed")?;
+        }
+        Instruction::Vmvvi(Vmvvi { vd, imm }) => {
+            let len = match state.registers[hartu].get(Register::Vl) {
+                Some(MemoryValue::U32(n)) => n.start() as usize,
+                _ => {
+                    return Err(CompilerError::Unsupported(
+                        "vmv.v.i: vl not set (missing vsetivli)".to_string(),
+                    ))
+                }
+            };
+            let lanes = vec![MemoryValue::from(*imm); len];
+            state.registers[hartu]
+                .insert(*vd, MemoryValue::List(lanes))
+                .internal("apply: vmv.v.i insert failed")?;
+        }
+        Instruction::Vaddvv(Vaddvv { vd, vs1, vs2 }) => {
+            let a = match state.registers[hartu].get(vs1) {
+                Some(MemoryValue::List(l)) => l.clone(),
+                _ => {
+                    return Err(CompilerError::Unsupported(
+                        "vadd.vv: vs1 is not a vector".to_string(),
+                    ))
+                }
+            };
+            let b = match state.registers[hartu].get(vs2) {
+                Some(MemoryValue::List(l)) => l.clone(),
+                _ => {
+                    return Err(CompilerError::Unsupported(
+                        "vadd.vv: vs2 is not a vector".to_string(),
+                    ))
+                }
+            };
+            let sums: Vec<MemoryValue> = a.into_iter().zip(b).map(|(x, y)| x + y).collect();
+            state.registers[hartu]
+                .insert(*vd, MemoryValue::List(sums))
+                .internal("apply: vadd.vv insert failed")?;
+        }
+        Instruction::Vmvxs(Vmvxs { rd, vs }) => {
+            let lane0 = match state.registers[hartu].get(vs) {
+                Some(MemoryValue::List(l)) => {
+                    l.first().cloned().internal("vmv.x.s: empty vector")?
+                }
+                _ => {
+                    return Err(CompilerError::Unsupported(
+                        "vmv.x.s: vs is not a vector".to_string(),
+                    ))
+                }
+            };
+            state.registers[hartu]
+                .insert(*rd, lane0)
+                .internal("apply: vmv.x.s insert failed")?;
         }
         Instruction::Addi(Addi { out, lhs, rhs }) => {
             let lhs_value = state.registers[hartu]

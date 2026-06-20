@@ -430,7 +430,7 @@ LD="$BIN/riscv64-unknown-elf-ld"
 command -v qemu-system-riscv64 >/dev/null 2>&1 || {{ echo "===MISSING===qemu-system-riscv64 is not on the WSL PATH (install QEMU in WSL)"; exit 0; }}
 {{ [ -x "$AS" ] && [ -x "$LD" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (riscv64-unknown-elf-as/ld) was not found at $BIN (set RISCV_BIN, or extract a riscv-gnu-toolchain release there)"; exit 0; }}
 G="$(wslpath '{gen}')"
-"$AS" -o "$G/{name}.o" "$G/{name}.s"
+"$AS" -march=rv64gcv -o "$G/{name}.o" "$G/{name}.s"
 "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
 # `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
@@ -661,7 +661,7 @@ LD="$BIN/riscv64-unknown-elf-ld"
 QEMU="$BIN/qemu-riscv64"
 {{ [ -x "$AS" ] && [ -x "$LD" ] && [ -x "$QEMU" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (as/ld) and user-mode qemu-riscv64 were not found under $BIN (set RISCV_BIN)"; exit 0; }}
 G="$(wslpath '{gen}')"
-"$AS" -o "$G/{name}.o" "$G/{name}.s"
+"$AS" -march=rv64gcv -o "$G/{name}.o" "$G/{name}.s"
 # Static ELF with entry `_start`; `--no-relax` keeps `la` PC-relative (no `gp`).
 "$LD" --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 echo "===OUT_BEGIN==="
