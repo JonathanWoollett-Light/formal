@@ -276,6 +276,7 @@ pub enum Instruction {
     Add(Add),
     Sub(Sub),
     Mul(Mul),
+    Div(Div),
     Rem(Rem),
     Blt(Blt),
     Lb(Lb),
@@ -322,6 +323,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
         ['s', 'u', 'b', ' ', rem @ ..] => Instruction::Sub(new_sub(rem)),
         ['m', 'u', 'l', ' ', rem @ ..] => Instruction::Mul(new_mul(rem)),
+        ['d', 'i', 'v', ' ', rem @ ..] => Instruction::Div(new_div(rem)),
         ['r', 'e', 'm', ' ', rem @ ..] => Instruction::Rem(new_rem(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
@@ -359,6 +361,7 @@ impl fmt::Display for Instruction {
             Add(add) => write!(f, "{add}"),
             Sub(sub) => write!(f, "{sub}"),
             Mul(mul) => write!(f, "{mul}"),
+            Div(div) => write!(f, "{div}"),
             Rem(rem) => write!(f, "{rem}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
@@ -1021,6 +1024,29 @@ impl fmt::Display for Mul {
 
 fn new_mul(src: &[char]) -> Mul {
     Mul {
+        out: new_register(&src[0..2]).unwrap(),
+        lhs: new_register(&src[4..6]).unwrap(),
+        rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// Register-register divide `div rd, rs1, rs2` (signed, like RV64M `div`). The
+/// front-end emits this for `reg = a / b`.
+#[derive(Debug, Clone)]
+pub struct Div {
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Register,
+}
+
+impl fmt::Display for Div {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "div {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
+fn new_div(src: &[char]) -> Div {
+    Div {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),

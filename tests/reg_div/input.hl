@@ -1,0 +1,18 @@
+# Register-register division: `reg = a / b` lowers to `div` (signed integer
+# division, truncating). Two divisions, proven at compile time. Division is what
+# the fannkuch algorithm uses to turn a permutation index into a permutation
+# (index / k!), and what integer printing uses to extract digits (/10).
+d: thread [u32]*1
+t0 = &d
+
+t1 = 100
+t2 = 7
+t3 = t1 / t2      # div -> 100 / 7 = 14
+t4 = 3
+t3 = t3 / t4      # div -> 14 / 3 = 4
+
+t0[0:4] = t3
+t5 = t0[0:4]
+a0 = 4
+require t5 == a0
+exit(0)

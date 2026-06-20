@@ -865,6 +865,20 @@ impl Sub for MemoryValue {
         }
     }
 }
+impl Div for MemoryValue {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self::Output {
+        use MemoryValue::*;
+        match (self, rhs) {
+            // Integer division is `I64 / I64` in the common case (`li` -> I64);
+            // a raw-region (forgotten) load is `I32`, widening to `I64`.
+            (I64(a), I64(b)) => I64(a / b),
+            (I32(a), I64(b)) => I64(MemoryValueI64::from(a) / b),
+            (U32(a), I64(b)) => I64(MemoryValueI64::from(a) / b),
+            x => todo!("{x:?}"),
+        }
+    }
+}
 impl Rem for MemoryValue {
     type Output = Self;
     fn rem(self, rhs: Self) -> Self::Output {
