@@ -86,6 +86,19 @@ cargo run --example translate -- tests/uart_hello/input.hl tests/uart_hello/dial
 
 `cargo-nextest` is the preferred runner (install once with
 `cargo install cargo-nextest`, or the prebuilt from https://get.nexte.st).
+
+**Code coverage.** `cargo cov` runs the whole suite under LLVM source-based
+coverage through that same nextest runner (the `cov` alias is
+`llvm-cov nextest`). One-time setup: `rustup component add llvm-tools-preview`
+and `cargo install cargo-llvm-cov`. `cargo cov --summary-only` prints per-file
+region/line/function coverage; `cargo cov --html` writes a browsable report to
+`target/llvm-cov/html`. Coverage instruments the Rust crate (the verifier, `hl`,
+codegen, `explore`), not the QEMU/MPI subprocesses the boot/cluster tests shell
+out to, so it measures the compiler's own line/branch coverage - a naive but
+useful "is this code exercised at all" signal. Adding a behaviour to the verifier
+should come with a test that covers it (e.g. `tests/reg_add` covers the `add`
+instruction's lowering + symbolic semantics).
+
 Tests print **nothing live to the console** (interactive output corrupts the
 runner's display); long phases stream progress to
 `target/tmp/test-logs/<test>/<phase>.progress` via the `Progress` helper in

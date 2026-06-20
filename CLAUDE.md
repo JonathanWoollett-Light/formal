@@ -18,6 +18,9 @@ For usage (installing the CLI, compiling and running a program) see
 - `cargo nt` / `cargo nt <name>`: run the test suite (cargo-nextest). The
   QEMU-booting tests require the RISC-V GNU toolchain + QEMU under WSL
   (DEVELOPMENT.md §2).
+- `cargo cov` (`--summary-only` / `--html`): run the suite under LLVM code
+  coverage via nextest (DEVELOPMENT.md §2). One-time:
+  `rustup component add llvm-tools-preview` + `cargo install cargo-llvm-cov`.
 - `cargo fmt` / `cargo clippy`: format and lint; `src/verifier.rs` must stay
   clippy-clean (it `#![deny]`s panics/unwraps; DEVELOPMENT.md §9).
 - `cargo run -- new <name>`: the `formal` CLI (scaffold a project,

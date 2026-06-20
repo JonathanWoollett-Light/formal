@@ -1,2 +1,9 @@
 [alias]
 nt = "nextest run" #  --show-progress none
+# Run the test suite under LLVM source-based code coverage (via the same nextest
+# runner). One-time setup: `rustup component add llvm-tools-preview` and
+# `cargo install cargo-llvm-cov`. Examples:
+#   cargo cov --summary-only        # coverage % per file, to the terminal
+#   cargo cov --html                # full HTML report under target/llvm-cov/html
+#   cargo cov --open                # ... and open it
+cov = "llvm-cov nextest"
