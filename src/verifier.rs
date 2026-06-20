@@ -223,11 +223,14 @@ pub unsafe fn step(
                 .map(|node| (h, node))
         })
         .collect::<Result<BTreeMap<u8, NonNull<AstNode>>, CompilerError>>()?;
-    let next_nodes = compute_next(&cont.state, &fronts_ptr, jumped)?;
-
-    // Apply the active node to the successor state shared by all successors.
+    // Apply the active node to the successor state shared by all successors. This
+    // precedes `compute_next` so its lookahead sees the front's own effect (e.g.
+    // an `la` defining the address register the next node accesses); see the same
+    // reordering in `queue_up`.
     let mut successor_state = cont.state.clone();
     apply_node(&mut successor_state, hart, active, configuration, sinks)?;
+
+    let next_nodes = compute_next(&successor_state, &fronts_ptr, jumped)?;
 
     // Build the successor continuation(s): advance the chosen hart to its next.
     let make = |h: u8, next: NonNull<AstNode>| -> Result<Continuation, CompilerError> {
@@ -1220,7 +1223,35 @@ impl Explorerer {
         //         .collect::<BTreeMap<_, _>>()
         // );
 
-        let next_nodes = compute_next(&state, &fronts, jumped)?;
+        // Derive the successor leaves' state: this step's instruction applied
+        // once to the pre-state (every successor shares the same new prefix).
+        // This is what makes a step O(1) in path depth; the replay in
+        // `find_state` is only the post-backtrack fallback.
+        //
+        // This must happen *before* `compute_next`: the interleaving classifier
+        // looks one node past each front, and for a load/store it reads the
+        // address register. When the front node is the `la` that *defines* that
+        // register, the pre-front state does not have it yet -- classifying
+        // against it tripped "racy access register has no value". The front's
+        // own effect (`apply_node` writes only the active hart's destination
+        // register; branch fronts write none) is exactly what the lookahead may
+        // need, so the post-front state is the correct input.
+        let mut successor_state = state;
+        let prev = leaf.prev.as_ref().internal("queue_up: null leaf prev")?;
+        apply_node(
+            &mut successor_state,
+            prev.hart,
+            prev.node,
+            &self.configuration,
+            &mut RecordSinks {
+                accessed: &mut self.accessed,
+                transitions: &mut self.transitions,
+                uncompactable: &mut self.uncompactable,
+                pinned_nodes: &mut self.pinned_nodes,
+            },
+        )?;
+
+        let next_nodes = compute_next(&successor_state, &fronts, jumped)?;
 
         // debug!("racy: {}", next_nodes.is_ok());
 
@@ -1240,25 +1271,6 @@ impl Explorerer {
         //             n.as_ref().as_ref().this.to_string()
         //         ))
         // );
-
-        // Derive the successor leaves' state: this step's instruction applied
-        // once to the pre-state (every successor shares the same new prefix).
-        // This is what makes a step O(1) in path depth; the replay in
-        // `find_state` is only the post-backtrack fallback.
-        let mut successor_state = state;
-        let prev = leaf.prev.as_ref().internal("queue_up: null leaf prev")?;
-        apply_node(
-            &mut successor_state,
-            prev.hart,
-            prev.node,
-            &self.configuration,
-            &mut RecordSinks {
-                accessed: &mut self.accessed,
-                transitions: &mut self.transitions,
-                uncompactable: &mut self.uncompactable,
-                pinned_nodes: &mut self.pinned_nodes,
-            },
-        )?;
 
         // TODO Currently these does breadth first search by pushing to the back of the queue. It would be more
         // efficient to do depth first search (since this is more likely to hit invalid paths earlier). I remember
@@ -1931,12 +1943,15 @@ unsafe fn check_load_at(
 type NextNodes = Result<Vec<(u8, NonNull<AstNode>)>, (u8, NonNull<AstNode>)>;
 
 /// Pointer-free reimplementation of `queue_up`'s interleaving classification:
-/// given the pre-state and each hart's current `fronts` node, returns the next
-/// node each hart would execute, collapsed by the non-racy rule (`Err` = one
-/// non-racy successor; `Ok` = all racy successors). Records taken branches into
-/// `jumped`. This is a verbatim copy of the block inside `queue_up`, lifted so
-/// the parallel `step` can share it; the step-vs-oracle cross-check pins that the
-/// two stay in agreement.
+/// given the **post-front** state (the active node already applied) and each
+/// hart's current `fronts` node, returns the next node each hart would execute,
+/// collapsed by the non-racy rule (`Err` = one non-racy successor; `Ok` = all
+/// racy successors). Records taken branches into `jumped`. The state must be
+/// post-front because the classifier looks one node *past* each front and, for a
+/// load/store, reads its address register -- which the front node itself may
+/// have just defined (an `la`). This is a verbatim copy of the block inside
+/// `queue_up`, lifted so the parallel `step` can share it; the step-vs-oracle
+/// cross-check pins that the two stay in agreement.
 ///
 /// # Safety
 /// `fronts` must reference live AST nodes and `state` be consistent with them.

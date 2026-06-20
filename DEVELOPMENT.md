@@ -332,7 +332,11 @@ I64]`), restricted to any explicitly-annotated locality/type, picks the first
 
 **Hart interleaving enumeration** (`queue_up`,
 [src/verifier.rs:1136](src/verifier.rs#L1136)). For each hart's current node a
-`followup` closure classifies the next instruction as **racy** or **non-racy**:
+`followup` closure classifies the next instruction as **racy** or **non-racy**.
+The classifier (`compute_next`) is given the **post-front** state -- the current
+node's own effect already applied -- because the lookahead for a load/store reads
+its address register, which the current node may have just defined (an `la`);
+classifying against the pre-front state would miss that definition. The arms:
 
 - Loads/stores (`Sb`, `Sw`, `Ld`, `Lw`, `Lb`) are racy **iff** the pointer's
   `MemoryLabel` is `Global` (thread-local accesses assert `thart == hart` and
