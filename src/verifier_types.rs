@@ -782,6 +782,27 @@ impl From<Type> for MemoryValue {
         }
     }
 }
+
+/// A zero-valued `MemoryValue` of `ttype`, for seeding a **global** variable. At
+/// runtime `.bss` is zero (the hosted loader zeroes it, and QEMU's ELF loader
+/// zeroes the NOBITS span of a bare-metal image), so modeling a global's initial
+/// value as `0` rather than the full range is sound -- and it lets a hart read a
+/// shared counter before any explicit write (the work-claiming idiom the harts
+/// use to split fannkuch). Non-scalar types keep the full range (only scalar
+/// globals are zero-seeded).
+pub fn zero_value(ttype: &Type) -> MemoryValue {
+    match ttype {
+        Type::U8 => MemoryValue::U8(MemoryValueU8 { start: 0, stop: 0 }),
+        Type::I8 => MemoryValue::I8(MemoryValueI8 { start: 0, stop: 0 }),
+        Type::U16 => MemoryValue::U16(MemoryValueU16 { start: 0, stop: 0 }),
+        Type::I16 => MemoryValue::I16(MemoryValueI16 { start: 0, stop: 0 }),
+        Type::U32 => MemoryValue::U32(MemoryValueU32 { start: 0, stop: 0 }),
+        Type::I32 => MemoryValue::I32(MemoryValueI32 { start: 0, stop: 0 }),
+        Type::U64 => MemoryValue::U64(MemoryValueU64 { start: 0, stop: 0 }),
+        Type::I64 => MemoryValue::I64(MemoryValueI64 { start: 0, stop: 0 }),
+        other => MemoryValue::from(other.clone()),
+    }
+}
 impl Add for MemoryValue {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
@@ -1822,10 +1843,11 @@ impl State {
                     }
                 }
                 LabelLocality::Global => {
-                    memory.map.insert(
-                        MemoryLabel::Global { label: k.clone() },
-                        MemoryValue::from(t.clone()),
-                    );
+                    // Globals are `.bss` (zero at boot): seed 0, not the full
+                    // range, so a shared counter reads 0 before any write.
+                    memory
+                        .map
+                        .insert(MemoryLabel::Global { label: k.clone() }, zero_value(t));
                 }
             }
         }

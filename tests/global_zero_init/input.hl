@@ -1,0 +1,11 @@
+# Globals live in `.bss`, which is zero at boot (the loader zeroes it, and QEMU's
+# ELF loader zeroes the NOBITS span of a bare-metal image). The verifier models a
+# global's initial value as 0 to match, so a shared counter can be read before any
+# write -- the basis for lock-free work claiming. Here the unwritten global reads
+# 0, proven at compile time and confirmed at runtime.
+counter: global u32
+t0 = &counter
+t1 = t0[0:4]          # read the unwritten global
+a0 = 0
+require t1 == a0      # it is zero
+exit(0)

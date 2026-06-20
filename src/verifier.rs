@@ -2859,10 +2859,14 @@ fn seed_label(
         },
     };
     if !state.memory.map.contains_key(&key) {
-        state
-            .memory
-            .map
-            .insert(key, MemoryValue::from(ttype.clone()));
+        // Globals are `.bss` (zero at boot): seed 0 (mirroring `State::new`), so a
+        // shared counter reads 0 before any write; thread storage keeps the full
+        // range.
+        let seeded = match locality {
+            Locality::Global => zero_value(ttype),
+            Locality::Thread => MemoryValue::from(ttype.clone()),
+        };
+        state.memory.map.insert(key, seeded);
     }
     match (state.configuration.get(label), locality) {
         (None, _) | (Some(_), Locality::Thread) => {
