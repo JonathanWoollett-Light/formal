@@ -1,19 +1,16 @@
-# Runtime input the verifier cannot see: write a literal 12 into a declared
-# region and read it back through a raw address. The raw-address load yields the
-# full range, so the verifier treats n as unknown (it cannot constant-fold);
-# at runtime the region holds 12. Then narrow n%4 in 0..3 and index a 4-element
-# array safely -- provably in-bounds for *any* n.
-section 0x80100000 0x80100008 rw
+# A value the verifier cannot see, the clean way. `a0` holds 12 at runtime, but
+# `forget a0` havocs it to *any* value for the verifier. The verifier then proves
+# `arr[a0 % 4]` is in bounds for *every* a0 (sound), while the runtime keeps
+# a0 = 12. This replaces the old write-a-constant-through-a-region trick: no
+# region, no raw address, and it is sound (the proof covers all values).
 arr: thread [u32]*4
-t0 = 0x80100000
-t1 = 12
-t0[0:4] = t1
-a0 = t0[0:4]       # n: unknown to verifier, 12 at runtime
+a0 = 12
+forget a0           # verifier: a0 = any; runtime: a0 = 12 (emits nothing)
 t2 = 4
-a1 = a0 % t2       # n % 4 -> 0..3
+a1 = a0 % t2        # a0 % 4 -> 0..3
 t3 = &arr
-t4 = a1 * t2       # byte offset 0..12
-t5 = t3 + t4       # &arr[n%4]  (in bounds for any n)
+t4 = a1 * t2        # byte offset 0..12
+t5 = t3 + t4        # &arr[a0 % 4]
 a2 = 7
-t5[0:4] = a2       # arr[n%4] = 7
+t5[0:4] = a2        # arr[a0 % 4] = 7  (in bounds for any a0)
 exit(0)

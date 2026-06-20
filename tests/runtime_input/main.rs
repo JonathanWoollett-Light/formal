@@ -4,16 +4,16 @@ mod common;
 use common::*;
 use formal::*;
 
-/// **Runtime input the verifier cannot see.** A literal `12` is written into a
-/// declared `#@` region and read back through a raw address; a raw-region load
-/// yields the *full range*, so the verifier treats `n` as unknown (it cannot
-/// constant-fold), while at runtime the region holds `12`. The program then
-/// narrows `n % 4` to `0..3` and indexes a 4-element array -- provably in-bounds
-/// for *any* `n`, which is the whole point: safety is proven without the value.
+/// **A value the verifier cannot see, via `forget`.** `a0` holds `12` at runtime,
+/// but `forget a0` havocs it to *any* value for the verifier. The verifier then
+/// proves `arr[a0 % 4]` is in bounds for *every* `a0` -- safety proven without the
+/// value -- while the runtime keeps `a0 = 12`. `forget` replaces the old
+/// write-a-constant-through-a-region trick (no region, no raw address), and it is
+/// *sound*: the proof covers all values, of which the runtime value is one.
 ///
-/// This is the mechanism the fannkuch(n=12) programs use to keep the verifier
-/// from unrolling the search around a known `n`. It boots bare-metal under QEMU
-/// (it touches raw RAM) and exits cleanly with no output.
+/// This is how the fannkuch programs keep the verifier from unrolling the search
+/// around a known `n`. The `#~ a0` is dropped from the binary; it lowers to a
+/// hosted ELF and runs under `qemu-riscv64`, exiting cleanly.
 #[test]
 fn runtime_input() {
     let mut ast = setup_test("runtime_input/dialect.s");
@@ -54,23 +54,17 @@ fn runtime_input() {
         &uncompactable,
         &pinned_nodes,
     );
+    // `forget` is verifier-only: the havoc directive must not appear in the binary.
+    assert!(
+        !asm.contains("#~"),
+        "the `forget` directive must not be emitted:\n{asm}"
+    );
     bless_asm(
         "runtime_input/emitted.s",
         asm.clone(),
         include_str!("emitted.s"),
     );
 
-    // Bare-metal boot: writes 12 into the region, reads it back, indexes safely.
-    let serial = unsafe {
-        run_program(
-            "runtime_input",
-            ast,
-            &configuration,
-            &accessed,
-            &transitions,
-            &uncompactable,
-            &pinned_nodes,
-        )
-    };
-    assert_eq!(serial, "", "runtime_input exits cleanly with no output");
+    let stdout = run_linux("runtime_input", &asm);
+    assert_eq!(stdout, "", "runtime_input exits cleanly with no output");
 }

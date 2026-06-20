@@ -111,6 +111,8 @@ pub fn emit_executable(
             Instruction::Lat(Lat { register, label }) => text.push_str(&format!(
                 "    la {register}, __{label}_type  # #& {register}, {label}\n"
             )),
+            // `forget` is a verifier-only havoc; it emits nothing.
+            Instruction::Forget(_) => {}
             // `fail` must be proven unreachable; trap if somehow reached.
             Instruction::Fail(_) => text.push_str("    ebreak  # fail (proven unreachable)\n"),
             // `unreachable` / program end: halt.

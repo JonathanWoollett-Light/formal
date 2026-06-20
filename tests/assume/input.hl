@@ -1,13 +1,12 @@
-# assume: makes a runtime-unknown n tractable for the verifier by narrowing it to
-# a concrete representative (here 5), so the loops are determinate and terminate.
-# The block is verified but NOT emitted, so the runtime keeps n = 12 and fills
-# arr[0..12]; the verifier proved the fill is memory-safe for n = 5 (a subset).
-section 0x80100000 0x80100008 rw
+# The fannkuch idiom: `forget` then `assume`. `a0` holds 12 at runtime; `forget`
+# makes the verifier treat it as unknown (so it cannot optimise around 12), and
+# the `assume:` block narrows it to the concrete `5` for verification only -- both
+# are dropped from the binary. With a0 = 5 the `while i != a0` loop is determinate
+# and the verifier proves the `arr[i] = i` fill is memory-safe (a subset of the
+# 16-element array); at runtime a0 = 12 and the fill covers arr[0..12].
 arr: thread [u32]*16
-t0 = 0x80100000
-t1 = 12
-t0[0:4] = t1
-a0 = t0[0:4]        # n: unknown to verifier, 12 at runtime
+a0 = 12
+forget a0           # verifier: a0 = any; runtime: a0 = 12
 assume:
     a0 = 5          # verifier-only: explore the n = 5 case (dropped from the binary)
 a2 = 0              # i

@@ -675,6 +675,8 @@ impl Explorerer {
             // `assume:` markers cannot be invalid; they only bracket a block the
             // verifier executes (to narrow state) and codegen drops.
             | Instruction::Assume(_)
+            // `forget` only widens a register's range; it cannot be invalid.
+            | Instruction::Forget(_)
             // `#@` cannot itself be invalid; its effect (declaring a section) is
             // applied during state replay in `find_state`.
             | Instruction::Region(_) => {}
@@ -1959,8 +1961,9 @@ unsafe fn compute_next(
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 // `assume:` markers (`#(`/`#)`) carry no runtime effect and are
-                // never emitted; they advance like a label.
+                // never emitted; they advance like a label. `forget` likewise.
                 | Instruction::Assume(_)
+                | Instruction::Forget(_)
                 | Instruction::Blt(_)
                 | Instruction::Bne(_)
                 | Instruction::Bnez(_)
@@ -2418,6 +2421,7 @@ unsafe fn compute_next(
                 | Instruction::Fail(_)
                 | Instruction::Ecall(_)
                 | Instruction::Assume(_)
+                | Instruction::Forget(_)
                 | Instruction::Region(_) => followup(
                     node_ref
                         .next
@@ -2698,6 +2702,14 @@ unsafe fn apply_node(
         // `assume:` markers (`#(`/`#)`) have no state effect; the body between
         // them applies normally, narrowing state. Codegen drops the whole block.
         Instruction::Assume(_) => {}
+        // `#~ <reg>` (`forget`): havoc the register to the full range, so the
+        // verifier treats it as unknown. Codegen drops it (the runtime value is
+        // untouched). A sound over-approximation (the proof covers all values).
+        Instruction::Forget(Forget { register }) => {
+            state.registers[hartu]
+                .insert(*register, MemoryValue::from(Type::I64))
+                .internal("apply: forget register insert failed")?;
+        }
         // `#@ <start> <end> <perms>`: declare a memory region the program may
         // access. Takes effect when executed (so e.g. a heap allocator declares
         // each allocation as it makes it), extending the sections that raw-address

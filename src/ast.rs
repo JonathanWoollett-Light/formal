@@ -212,6 +212,7 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
         ['#', '@', ' ', rem @ ..] => Instruction::Region(new_region(rem)),
         ['#', '('] => Instruction::Assume(Assume { open: true }),
         ['#', ')'] => Instruction::Assume(Assume { open: false }),
+        ['#', '~', ' ', rem @ ..] => Instruction::Forget(new_forget(rem)),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -289,6 +290,7 @@ pub enum Instruction {
     Beq(Beq),
     Region(Region),
     Assume(Assume),
+    Forget(Forget),
 }
 
 impl Instruction {
@@ -370,6 +372,7 @@ impl fmt::Display for Instruction {
             Beq(beq) => write!(f, "{beq}"),
             Region(region) => write!(f, "{region}"),
             Assume(assume) => write!(f, "{assume}"),
+            Forget(forget) => write!(f, "{forget}"),
         }
     }
 }
@@ -1062,6 +1065,34 @@ pub struct Assume {
 impl fmt::Display for Assume {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", if self.open { "#(" } else { "#)" })
+    }
+}
+
+/// `forget <reg>` (dialect `#~ <reg>`): havoc the register to `any()` -- the
+/// broadest range its (64-bit register) value can take. The verifier "forgets"
+/// whatever it knew, so it must then prove the program for *all* values (a sound
+/// over-approximation); codegen drops it, so the running program keeps the
+/// register's actual value. This is the clean way to introduce a value the
+/// verifier cannot see (replacing a write-then-read through a raw region).
+///
+/// Intended for **scalar** values (a loop bound, an index, a runtime input). A
+/// forgotten register holds a full-range *scalar*, so using it as a pointer
+/// afterwards is conservatively rejected (a full-range address cannot be proven
+/// to land in any region) -- forget the value, not a pointer.
+#[derive(Debug, Clone)]
+pub struct Forget {
+    pub register: Register,
+}
+
+impl fmt::Display for Forget {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#~ {}", self.register)
+    }
+}
+
+fn new_forget(src: &[char]) -> Forget {
+    Forget {
+        register: new_register(&src[0..2]).unwrap(),
     }
 }
 

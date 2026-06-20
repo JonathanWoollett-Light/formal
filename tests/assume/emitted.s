@@ -1,11 +1,7 @@
 .global _start
 _start:
-    #@ 0x80100000 0x80100008 rw
     #$ arr thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
-    li t0, 0x80100000
-    li t1, 12
-    sw t1, 0(t0)
-    lw a0, 0(t0)
+    li a0, 12
     li a2, 0
 _l0:
     beq a2, a0, _l1

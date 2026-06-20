@@ -4,19 +4,19 @@ mod common;
 use common::*;
 use formal::*;
 
-/// The **`assume:` directive**: the verifier executes the block to narrow its
-/// symbolic state, but codegen drops it from the binary, so the runtime keeps the
-/// original value. Here a runtime-unknown `n` (12 at runtime, read through a
-/// region so the verifier cannot see it) is narrowed to the concrete `5` for
-/// verification only -- which makes the `while i != n` loop determinate and lets
-/// the verifier prove the `arr[i] = i` fill is memory-safe (for n = 5, a subset
-/// of the array). The emitted program contains no `li a0, 5`; at runtime it fills
-/// `arr[0..12]`, which is in bounds for the 16-element array.
+/// The **`forget` + `assume:` idiom**. `a0` holds 12 at runtime; `forget a0`
+/// havocs it (so the verifier cannot optimise around the value), and the
+/// `assume:` block narrows it to the concrete `5` for verification only. Both are
+/// dropped from the binary. With `a0 = 5` the `while i != a0` loop is determinate,
+/// so the verifier proves the `arr[i] = i` fill is memory-safe (for n = 5, a
+/// subset of the 16-element array); at runtime `a0 = 12` and the fill covers
+/// `arr[0..12]`, still in bounds.
 ///
 /// This is the lynchpin that makes an otherwise-unbounded runtime-`n` search
 /// tractable. (Narrowing to a *range* of `n` instead of one value needs
-/// indeterminate-branch forking, a separate verifier capability.) Boots
-/// bare-metal under QEMU and exits cleanly.
+/// indeterminate-branch forking, a separate verifier capability.) The directives
+/// are verifier-only -- neither `#~ a0` nor `li a0, 5` appears in the binary -- so
+/// it lowers to a hosted ELF and exits cleanly under `qemu-riscv64`.
 #[test]
 fn assume() {
     let mut ast = setup_test("assume/dialect.s");
@@ -57,23 +57,13 @@ fn assume() {
         &uncompactable,
         &pinned_nodes,
     );
-    // The assume block is verified but never emitted.
+    // The `forget` and `assume` directives are verified but never emitted.
     assert!(
-        !asm.contains("li a0, 5"),
-        "the assume block must not appear in the binary:\n{asm}"
+        !asm.contains("#~") && !asm.contains("li a0, 5"),
+        "the forget/assume directives must not appear in the binary:\n{asm}"
     );
     bless_asm("assume/emitted.s", asm.clone(), include_str!("emitted.s"));
 
-    let serial = unsafe {
-        run_program(
-            "assume",
-            ast,
-            &configuration,
-            &accessed,
-            &transitions,
-            &uncompactable,
-            &pinned_nodes,
-        )
-    };
-    assert_eq!(serial, "", "assume exits cleanly with no output");
+    let stdout = run_linux("assume", &asm);
+    assert_eq!(stdout, "", "assume exits cleanly with no output");
 }

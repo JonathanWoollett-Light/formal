@@ -417,6 +417,16 @@ impl Translator {
             self.out.push("    #?".to_string());
             return Ok(());
         }
+        // `forget <reg>`: havoc the register to `any()` for the verifier (so it
+        // treats the value as unknown), emitting nothing at runtime.
+        if let Some(register) = stripped.strip_prefix("forget ") {
+            let register = register.trim();
+            if !is_register(register) {
+                return Err(err(format!("`{register}` is not a register")));
+            }
+            self.out.push(format!("    #~ {register}"));
+            return Ok(());
+        }
         if let Some(rest) = stripped.strip_prefix("section ") {
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             let [start, end, perms] = tokens.as_slice() else {
