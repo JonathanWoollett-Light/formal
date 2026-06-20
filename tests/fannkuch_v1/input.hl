@@ -1,0 +1,148 @@
+# fannkuch-redux, single-threaded, pure Python dialect (no inline assembly).
+#
+# `n` is read at runtime, but the verifier is made blind to it (`forget`) so it
+# cannot specialise the proof to the concrete value; an `assume` then narrows it
+# to a small constant so verification is *bounded* (it explores fannkuch(5), all
+# n! permutations of that size, concretely). The arrays are sized for the maximum
+# n, so a larger runtime n still fits. The computed checksum and maximum flip
+# count are printed in the Benchmarks Game format.
+#
+# `n` lives in a2 for the whole run (set once); the other persistent registers
+# are a5 = max flips, a6 = checksum, a7 = parity (0/1), a4 = done flag.
+
+perm: thread [u32]*16
+work: thread [u32]*16
+cnt: thread [u32]*16
+
+# --- n: read at runtime, verifier-blind (forget), narrowed to 5 (assume). The
+#     first instruction is an `la` (perm's address) set up before n. ---
+t0 = &perm
+a2 = 5
+forget a2
+assume:
+    a2 = 5
+
+# --- init perm[i] = i for i in 0..n ---
+t1 = 0
+while t1 != a2:
+    t0[0:4] = t1
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+# --- init cnt[i] = 0 for i in 0..n ---
+t0 = &cnt
+t1 = 0
+t3 = 0
+while t1 != a2:
+    t0[0:4] = t3
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+a5 = 0
+a6 = 0
+a7 = 0
+a4 = 0
+
+while a4 == 0:
+    # ===== copy perm -> work =====
+    t0 = &perm
+    t1 = &work
+    t2 = 0
+    while t2 != a2:
+        t4 = t0[0:4]
+        t1[0:4] = t4
+        t0 = t0 + 4
+        t1 = t1 + 4
+        t2 = t2 + 1
+
+    # ===== count flips on work =====
+    a0 = 0
+    t0 = &work
+    t1 = t0[0:4]
+    while t1 != 0:
+        # reverse work[0 .. k] in place, k = t1
+        t2 = &work
+        t3 = &work
+        t4 = 0
+        while t4 != t1:
+            t3 = t3 + 4
+            t4 = t4 + 1
+        t4 = 0
+        t5 = t1 + 0
+        while t4 < t5:
+            t1 = t2[0:4]
+            a1 = t3[0:4]
+            t2[0:4] = a1
+            t3[0:4] = t1
+            t2 = t2 + 4
+            t3 = t3 - 4
+            t4 = t4 + 1
+            t5 = t5 - 1
+        a0 = a0 + 1
+        t1 = t0[0:4]
+
+    # ===== max flips =====
+    if a0 > a5:
+        a5 = a0 + 0
+
+    # ===== checksum += (parity == 0 ? flips : -flips) =====
+    t0 = a0 + 0
+    if a7 == 0:
+        while t0 != 0:
+            a6 = a6 + 1
+            t0 = t0 - 1
+    if a7 != 0:
+        while t0 != 0:
+            a6 = a6 - 1
+            t0 = t0 - 1
+
+    # ===== toggle parity =====
+    t0 = a7 + 0
+    a7 = 1
+    if t0 != 0:
+        a7 = 0
+
+    # ===== next permutation by prefix rotation =====
+    a4 = 1
+    a3 = 1
+    while a3 < a2:
+        # rotate perm[0 .. i] left by one, i = a3
+        t0 = &perm
+        t1 = t0[0:4]
+        t2 = &perm
+        t3 = 0
+        while t3 < a3:
+            t4 = t2[4:8]
+            t2[0:4] = t4
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t2[0:4] = t1
+        # ++cnt[i]
+        t2 = &cnt
+        t3 = 0
+        while t3 < a3:
+            t2 = t2 + 4
+            t3 = t3 + 1
+        t4 = t2[0:4]
+        t4 = t4 + 1
+        t2[0:4] = t4
+        # if cnt[i] <= i: found next (break); else reset and i++
+        t5 = 1
+        if t4 <= a3:
+            a4 = 0
+            a3 = a2 + 0
+            t5 = 0
+        if t5 != 0:
+            t3 = 0
+            t2[0:4] = t3
+            a3 = a3 + 1
+
+# ===== print "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" =====
+a3 = a2 + 0
+print(a6)
+print("\nPfannkuchen(")
+print(a3)
+print(") = ")
+print(a5)
+print("\n")
+exit(0)

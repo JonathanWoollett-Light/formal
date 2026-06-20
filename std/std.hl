@@ -35,10 +35,10 @@ def print(msg):
     # convert each to ASCII, and write the slice. Assumes a non-negative value;
     # zero and signed handling are future work. Clobbers a0, a1, a2, t0, t1, t2, t5.
     if typeof msg == i64:
+        t5 = msg
         __print_buf: thread [u8]*20
         t0 = &__print_buf
         t0 = t0 + 20
-        t5 = msg
         t1 = 10
         a2 = 0
         while t5 != 0:

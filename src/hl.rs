@@ -331,11 +331,13 @@ impl Translator {
             let label = self.fresh_string();
             self.emit_string_storage(&label, &bytes);
             label
-        } else if parse_int(arg).is_some() {
+        } else if parse_int(arg).is_some() || is_register(arg) {
+            // An integer literal or a register binds directly (a scalar value, so
+            // the parameter's `if typeof == i64` arm is taken).
             arg.to_string()
         } else {
             return Err(err(format!(
-                "a call argument must be a \"string\" or an integer, got `{arg}`"
+                "a call argument must be a \"string\", an integer, or a register, got `{arg}`"
             )));
         };
 
@@ -907,6 +909,11 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
     // Immediate: `reg = imm`.
     if parse_int(rhs).is_some() {
         return Ok(format!("    li {lhs}, {rhs}"));
+    }
+
+    // Register copy: `reg = reg2` (move, lowered to `addi rd, rs, 0`).
+    if is_register(rhs) {
+        return Ok(format!("    addi {lhs}, {rhs}, 0"));
     }
 
     Err(format!("unrecognized right-hand side `{rhs}`"))
