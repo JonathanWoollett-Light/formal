@@ -372,6 +372,62 @@ fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// The RISC-V toolchain `bin/` directory used when `RISCV_BIN` is unset.
+///
+/// On Windows the documented workflow extracts a riscv-gnu-toolchain release
+/// into WSL at `$HOME/riscv-toolchain/riscv/bin`. On a native unix host the
+/// distro packages put `riscv64-unknown-elf-*` and `qemu-riscv64` straight on
+/// `PATH`, so the prefix is empty and the scripts resolve the tools through
+/// `PATH` (the `${BIN:+$BIN/}` expansion below drops the slash when `BIN` is
+/// empty). `RISCV_BIN` overrides either default.
+fn riscv_bin() -> String {
+    std::env::var("RISCV_BIN").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "$HOME/riscv-toolchain/riscv/bin".to_string()
+        } else {
+            String::new()
+        }
+    })
+}
+
+/// The shell expression a generated script uses to name host path `p`. Through
+/// WSL a Windows path has to be translated with `wslpath`; running the script
+/// natively under `bash` the path is already in the shell's namespace.
+fn script_path(p: &str) -> String {
+    if cfg!(windows) {
+        format!("$(wslpath '{p}')")
+    } else {
+        p.to_string()
+    }
+}
+
+/// Builds the [`Command`] that runs the build/boot shell `script`.
+///
+/// On Windows it dispatches through WSL (`wsl -e bash -lc`), the documented
+/// Windows route to the Linux RISC-V toolchain + QEMU, detaching WSL from the
+/// console (`CREATE_NO_WINDOW`) because `wsl.exe` otherwise mutates the console
+/// mode and corrupts the test runner's output for the rest of the run. On a
+/// native unix host it runs the script directly under `bash -c` against the
+/// natively-installed toolchain, so the same QEMU-booting tests run here with
+/// no WSL involved.
+fn toolchain_shell(script: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("wsl");
+        command.arg("-e").arg("bash").arg("-lc").arg(script);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new("bash");
+        command.arg("-c").arg(script);
+        command
+    }
+}
+
 /// Writes the generated program `asm` to `target/gen/<name>.s`, then, under WSL,
 /// assembles + links it with the RISC-V GNU toolchain and boots it in
 /// `qemu-system-riscv64 -machine virt`, returning the captured UART output and
@@ -410,26 +466,27 @@ pub fn run_in_qemu_opts(name: &str, asm: &str, smp: u8, long: bool) -> QemuOutco
     } else {
         ("3", "tcg,one-insn-per-tb=on", "guest_errors,exec,nochain")
     };
-    use std::process::Command;
 
     let dir = env!("CARGO_MANIFEST_DIR");
     let gen = format!("{dir}/target/gen");
     std::fs::create_dir_all(&gen).expect("create target/gen");
     std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
 
-    let bin = std::env::var("RISCV_BIN")
-        .unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
+    let bin = riscv_bin();
+    let gpath = script_path(&gen);
     // `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp`. The
     // program halts in a `wfi` loop, so `timeout` bounds the run; the UART output
     // is captured to a file and the CPU faults to the `guest_errors` log.
+    // `${{BIN:+$BIN/}}` prefixes the tools with `$BIN/` only when `BIN` is set,
+    // so an empty `BIN` (native host) resolves them through `PATH`.
     let script = format!(
         r#"set -e
 BIN="{bin}"
-AS="$BIN/riscv64-unknown-elf-as"
-LD="$BIN/riscv64-unknown-elf-ld"
-command -v qemu-system-riscv64 >/dev/null 2>&1 || {{ echo "===MISSING===qemu-system-riscv64 is not on the WSL PATH (install QEMU in WSL)"; exit 0; }}
-{{ [ -x "$AS" ] && [ -x "$LD" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (riscv64-unknown-elf-as/ld) was not found at $BIN (set RISCV_BIN, or extract a riscv-gnu-toolchain release there)"; exit 0; }}
-G="$(wslpath '{gen}')"
+AS="${{BIN:+$BIN/}}riscv64-unknown-elf-as"
+LD="${{BIN:+$BIN/}}riscv64-unknown-elf-ld"
+command -v qemu-system-riscv64 >/dev/null 2>&1 || {{ echo "===MISSING===qemu-system-riscv64 is not on PATH (install QEMU)"; exit 0; }}
+{{ command -v "$AS" >/dev/null 2>&1 && command -v "$LD" >/dev/null 2>&1; }} || {{ echo "===MISSING===the RISC-V toolchain (riscv64-unknown-elf-as/ld) was not found (set RISCV_BIN, or install a riscv-gnu-toolchain release)"; exit 0; }}
+G="{gpath}"
 "$AS" -march=rv64gcv -o "$G/{name}.o" "$G/{name}.s"
 "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
@@ -459,23 +516,7 @@ echo "===END==="
     // writes as it runs.
     let worker = {
         let script = script.clone();
-        std::thread::spawn(move || {
-            let mut command = Command::new("wsl");
-            command.arg("-e").arg("bash").arg("-lc").arg(&script);
-            // Detach WSL from our console (`CREATE_NO_WINDOW`). `wsl.exe`
-            // mutates the console mode of whatever console it attaches to,
-            // which corrupts the test runner's output for the rest of the run
-            // (newlines stop carriage-returning, the "staircase" effect, and
-            // in-place progress displays print a new line per redraw). Its
-            // output is piped by `.output()`, so it never needs the console.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                command.creation_flags(CREATE_NO_WINDOW);
-            }
-            command.output()
-        })
+        std::thread::spawn(move || toolchain_shell(&script).output())
     };
     // Progress (elapsed time + live guest instruction count, read from the exec
     // log QEMU writes as it runs) streams to `target/tmp/<test>.qemu.progress`.
@@ -644,23 +685,21 @@ pub unsafe fn run_program_smp(
 /// Requires the RISC-V GNU toolchain and `qemu-riscv64`; like [`run_in_qemu`] it
 /// panics (failing the test) if they are missing, rather than skipping.
 pub fn run_linux(name: &str, asm: &str) -> String {
-    use std::process::Command;
-
     let dir = env!("CARGO_MANIFEST_DIR");
     let gen = format!("{dir}/target/gen");
     std::fs::create_dir_all(&gen).expect("create target/gen");
     std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
 
-    let bin = std::env::var("RISCV_BIN")
-        .unwrap_or_else(|_| "$HOME/riscv-toolchain/riscv/bin".to_string());
+    let bin = riscv_bin();
+    let gpath = script_path(&gen);
     let script = format!(
         r#"set -e
 BIN="{bin}"
-AS="$BIN/riscv64-unknown-elf-as"
-LD="$BIN/riscv64-unknown-elf-ld"
-QEMU="$BIN/qemu-riscv64"
-{{ [ -x "$AS" ] && [ -x "$LD" ] && [ -x "$QEMU" ]; }} || {{ echo "===MISSING===the RISC-V toolchain (as/ld) and user-mode qemu-riscv64 were not found under $BIN (set RISCV_BIN)"; exit 0; }}
-G="$(wslpath '{gen}')"
+AS="${{BIN:+$BIN/}}riscv64-unknown-elf-as"
+LD="${{BIN:+$BIN/}}riscv64-unknown-elf-ld"
+QEMU="${{BIN:+$BIN/}}qemu-riscv64"
+{{ command -v "$AS" >/dev/null 2>&1 && command -v "$LD" >/dev/null 2>&1 && command -v "$QEMU" >/dev/null 2>&1; }} || {{ echo "===MISSING===the RISC-V toolchain (as/ld) and user-mode qemu-riscv64 were not found (set RISCV_BIN)"; exit 0; }}
+G="{gpath}"
 "$AS" -march=rv64gcv -o "$G/{name}.o" "$G/{name}.s"
 # Static ELF with entry `_start`; `--no-relax` keeps `la` PC-relative (no `gp`).
 "$LD" --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
@@ -673,18 +712,7 @@ echo "===END==="
 
     let worker = {
         let script = script.clone();
-        std::thread::spawn(move || {
-            let mut command = Command::new("wsl");
-            command.arg("-e").arg("bash").arg("-lc").arg(&script);
-            // Detach WSL from the console (see the note in `run_in_qemu`).
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                command.creation_flags(CREATE_NO_WINDOW);
-            }
-            command.output()
-        })
+        std::thread::spawn(move || toolchain_shell(&script).output())
     };
     let mut progress = Progress::new("qemu");
     let started = Instant::now();
@@ -816,28 +844,19 @@ fn resolve_model(default: Model) -> Model {
 /// Requires WSL + a system MPI; like [`run_in_qemu`] it **panics** (failing the
 /// test) if they are absent, rather than skipping.
 pub fn mpirun_formal(ranks: usize, args: &str) -> String {
-    use std::process::Command;
     let dir = env!("CARGO_MANIFEST_DIR");
+    let dpath = script_path(dir);
     let script = format!(
         "set -e\n\
-         cd \"$(wslpath '{dir}')\"\n\
+         cd \"{dpath}\"\n\
          FORMAL_NO_SETUP=1 ~/.cargo/bin/cargo build --features hpc --bin formal \
             --target-dir ~/formal-hpc >/dev/null 2>&1\n\
          mpirun --mca mpi_yield_when_idle 1 --oversubscribe -n {ranks} \
             ~/formal-hpc/debug/formal {args}"
     );
-    let mut command = Command::new("wsl");
-    command.args(["-e", "bash", "-lc", &script]);
-    // Detach WSL from the console (see the note in `run_in_qemu`).
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = command.output().expect(
-        "failed to invoke WSL: WSL with a system MPI (mpirun) and the `--features hpc` build \
-         dependencies is REQUIRED to run the HPC model",
+    let output = toolchain_shell(&script).output().expect(
+        "failed to invoke the shell: a system MPI (mpirun) and the `--features hpc` build \
+         dependencies are REQUIRED to run the HPC model",
     );
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
