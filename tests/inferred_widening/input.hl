@@ -1,0 +1,21 @@
+# Type inference of a global introduced *after* some computation. The verifier
+# searches `acc`'s type best-to-worst (u8, i8, u16, i16, u32, ...); the 4-byte
+# store rejects every type narrower than 4 bytes, and because `acc` is declared
+# mid-program each rejected candidate backtracks through the variable's
+# *mid-program* first encounter (not the program's first instruction) -- the
+# re-attach-after-the-predecessor path the inference tests that declare their
+# variable first never reach. It lands on u32 and the round-tripped value (42)
+# is proven, then boots under `qemu-riscv64` and exits 0.
+
+t0 = 6
+t1 = 7
+t2 = t0 * t1
+
+acc: global _
+t3 = &acc
+t3[0:4] = t2
+t4 = t3[0:4]
+
+a0 = 42
+require t4 == a0
+exit(0)
