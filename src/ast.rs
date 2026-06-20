@@ -271,6 +271,7 @@ pub enum Instruction {
     Lw(Lw),
     Addi(Addi),
     Add(Add),
+    Sub(Sub),
     Mul(Mul),
     Blt(Blt),
     Lb(Lb),
@@ -313,6 +314,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'w', ' ', rem @ ..] => Instruction::Lw(new_lw(rem)),
         ['a', 'd', 'd', 'i', ' ', rem @ ..] => Instruction::Addi(new_addi(rem)),
         ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
+        ['s', 'u', 'b', ' ', rem @ ..] => Instruction::Sub(new_sub(rem)),
         ['m', 'u', 'l', ' ', rem @ ..] => Instruction::Mul(new_mul(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
@@ -348,6 +350,7 @@ impl fmt::Display for Instruction {
             Lw(lw) => write!(f, "{lw}"),
             Addi(addi) => write!(f, "{addi}"),
             Add(add) => write!(f, "{add}"),
+            Sub(sub) => write!(f, "{sub}"),
             Mul(mul) => write!(f, "{mul}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
@@ -962,6 +965,29 @@ impl fmt::Display for Add {
 
 fn new_add(src: &[char]) -> Add {
     Add {
+        out: new_register(&src[0..2]).unwrap(),
+        lhs: new_register(&src[4..6]).unwrap(),
+        rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// Register-register subtract `sub rd, rs1, rs2` (64-bit, like RV64 `sub`). The
+/// front-end emits this for `reg = a - b` when `b` is a register.
+#[derive(Debug, Clone)]
+pub struct Sub {
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Register,
+}
+
+impl fmt::Display for Sub {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "sub {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
+fn new_sub(src: &[char]) -> Sub {
+    Sub {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),

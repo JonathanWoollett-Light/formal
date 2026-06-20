@@ -791,13 +791,13 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
         if !is_register(base) {
             return Err(format!("`{base}` is not a register"));
         }
-        // Register-register forms lower to `add` / `mul` (register subtraction is
-        // not supported yet; use the immediate form `a - imm`).
+        // Register-register forms lower to `add` / `sub` / `mul`.
         if is_register(operand) {
             return match *op {
                 "+" => Ok(format!("    add {lhs}, {base}, {operand}")),
+                "-" => Ok(format!("    sub {lhs}, {base}, {operand}")),
                 "*" => Ok(format!("    mul {lhs}, {base}, {operand}")),
-                _ => Err(format!("register `{op}` is not supported yet")),
+                _ => unreachable!(),
             };
         }
         // Immediate forms: `+`/`-` lower to `addi`; `*` needs a register operand

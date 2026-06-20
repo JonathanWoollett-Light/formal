@@ -12,6 +12,7 @@ use std::iter::once;
 use std::iter::repeat;
 use std::ops::Add;
 use std::ops::Mul;
+use std::ops::Sub;
 use std::ptr::NonNull;
 use thiserror::Error;
 
@@ -819,6 +820,30 @@ impl Mul for MemoryValue {
             (U32(a), U32(b)) => U32(a.mul(&b).unwrap()),
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a).mul(&b).unwrap()),
             (I64(a), U32(b)) => I64(a.mul(&MemoryValueI64::from(b)).unwrap()),
+            x => todo!("{x:?}"),
+        }
+    }
+}
+impl Sub for MemoryValue {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        use MemoryValue::*;
+        match (self, rhs) {
+            // Integer subtraction is `I64 - I64` in the common case (`li` -> I64);
+            // a `U32 - U32` may go negative, so it widens to `I64`.
+            (I64(a), I64(b)) => I64(a.sub(&b).unwrap()),
+            (U64(a), U64(b)) => U64(a.sub(&b).unwrap()),
+            (U32(a), U32(b)) => I64(MemoryValueI64::from(a)
+                .sub(&MemoryValueI64::from(b))
+                .unwrap()),
+            (U32(a), I64(b)) => I64(MemoryValueI64::from(a).sub(&b).unwrap()),
+            (I64(a), U32(b)) => I64(a.sub(&MemoryValueI64::from(b)).unwrap()),
+            // A pointer minus an integer offset walks the offset backwards.
+            (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
+                let signed = MemoryValueI64::try_from(a.offset).unwrap();
+                a.offset = MemoryValueU64::try_from(signed.sub(&b).unwrap()).unwrap();
+                Ptr(MemoryPtr(Some(a)))
+            }
             x => todo!("{x:?}"),
         }
     }
