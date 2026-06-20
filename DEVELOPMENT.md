@@ -100,13 +100,14 @@ should come with a test that covers it (e.g. `tests/reg_add` covers the `add`
 instruction's lowering + symbolic semantics).
 
 The aim is high coverage from **sensible programs and inputs**, not contrived
-line-poking. The baseline is ~81% of regions (`codegen.rs` ~95%, `lib.rs` ~97%,
-`hl.rs` ~90% via `tests/compile_api` exercising `formal::compile` and
-`tests/translate_errors` exercising the front-end's rejection paths; `main.rs`
-~80% via `tests/cli` running the binary). The little proven-correct algorithm
-programs (`fannkuch_redux`, `sieve`, `bubble_sort`, `collatz`, the `reg_*` and
-`indexed` arithmetic tests) are what cover the verifier's branch resolution and
-interval arithmetic from real code rather than line-poking. `src/draw.rs` (an unreferenced verifier-tree visualisation
+line-poking. The baseline is ~82% of regions / ~83% of lines (`codegen.rs` ~95%,
+`lib.rs` ~97%, `hl.rs` ~93% via `tests/compile_api` exercising `formal::compile`
+and `tests/translate_errors` exercising the front-end's rejection paths;
+`main.rs` ~92% via `tests/cli` running the binary). The little proven-correct algorithm
+programs (`fannkuch_redux`, `sieve`, `bubble_sort`, `collatz`, `sentinel_sum`,
+`inferred_widening`, the `reg_*` and `indexed` arithmetic tests) are what cover
+the verifier's branch resolution, type inference and interval arithmetic from
+real code rather than line-poking. `src/draw.rs` (an unreferenced verifier-tree visualisation
 helper with no public API) is excluded from the measurement - covering dead code
 would mean tests that exist only to move the number. The largest remaining gap is
 in `verifier_types.rs`/`verifier.rs`: those are mostly the **value/arithmetic
@@ -1033,6 +1034,19 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   (16 steps) proven at compile time. Combines register-register `div`/`mul`/`rem`
   with the `if n % 2 == 0` zero-test branches (`bnez`/`beqz` on the `rem` result)
   the `reg_*` tests do not reach; boots and exits 0.
+- `sentinel_sum` ([tests/sentinel_sum/](tests/sentinel_sum/)): sums and counts a
+  zero-terminated `[u32]` array with a **data-driven** loop (`while *p != 0`),
+  the sentinel-terminated iteration pattern the counted-loop programs do not use;
+  `require`s the sum (23) and count (6), so loop termination on the sentinel is
+  part of the proof. Covers the `beqz`-on-u32 loop-exit resolution over a value
+  loaded from memory; boots and exits 0.
+- `inferred_widening` ([tests/inferred_widening/](tests/inferred_widening/)):
+  type inference of a `global _` declared **after** some computation. The 4-byte
+  store rejects every type narrower than 4 bytes, and because the variable is
+  introduced mid-program each rejected candidate backtracks through its
+  *mid-program* first encounter (`invalid_path`'s re-attach-after-the-predecessor
+  arm, which the inference tests that declare their variable first never reach);
+  the search lands on `u32` (asserted). Boots and exits 0.
 - `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
   digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
