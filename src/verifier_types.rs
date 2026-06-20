@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::InnerVerifierConfiguration;
 use num::traits::ToBytes;
 use num::CheckedAdd;
+use num::CheckedMul;
 use num::CheckedSub;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -10,6 +11,7 @@ use std::hash::Hash;
 use std::iter::once;
 use std::iter::repeat;
 use std::ops::Add;
+use std::ops::Mul;
 use std::ptr::NonNull;
 use thiserror::Error;
 
@@ -246,6 +248,7 @@ pub trait RangeType {
         + PartialOrd
         + num::CheckedAdd
         + num::CheckedSub
+        + num::CheckedMul
         + num::traits::ToBytes
         + num::traits::FromBytes
         + num::Bounded;
@@ -313,6 +316,23 @@ pub trait RangeType {
     {
         let start = self.start().checked_sub(&other.stop())?;
         let stop = self.stop().checked_sub(&other.start())?;
+        Self::new(start, stop)
+    }
+    /// 2..4 * 3..5 = 6..20. The product range is bounded by the four corner
+    /// products, so this is correct even when an operand straddles zero or is
+    /// negative (e.g. -2..3 * -2..3 = -6..9). `None` on overflow.
+    fn mul(&self, other: &Self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let corners = [
+            self.start().checked_mul(&other.start())?,
+            self.start().checked_mul(&other.stop())?,
+            self.stop().checked_mul(&other.start())?,
+            self.stop().checked_mul(&other.stop())?,
+        ];
+        let start = *corners.iter().min()?;
+        let stop = *corners.iter().max()?;
         Self::new(start, stop)
     }
     fn compare(&self, other: &Self) -> RangeOrdering {
@@ -783,6 +803,22 @@ impl Add for MemoryValue {
                 MemoryValue::Ptr(MemoryPtr(Some(a)))
             }
             (I64(a), I64(b)) => I64(a.add(&b).unwrap()),
+            x => todo!("{x:?}"),
+        }
+    }
+}
+impl Mul for MemoryValue {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use MemoryValue::*;
+        match (self, rhs) {
+            // `li` yields `I64`, and a register is 64-bit, so integer multiply is
+            // `I64 * I64` in the common case; widen narrower operands to match.
+            (I64(a), I64(b)) => I64(a.mul(&b).unwrap()),
+            (U64(a), U64(b)) => U64(a.mul(&b).unwrap()),
+            (U32(a), U32(b)) => U32(a.mul(&b).unwrap()),
+            (U32(a), I64(b)) => I64(MemoryValueI64::from(a).mul(&b).unwrap()),
+            (I64(a), U32(b)) => I64(a.mul(&MemoryValueI64::from(b)).unwrap()),
             x => todo!("{x:?}"),
         }
     }

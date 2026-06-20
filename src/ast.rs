@@ -271,6 +271,7 @@ pub enum Instruction {
     Lw(Lw),
     Addi(Addi),
     Add(Add),
+    Mul(Mul),
     Blt(Blt),
     Lb(Lb),
     Beqz(Beqz),
@@ -312,6 +313,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'w', ' ', rem @ ..] => Instruction::Lw(new_lw(rem)),
         ['a', 'd', 'd', 'i', ' ', rem @ ..] => Instruction::Addi(new_addi(rem)),
         ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
+        ['m', 'u', 'l', ' ', rem @ ..] => Instruction::Mul(new_mul(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
@@ -346,6 +348,7 @@ impl fmt::Display for Instruction {
             Lw(lw) => write!(f, "{lw}"),
             Addi(addi) => write!(f, "{addi}"),
             Add(add) => write!(f, "{add}"),
+            Mul(mul) => write!(f, "{mul}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
@@ -959,6 +962,29 @@ impl fmt::Display for Add {
 
 fn new_add(src: &[char]) -> Add {
     Add {
+        out: new_register(&src[0..2]).unwrap(),
+        lhs: new_register(&src[4..6]).unwrap(),
+        rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// Register-register multiply `mul rd, rs1, rs2` (low 64 bits, like RV64M `mul`).
+/// The front-end emits this for `reg = a * b` (there is no multiply-immediate).
+#[derive(Debug, Clone)]
+pub struct Mul {
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Register,
+}
+
+impl fmt::Display for Mul {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "mul {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
+fn new_mul(src: &[char]) -> Mul {
+    Mul {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),

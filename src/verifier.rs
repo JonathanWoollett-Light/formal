@@ -657,6 +657,7 @@ impl Explorerer {
             | Instruction::Label(_)
             | Instruction::Addi(_)
             | Instruction::Add(_)
+            | Instruction::Mul(_)
             | Instruction::Blt(_)
             | Instruction::Csrr(_)
             | Instruction::Bne(_)
@@ -1947,6 +1948,7 @@ unsafe fn compute_next(
                 | Instruction::Li(_)
                 | Instruction::Addi(_)
                 | Instruction::Add(_)
+                | Instruction::Mul(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 | Instruction::Blt(_)
@@ -2393,6 +2395,7 @@ unsafe fn compute_next(
                 | Instruction::Li(_)
                 | Instruction::Addi(_)
                 | Instruction::Add(_)
+                | Instruction::Mul(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 | Instruction::Sw(_)
@@ -2615,6 +2618,22 @@ unsafe fn apply_node(
             state.registers[hartu]
                 .insert(*out, out_value)
                 .internal("apply: add register insert failed")?;
+        }
+        Instruction::Mul(Mul { out, lhs, rhs }) => {
+            let lhs_value = state.registers[hartu]
+                .get(lhs)
+                .cloned()
+                .internal("apply: mul lhs register has no value")?;
+            let rhs_value = state.registers[hartu]
+                .get(rhs)
+                .cloned()
+                .internal("apply: mul rhs register has no value")?;
+            let out_value = lhs_value * rhs_value;
+            // No rewritable immediate (see `Add`): pin the node.
+            sinks.pinned_nodes.insert(node);
+            state.registers[hartu]
+                .insert(*out, out_value)
+                .internal("apply: mul register insert failed")?;
         }
         #[allow(unreachable_patterns)]
         Instruction::Csrr(Csrr { dest, src }) => match src {

@@ -1,0 +1,22 @@
+# Register-register multiply: compute 5! = 120 by repeated multiplication and
+# prove the result at compile time. `reg = a * b` lowers to `mul` (there is no
+# multiply-immediate), so the verifier must compute the products symbolically
+# and prove the `require`.
+fact: thread [u32]*1
+t0 = &fact
+
+t1 = 1
+t2 = 2
+t1 = t1 * t2      # 1 * 2 = 2
+t2 = 3
+t1 = t1 * t2      # 2 * 3 = 6
+t2 = 4
+t1 = t1 * t2      # 6 * 4 = 24
+t2 = 5
+t1 = t1 * t2      # 24 * 5 = 120
+
+t0[0:4] = t1
+t3 = t0[0:4]
+a0 = 120
+require t3 == a0
+exit(0)
