@@ -1,21 +1,37 @@
-# fannkuch-redux V2: multi-threaded (3 harts) + inline assembly, bare metal.
+# fannkuch-redux V2: REAL parallel work-sharing across 2 harts, bare metal.
 #
-# This is the multi-hart counterpart of fannkuch_v1. Three harts boot at the same
-# entry and read `mhartid`; the **symbolic hart-id model** guarantees only that
-# exactly one of them reads 0 and the ids are unique (they could be [0, 15, 7]),
-# so the program must not assume contiguous ids. It uses the one distinction the
-# verifier can make -- `mhartid == 0` -- to gate the leader's work; every other
-# hart skips straight to the shared `wfi` (inline assembly). All harts converge on
-# the same terminal, so the verifier can track all three fronts. Because the
-# workers do no shared work, their (non-racy) steps collapse and the leader's
-# thread-local fannkuch verifies as cheaply as the single-hart V1.
+# Every hart computes a disjoint slice of the permutation space into its OWN
+# per-hart `thread` arrays, and the partial results are combined lock-free. This
+# is the optimal shape -- unlike a leader/worker split (one hart works, the rest
+# park), the work is genuinely shared. It relies on per-hart thread-local storage
+# (each hart's perm/work/cnt is a distinct copy); the original single-copy
+# thread-local codegen could not express this (concurrent harts clobbered each
+# other), which is the obstacle the per-hart TLS lowering removed.
 #
-# The leader reads `n` at runtime (verifier-blind via `forget`, narrowed by
-# `assume`), computes fannkuch(n), and writes the checksum and max flip count to
-# the QEMU virt UART (0x10000000) as decimal text -- bare metal, no `ecall`.
+# Work split (no enumeration of another hart's permutations):
+#   The n! permutations form n contiguous BLOCKS under the fannkuch rotation
+#   enumeration, indexed by the top odometer digit cnt[n-1]. Block c is the (n-1)!
+#   permutations whose whole array has been rotated left c times; its first
+#   permutation is [c, c+1, ..., n-1, 0, ..., c-1] (perm[j] = (c+j) % n), and the
+#   block is walked by the ordinary next-permutation rotation BOUNDED to the lower
+#   digits (a3 < n-1). Block c spans global indices [c*(n-1)!, (c+1)*(n-1)!); since
+#   (n-1)! is even for n >= 3, every block starts at global parity 0, so a hart's
+#   per-block checksums (local parity also starting at 0) simply ADD to the global
+#   checksum. Each hart h (rank claimed via amoadd) takes blocks h, h+2, h+4, ...
+#   (2-hart stride; 3 harts is verification-infeasible).
+#
+# Combine (lock-free): each hart writes its partial checksum to a per-rank slot and
+# atomic-maxes (amomax) its partial max-flips into a shared word, then bumps a done
+# counter; the last finisher sums the checksum slots, reads the global max, writes
+# the result to the UART, and halts the machine via the sifive_test finisher. The
+# max uses amomax (not a finisher compare-and-select) because at the small verified
+# n the two partials are equal, so a compare branch would be pruned by
+# remove_branches and the runtime n would lose the larger value.
+#
+# n is read at runtime (= 12) but the verifier is blind to it (forget) and an
+# assume narrows it to 3 so verification is bounded.
 
-# uart_int(v): write the non-negative integer v to the UART as decimal. Digit
-# extraction (`/`/`%`) into a thread-local buffer, then the slice to the UART.
+# uart_int(v): write the non-negative integer v to the UART as decimal.
 def uart_int(v):
     t5 = v
     buf: thread [u8]*20
@@ -47,53 +63,93 @@ def uart_str(s):
         a1 = a1 + 1
         t2 = a1[0:1]
 
-# every hart reads mhartid; only the leader (== 0) runs the body below.
-t0 = csr(mhartid)
-if t0 == 0:
-    perm: thread [u32]*16
-    work: thread [u32]*16
-    cnt: thread [u32]*16
+# shared globals (zero-init .bss)
+rank_counter: global u32
+done_counter: global u32
+cs_slots: global [u32]*2
+max_global: global u32
 
-    # n: read at runtime, n = 12 (the benchmark input). The verifier is blind to
-    # it (forget) and an assume narrows it to 3 so verification stays bounded (the
-    # leader runs a long solo stretch while the workers park -- the O(N^2)
-    # front-search worst case -- so the *verified* n is kept small).
-    a2 = 12
-    forget a2
-    assume:
-        a2 = 3
+# per-hart thread-local state (a distinct copy per hart, via per-hart TLS)
+perm: thread [u32]*16
+work: thread [u32]*16
+cnt: thread [u32]*16
+myrank: thread u32
+blockc: thread u32
 
-    # init **all 12** elements (the max n) with a *literal* bound, so the dead-data
-    # compaction keeps the arrays full-sized. Otherwise they are sized to the
-    # verified n (3) and the runtime n = 12 reads past the array -> invalid
-    # permutations -> the flip loop never terminates. perm gets the identity,
-    # cnt and work get 0.
+# n: runtime = 12, verifier-blind (forget), narrowed to 3 (assume).
+a2 = 12
+forget a2
+assume:
+    a2 = 3
+
+# full-init perm[i]=i, cnt=0, work=0 over all 12 (literal bound) so the dead-data
+# compaction keeps the arrays full-sized for the runtime n.
+t0 = &perm
+t1 = 0
+t3 = 12
+while t1 != t3:
+    t0[0:4] = t1
+    t0 = t0 + 4
+    t1 = t1 + 1
+t0 = &cnt
+t1 = 0
+t2 = 0
+while t1 != t3:
+    t0[0:4] = t2
+    t0 = t0 + 4
+    t1 = t1 + 1
+t0 = &work
+t1 = 0
+while t1 != t3:
+    t0[0:4] = t2
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+# claim a unique rank h via an atomic fetch-add on the zero-init counter.
+t0 = &rank_counter
+t1 = 1
+asm:
+    amoadd.w a3, t1, (t0)
+# remember the rank (for the slot index) and seed the first block c = h.
+t0 = &myrank
+t0[0:4] = a3
+t0 = &blockc
+t0[0:4] = a3
+
+# partial accumulators (this hart's contribution across its blocks).
+a5 = 0
+a6 = 0
+
+# ===== block loop: for c = h, h+2, ... while c < n =====
+t0 = &blockc
+t0 = t0[0:4]
+while t0 < a2:
+    # --- build the block's start permutation: perm[j] = (c + j) % n ---
+    t1 = &blockc
+    t1 = t1[0:4]
     t0 = &perm
-    t1 = 0
-    t3 = 12
-    while t1 != t3:
-        t0[0:4] = t1
-        t0 = t0 + 4
-        t1 = t1 + 1
-    t0 = &cnt
-    t1 = 0
     t2 = 0
-    while t1 != t3:
-        t0[0:4] = t2
+    while t2 != a2:
+        t3 = t1 + t2
+        t4 = t3 % a2
+        t0[0:4] = t4
         t0 = t0 + 4
-        t1 = t1 + 1
-    t0 = &work
-    t1 = 0
-    while t1 != t3:
-        t0[0:4] = t2
-        t0 = t0 + 4
-        t1 = t1 + 1
+        t2 = t2 + 1
 
-    a5 = 0
-    a6 = 0
+    # --- reset the odometer cnt[i] = 0 ---
+    t0 = &cnt
+    t2 = 0
+    t3 = 0
+    while t2 != a2:
+        t0[0:4] = t3
+        t0 = t0 + 4
+        t2 = t2 + 1
+
+    # the block starts at global parity 0.
     a7 = 0
-    a4 = 0
 
+    # --- walk the block's (n-1)! permutations ---
+    a4 = 0
     while a4 == 0:
         # copy perm -> work
         t0 = &perm
@@ -111,8 +167,8 @@ if t0 == 0:
         t0 = &work
         t1 = t0[0:4]
         while t1 != 0:
-            # &work[k] directly (k = t1) instead of an O(k) walk per flip; t4
-            # holds the stride (4) for one multiply, then the reverse counter.
+            # &work[k] directly (k = t1); t4 holds the stride (4) for one multiply,
+            # then becomes the reverse counter.
             t2 = &work
             t4 = 4
             t3 = t1 * t4
@@ -152,10 +208,12 @@ if t0 == 0:
         if t0 != 0:
             a7 = 0
 
-        # next permutation by prefix rotation
+        # next permutation, BOUNDED to the lower digits (a3 < n-1) so the walk
+        # stays inside this block (the top digit cnt[n-1] is never carried).
+        a1 = a2 - 1
         a4 = 1
         a3 = 1
-        while a3 < a2:
+        while a3 < a1:
             t0 = &perm
             t1 = t0[0:4]
             t2 = &perm
@@ -177,26 +235,69 @@ if t0 == 0:
             t5 = 1
             if t4 <= a3:
                 a4 = 0
-                a3 = a2 + 0
+                a3 = a1 + 0
                 t5 = 0
             if t5 != 0:
                 t3 = 0
                 t2[0:4] = t3
                 a3 = a3 + 1
 
-    # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" to the UART (the
-    # Benchmarks Game format). n is in a2; save it (the prints clobber a2).
+    # --- advance to this hart's next block: c += 2 ---
+    t0 = &blockc
+    t1 = t0[0:4]
+    t1 = t1 + 2
+    t0[0:4] = t1
+    t0 = t1
+
+# ===== combine: per-rank checksum slot + atomic-max the flip count =====
+t0 = &myrank
+t1 = t0[0:4]
+t2 = 4
+t3 = t1 * t2
+t0 = &cs_slots
+t0 = t0 + t3
+t0[0:4] = a6
+# atomically max this hart's partial into the global max: a lock-free reduction.
+# amomax is a SINGLE instruction, so -- unlike a compare-and-select max in the
+# finisher -- there is no branch for remove_branches to specialise away at the
+# small verified n (where the two harts' partials happen to be equal).
+t0 = &max_global
+asm:
+    amomax.w t1, a5, (t0)
+
+# ===== finisher detection: the last hart combines and outputs =====
+# Release fence: make this hart's slot writes globally visible BEFORE it bumps the
+# done counter, so the finisher (which observes the bump) is guaranteed to see them.
+# The verifier explores all interleavings (SC), but QEMU MTTCG is weakly ordered.
+t0 = &done_counter
+t1 = 1
+asm:
+    fence rw, rw
+    amoadd.w t2, t1, (t0)
+a0 = 1
+if t2 == a0:
+    # Acquire fence: order the done-counter read before the slot reads below.
+    asm:
+        fence rw, rw
+    # total checksum = cs_slots[0] + cs_slots[1]
+    t0 = &cs_slots
+    a5 = t0[0:4]
+    t0 = t0 + 4
+    a6 = t0[0:4]
+    a5 = a5 + a6
+    # total max flips: read the global the harts accumulated with amomax. No
+    # combine, no branch -- the verify-small/run-large branch hazard is gone.
+    t0 = &max_global
+    a6 = t0[0:4]
+    # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" (save n; prints clobber a2)
     a3 = a2 + 0
-    uart_int(a6)
+    uart_int(a5)
     uart_str("\nPfannkuchen(")
     uart_int(a3)
     uart_str(") = ")
-    uart_int(a5)
+    uart_int(a6)
     uart_str("\n")
-
-    # halt the machine cleanly: writing 0x5555 to the QEMU virt sifive_test
-    # finisher (0x100000) exits qemu (status PASS) the moment the result is out,
-    # instead of spinning in wfi until the watchdog timeout kills it.
+    # halt the machine cleanly (sifive_test finisher, 0x5555 = PASS).
     t0 = 0x100000
     t1 = 0x5555
     t0[0:4] = t1

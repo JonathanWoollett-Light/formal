@@ -683,6 +683,7 @@ impl Explorerer {
             | Instruction::Beqz(_)
             | Instruction::Bge(_)
             | Instruction::Wfi(_)
+            | Instruction::Fence(_)
             // `ecall` is the boundary to the host/OS; the verifier does not
             // model the call's effect, so it cannot itself be invalid.
             | Instruction::Ecall(_)
@@ -2019,6 +2020,9 @@ unsafe fn compute_next(
                 // `ecall` has no verifier-modeled effect, so its ordering
                 // against other harts is unobservable here: non-racy.
                 | Instruction::Ecall(_)
+                // A fence accesses no memory; it is a no-op for the SC verifier
+                // and only orders the emitted program, so it is non-racy here.
+                | Instruction::Fence(_)
                 | Instruction::J(_) => Some(Err((hart, node))),
                 // `#@` is racy: a region only becomes accessible once its declaration
                 // executes, so its order relative to other harts' raw accesses is
@@ -2472,6 +2476,8 @@ unsafe fn compute_next(
                 | Instruction::Ecall(_)
                 | Instruction::Assume(_)
                 | Instruction::Forget(_)
+                // A fence is transparent to the exploration (non-racy); proceed.
+                | Instruction::Fence(_)
                 | Instruction::Region(_) => followup(
                     node_ref
                         .next
@@ -2627,12 +2633,14 @@ unsafe fn apply_node(
         Instruction::Lb(Lb { to, from, offset }) => {
             find_state_load(state, sinks, node, hartu, to, from, offset, 1)?;
         }
-        Instruction::Amoadd(Amoadd { rd, rs2, rs1 }) => {
-            // Atomic word read-modify-write: `rd = mem[rs1]; mem[rs1] = rd + rs2`,
+        Instruction::Amoadd(Amoadd { rd, rs2, rs1, op }) => {
+            // Atomic word read-modify-write: `rd = mem[rs1]; mem[rs1] = op(rd, rs2)`,
             // one indivisible step (its racy ordering against other harts is what
-            // `queue_up` enumerates). `amoadd.w` has no offset immediate (the
-            // address is exactly rs1), so pin the node against compaction's offset
-            // rewriting.
+            // `queue_up` enumerates). It has no offset immediate (the address is
+            // exactly rs1), so pin the node against compaction's offset rewriting.
+            // `Max` is the lock-free parallel max reduction; being one instruction
+            // it has no branch for `remove_branches` to drop (unlike a scalar
+            // compare-and-select max, which a verify-small run could specialise away).
             let zero = Offset {
                 value: Immediate {
                     radix: 10,
@@ -2642,13 +2650,25 @@ unsafe fn apply_node(
             find_state_load(state, sinks, node, hartu, rd, rs1, &zero, 4)?;
             let old = state.registers[hartu]
                 .get(rd)
-                .internal("amoadd: rd has no value after load")?
+                .internal("amo: rd has no value after load")?
                 .clone();
-            let addend = state.registers[hartu]
+            let operand = state.registers[hartu]
                 .get(rs2)
-                .internal("amoadd: rs2 has no value")?
+                .internal("amo: rs2 has no value")?
                 .clone();
-            let updated = old + addend;
+            let updated = match op {
+                AmoOp::Add => old + operand,
+                AmoOp::Max => match old.compare(&operand) {
+                    Some(RangeOrdering::Less) => operand,
+                    Some(RangeOrdering::Equal | RangeOrdering::Greater) => old,
+                    // None or a range overlap (Cover/Within/Matches): indeterminate.
+                    _ => {
+                        return Err(CompilerError::Unsupported(
+                            "amomax: indeterminate comparison".to_string(),
+                        ))
+                    }
+                },
+            };
             store_value_at(state, sinks, node, hartu, rs1, &zero, 4, updated)?;
             sinks.pinned_nodes.insert(node);
         }
@@ -2786,6 +2806,8 @@ unsafe fn apply_node(
         },
         // TODO Some interrupt state is likely affected here so this needs to be added.
         Instruction::Wfi(_) => {}
+        // A fence orders memory at runtime; it has no effect on the verifier state.
+        Instruction::Fence(_) => {}
         // `ecall`: the verifier does not model the system call's effect (the
         // write/exit happens in the host), so applying it leaves state unchanged.
         Instruction::Ecall(_) => {}

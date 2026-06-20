@@ -262,6 +262,7 @@ pub enum Instruction {
     Bnez(Bnez),
     J(J),
     Wfi(Wfi),
+    Fence(Fence),
     Ecall(Ecall),
     Label(LabelInstruction),
     Global(Global),
@@ -313,6 +314,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['b', 'n', 'e', 'z', ' ', rem @ ..] => Instruction::Bnez(new_bnez(rem)),
         ['j', ' ', rem @ ..] => Instruction::J(new_j(rem)),
         ['w', 'f', 'i'] => Instruction::Wfi(Wfi),
+        ['f', 'e', 'n', 'c', 'e', ..] => Instruction::Fence(Fence),
         ['e', 'c', 'a', 'l', 'l'] => Instruction::Ecall(Ecall),
         ['.', 'd', 'a', 't', 'a'] => Instruction::Data(Data),
         ['.', 'a', 's', 'c', 'i', 'i', ' ', rem @ ..] => Instruction::Ascii(new_ascii(rem)),
@@ -327,7 +329,10 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['d', 'i', 'v', ' ', rem @ ..] => Instruction::Div(new_div(rem)),
         ['r', 'e', 'm', ' ', rem @ ..] => Instruction::Rem(new_rem(rem)),
         ['a', 'm', 'o', 'a', 'd', 'd', '.', 'w', ' ', rem @ ..] => {
-            Instruction::Amoadd(new_amoadd(rem))
+            Instruction::Amoadd(new_amo(rem, AmoOp::Add))
+        }
+        ['a', 'm', 'o', 'm', 'a', 'x', '.', 'w', ' ', rem @ ..] => {
+            Instruction::Amoadd(new_amo(rem, AmoOp::Max))
         }
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
@@ -351,6 +356,7 @@ impl fmt::Display for Instruction {
             Bnez(bnez) => write!(f, "{bnez}"),
             J(j) => write!(f, "{j}"),
             Wfi(wfi) => write!(f, "{wfi}"),
+            Fence(fence) => write!(f, "{fence}"),
             Ecall(ecall) => write!(f, "{ecall}"),
             Label(label_instruction) => write!(f, "{label_instruction}"),
             Global(global) => write!(f, "{global}"),
@@ -1083,30 +1089,47 @@ fn new_rem(src: &[char]) -> Rem {
 }
 
 /// Atomic fetch-add `amoadd.w rd, rs2, (rs1)` (RV32A/RV64A, word). Atomically:
-/// `rd = mem[rs1]; mem[rs1] = rd + rs2`. The single indivisible read-modify-write
-/// the harts use to claim a unique work index from a shared counter.
+/// The read-modify-write applied by an atomic memory operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmoOp {
+    /// `mem[rs1] = old + rs2` (amoadd.w): claim a unique index from a counter.
+    Add,
+    /// `mem[rs1] = max(old, rs2)` (amomax.w): a lock-free parallel max reduction.
+    Max,
+}
+
+/// `rd = mem[rs1]; mem[rs1] = op(rd, rs2)`. The single indivisible read-modify-write
+/// the harts use to combine partial results into a shared word (a unique work index
+/// via `Add`, a running maximum via `Max`).
 #[derive(Debug, Clone)]
 pub struct Amoadd {
     /// Destination: receives the old value.
     pub rd: Register,
-    /// The addend.
+    /// The operand combined with the old value.
     pub rs2: Register,
     /// The address register (the shared word).
     pub rs1: Register,
+    /// Which read-modify-write to apply.
+    pub op: AmoOp,
 }
 
 impl fmt::Display for Amoadd {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "amoadd.w {}, {}, ({})", self.rd, self.rs2, self.rs1)
+        let mnemonic = match self.op {
+            AmoOp::Add => "amoadd.w",
+            AmoOp::Max => "amomax.w",
+        };
+        write!(f, "{mnemonic} {}, {}, ({})", self.rd, self.rs2, self.rs1)
     }
 }
 
-fn new_amoadd(src: &[char]) -> Amoadd {
+fn new_amo(src: &[char], op: AmoOp) -> Amoadd {
     // `rd, rs2, (rs1)`: rd at 0..2, rs2 at 4..6, rs1 at 9..11 (after `, (`).
     Amoadd {
         rd: new_register(&src[0..2]).unwrap(),
         rs2: new_register(&src[4..6]).unwrap(),
         rs1: new_register(&src[9..11]).unwrap(),
+        op,
     }
 }
 
@@ -1772,6 +1795,20 @@ pub struct Wfi;
 impl fmt::Display for Wfi {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "wfi")
+    }
+}
+
+/// A full memory fence (`fence rw, rw`). The verifier explores all hart
+/// interleavings (a sequentially-consistent model), so a fence is a no-op for the
+/// proof; it exists so the emitted program can enforce the ordering that real weak
+/// memory (e.g. QEMU MTTCG) needs between a cross-hart write and the synchronizing
+/// atomic that publishes it.
+#[derive(Debug, Clone)]
+pub struct Fence;
+
+impl fmt::Display for Fence {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "fence rw, rw")
     }
 }
 

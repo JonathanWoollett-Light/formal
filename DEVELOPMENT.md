@@ -1032,29 +1032,25 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   leader; others skip to a shared inline-asm `wfi`) verifies under a 3-hart
   configuration. No shared memory, so the harts are independent (non-racy) and
   the interleaving collapses -- it verifies in milliseconds.
-- `fannkuch_v2` ([tests/fannkuch_v2/](tests/fannkuch_v2/)): **V2** of the
-  fannkuch split -- multi-threaded (3 harts) + inline assembly, bare metal. All
-  three harts read `mhartid`; the symbolic hart-id model guarantees only that
-  exactly one reads 0 and the ids are unique (they could be `[0, 15, 7]`), so the
-  program uses the one distinction the verifier can make -- `mhartid == 0` -- to
-  gate the leader's work, while the others skip to a shared `wfi`. The leader
-  reads `n` at runtime = **12** (the benchmark input); the verifier is blind to it
-  (`forget`) and an `assume` narrows it to 3, so the *verified* search stays small
-  (the leader is a long solo stretch -- the O(N^2) front-search case) while the
-  runtime computes the real n = 12. The arrays are initialised over **all 12
-  elements** with a literal bound so the dead-data compaction keeps them
-  full-sized (else they would be sized to the verified n = 3 and the runtime n = 12
-  would read past them -- see [§9](#9-conventions--gotchas)). The flip-count inner
-  loop addresses the far end of each reversal directly (`&work + k*4`, a `mul`)
-  instead of walking to it, removing an O(k) loop per flip. The leader writes the
-  result to the QEMU virt UART as decimal; booted under the **long-compute** config
-  (`run_program_smp(.., long=true)`: normal multi-threaded TCG, no per-instruction
-  log, 420s timeout cap), the UART receives `3968050\nPfannkuchen(12) = 65` -- the
-  answer from the C reference. It then writes the QEMU virt **`sifive_test`**
-  finisher (`0x5555` to `0x100000`) to halt the machine cleanly, so the run ends the
-  instant the result is out (deterministic, no watchdog-timeout race). **`#[ignore]`d**:
-  ~3 min under bare-metal QEMU (~7x slower than user-mode), so run it explicitly
-  (`--run-ignored`).
+- `fannkuch_v2` ([tests/fannkuch_v2/](tests/fannkuch_v2/)): **V2** -- the *optimal*
+  parallel fannkuch: 2 harts genuinely **share** the work (not a leader/worker
+  split), each computing a disjoint set of permutation blocks into its OWN
+  thread-local `perm`/`work`/`cnt`. The n! permutations split into n blocks by the
+  top odometer digit; hart h takes blocks h, h+2, ...; because (n-1)! is even for
+  n >= 3 every block starts at global parity 0, so the per-hart partial checksums
+  simply add. The partials combine **lock-free**: `amoadd` into per-rank checksum
+  slots, `amomax` into a shared max word. `n` is read at runtime = **12**
+  (verifier-blind via `forget`, narrowed to 3 by `assume`); the arrays are
+  full-12-initialised so dead-data compaction keeps them sized for the runtime n
+  (the flip count also addresses `&work + k*4` directly, no O(k) walk). Verified for
+  **2 harts** (3 is infeasible -- the interleaving search exceeds the step budget);
+  booted under round-robin TCG (sequentially consistent, matching the verifier's
+  model), the UART receives `3968050\nPfannkuchen(12) = 65` -- the same answer as the
+  serial C reference, with the work split across two harts, then writes the
+  `sifive_test` finisher to halt cleanly. **`#[ignore]`d** (~2 min under bare-metal
+  QEMU; run with `--run-ignored`). Making this the optimal shape rather than
+  leader/worker required several compiler/verifier updates -- see **parallel-program
+  obstacles** in [§9](#9-conventions--gotchas).
 - `atomic_add` ([tests/atomic_add/](tests/atomic_add/)): `amoadd.w` end to end --
   an inline-asm atomic parsed back from the `asm:` block and modeled as a
   read-modify-write; proven (old value returned, counter incremented) and booted.
@@ -1436,8 +1432,11 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   cheap when the harts advance together (e.g. a racy program where every hart
   branches often) but **O(N²)** for a **leader/worker** program where one hart
   runs a long solo stretch while the others sit parked far back: each step walks
-  back past the whole stretch. `fannkuch_v2` is this case, which is why it keeps
-  `n` small. The debug-only loop backstop is generous (1e9) rather than tight so
+  back past the whole stretch. (`fannkuch_v2` was originally this leader/worker
+  shape; it is now a real 2-hart parallel program -- both harts advance, so the
+  front-search is cheaper -- but its 2-hart verification is still ~3.5M steps and
+  3 harts is infeasible; see **parallel-program obstacles** above.) The debug-only
+  loop backstop is generous (1e9) rather than tight so
   the legitimate deep walk does not trip it; the real guard is the "reached root"
   check. A cached/incremental front map would remove the O(N²) (future work, part
   of the parallel rework).
@@ -1452,6 +1451,43 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   arrays over the full **runtime** range with a *literal* bound (e.g. `0..12`, not
   `0..n`), so every element is live and the array stays full-sized. `fannkuch_v2`
   does this to run n = 12 while verifying n = 3.
+- **Parallel-program obstacles (and how the compiler/verifier was updated).**
+  Making `fannkuch_v2` a *real* parallel work-sharing program (rather than the
+  leader/worker shape, where only one hart computes) surfaced a series of
+  limitations. Each was fixed so the optimal algorithm is expressible; the lessons
+  generalise to any concurrent-multi-hart program:
+  1. **Thread-local storage was single-hart in codegen.** The verifier models each
+     `thread` variable as a distinct copy per (contiguous) hart index, but codegen
+     emitted one fixed-address copy. With two harts running concurrently they
+     clobbered each other's `perm`/`work`/`cnt`, producing invalid permutations
+     whose flip loop never terminates (the program hung). *Fix:* per-hart TLS in
+     codegen -- N copies + a boot prologue setting `tp = mhartid * block_size`, each
+     `la` of a thread-local adding `tp`
+     ([§4.8](#48-code-generation--emit_executable-srccodegenrs); `tls_probe` pins it).
+     Inert for single-hart / leader-worker programs.
+  2. **The verify-small/run-large hazard hits branches, not just arrays.**
+     `remove_branches` drops a branch direction not taken during verification. The
+     parallel max combine `if mf[1] > mf[0]` is never taken at the verified n
+     (where the two harts' partials are *equal*), so the body the runtime n needs
+     was pruned -- the max came out wrong while the checksum was exact. *Fix:* use
+     an **atomic max** (`amomax`) -- a single instruction with no branch to prune --
+     for the reduction; more generally, reduce lock-free with atomics (`amoadd` for
+     the sum, `amomax` for the max) rather than a compare-and-select the verifier
+     can specialise away. (`forget`ting the operands does *not* work: the verifier
+     errors on an indeterminate `bge` rather than forking -- a candidate future
+     improvement.)
+  3. **3-hart verification is infeasible.** The interleaving search for 3 harts
+     exceeds the step budget (>1e7), so the parallel program is verified for **2
+     harts**. The work-split (block stride) is written for 2.
+  4. **The verifier assumes sequential consistency; the runtime must match.** The
+     interleaving search is an SC model. Run the multi-hart program under
+     **round-robin TCG** (single-threaded, SC), *not* MTTCG (`thread=multi`, weakly
+     ordered): under MTTCG a verified cross-hart hand-off can observe a stale read
+     that SC forbids. A `fence` instruction exists for the weak-memory case, but
+     QEMU MTTCG did not reliably honour it here, so round-robin (SC) is the
+     reference execution. (A verifier that models weak memory, or codegen that
+     inserts the right fences, is future work -- it connects to the determinism
+     guardrails in the HPC distributed-verifier plan.)
 - **One `AstNode` = one `Layout::new::<AstNode>()` allocation.** Every AST node is
   its own allocation: `new_ast` allocates them per node, `compress` re-allocates
   them per node, and the optimizer frees them per node (`remove_untouched` /

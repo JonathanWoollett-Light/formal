@@ -398,10 +398,15 @@ pub fn run_in_qemu(name: &str, asm: &str, smp: u8) -> QemuOutcome {
 /// Fault detection (`guest_errors`) is kept.
 pub fn run_in_qemu_opts(name: &str, asm: &str, smp: u8, long: bool) -> QemuOutcome {
     let (timeout, accel, logd) = if long {
-        // `thread=multi` (MTTCG) runs each hart on its own host core, so the
-        // leader gets a full core instead of round-robin time-slicing against the
-        // parked workers.
-        ("420", "tcg,thread=multi", "guest_errors")
+        // Round-robin (single-threaded) TCG, NOT MTTCG. The verifier proves
+        // programs under a sequentially-consistent memory model; round-robin TCG
+        // is SC (one hart runs at a time, shared memory, no reordering), so a
+        // verified cross-hart program (e.g. the parallel fannkuch's slot combine)
+        // is correct. MTTCG (`thread=multi`) is weakly ordered and would need
+        // memory fences that QEMU does not reliably honor here -- it produced
+        // stale cross-hart reads. The cost is no wall-clock parallelism (harts
+        // time-slice), which is fine for these gated long-compute tests.
+        ("420", "tcg", "guest_errors")
     } else {
         ("3", "tcg,one-insn-per-tb=on", "guest_errors,exec,nochain")
     };
