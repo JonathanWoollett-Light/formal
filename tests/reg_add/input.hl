@@ -1,0 +1,19 @@
+# Register-register addition coverage: chained sums (including a self-add) prove
+# an exact total at compile time. Each `reg = a + b` with `b` a register lowers
+# to `add` (the immediate form `reg = a + imm` still lowers to `addi`), so the
+# verifier must compute the sums symbolically and prove the `require`.
+total: thread [u32]*1
+t0 = &total
+
+t1 = 5
+t2 = 3
+t3 = t1 + t2      # add t3, t1, t2  -> 8
+t4 = t3 + t3      # add t4, t3, t3  -> 16 (register added to itself)
+t5 = t4 + t1      # add t5, t4, t1  -> 21
+a1 = t5 + 100     # addi a1, t5, 100 -> 121 (immediate form unchanged)
+
+t0[0:4] = a1
+t1 = t0[0:4]
+a0 = 121
+require t1 == a0
+exit(0)
