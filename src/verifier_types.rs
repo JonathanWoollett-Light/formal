@@ -612,6 +612,15 @@ impl From<MemoryValueU32> for MemoryValueI64 {
     }
 }
 
+impl From<MemoryValueI32> for MemoryValueI64 {
+    fn from(MemoryValueI32 { start, stop }: MemoryValueI32) -> Self {
+        Self {
+            start: i64::from(start),
+            stop: i64::from(stop),
+        }
+    }
+}
+
 impl TryFrom<MemoryValueU64> for MemoryValueI64 {
     type Error = <i64 as TryFrom<u64>>::Error;
     fn try_from(MemoryValueU64 { start, stop }: MemoryValueU64) -> Result<Self, Self::Error> {
@@ -866,6 +875,8 @@ impl Rem for MemoryValue {
             // `0..d`, so a wholly-unknown dividend narrows to `[0, d-1]`, while a
             // concrete dividend gives the exact remainder. `li` yields `I64`.
             (I64(a), I64(b)) => I64(rem_by_constant(&a, &b)),
+            // A raw-region (runtime-input) load yields `I32`; widen to `I64`.
+            (I32(a), I64(b)) => I64(rem_by_constant(&MemoryValueI64::from(a), &b)),
             x => todo!("{x:?}"),
         }
     }
