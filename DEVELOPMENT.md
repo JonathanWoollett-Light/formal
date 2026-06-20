@@ -100,10 +100,13 @@ should come with a test that covers it (e.g. `tests/reg_add` covers the `add`
 instruction's lowering + symbolic semantics).
 
 The aim is high coverage from **sensible programs and inputs**, not contrived
-line-poking. The baseline is ~79% of regions (`lib.rs` ~97%, `hl.rs` ~89% via
-`tests/compile_api` exercising `formal::compile` and `tests/translate_errors`
-exercising the front-end's rejection paths; `main.rs` ~70% via `tests/cli`
-running the binary). `src/draw.rs` (an unreferenced verifier-tree visualisation
+line-poking. The baseline is ~81% of regions (`codegen.rs` ~95%, `lib.rs` ~97%,
+`hl.rs` ~90% via `tests/compile_api` exercising `formal::compile` and
+`tests/translate_errors` exercising the front-end's rejection paths; `main.rs`
+~80% via `tests/cli` running the binary). The little proven-correct algorithm
+programs (`fannkuch_redux`, `sieve`, `bubble_sort`, `collatz`, the `reg_*` and
+`indexed` arithmetic tests) are what cover the verifier's branch resolution and
+interval arithmetic from real code rather than line-poking. `src/draw.rs` (an unreferenced verifier-tree visualisation
 helper with no public API) is excluded from the measurement - covering dead code
 would mean tests that exist only to move the number. The largest remaining gap is
 in `verifier_types.rs`/`verifier.rs`: those are mostly the **value/arithmetic
@@ -615,11 +618,13 @@ __<label>_type` (load the generated descriptor's address); `#!` (fail) →
 The `racy_increment`/`racy_store_inferred`/`racy_store_annotated`/`uart_hello`/`heap_regions` integration tests do this
 **automatically**: each pins the exact emitted program, lowers it to
 `target/gen/<name>.s` and, via the `run_program`/`run_in_qemu` helpers in
-`tests/common/mod.rs`, assembles + links + boots it under WSL, asserting **no
-CPU fault** (and that `uart_hello` writes `Hello World!` to the UART). The toolchain and QEMU
-are **required**: the tests **fail** (not skip) if WSL / the toolchain / QEMU
-are absent; point `RISCV_BIN` at the toolchain `bin/` (default
-`$HOME/riscv-toolchain/riscv/bin`). [scripts/build-run.sh](scripts/build-run.sh)
+`tests/common/mod.rs`, assembles + links + boots it (through WSL on Windows, or
+directly under `bash` on a native unix host -- see `toolchain_shell` in
+`common/mod.rs`), asserting **no CPU fault** (and that `uart_hello` writes
+`Hello World!` to the UART). The toolchain and QEMU are **required**: the tests
+**fail** (not skip) if the toolchain / QEMU are absent; point `RISCV_BIN` at the
+toolchain `bin/` (default `$HOME/riscv-toolchain/riscv/bin` on Windows, or the
+`PATH`-resolved `riscv64-unknown-elf-*` on a unix host). [scripts/build-run.sh](scripts/build-run.sh)
 does the same by hand from the generated files.
 
 <a id="49-the-compile-api--the-formal-cli"></a>
@@ -1009,6 +1014,25 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   (`arr[i]` as `&arr + i*4`, then a slice) -- the point of adding multiply +
   register-register add; writes/reads `arr[1]` and `arr[3]` at computed addresses
   and proves their sum.
+- `sieve` ([tests/sieve/](tests/sieve/)): the Sieve of Eratosthenes counting the
+  primes below 30, with the count (10) **proven** by the closing `require`. A
+  small real program -- a `[u8]` flag array cleared then crossed out over
+  concrete indices, nested `while` loops, `if flags[i] == 0` -- so the `Valid`
+  outcome is a compile-time proof the sieve is correct; exercises the verifier's
+  byte-array model and the `bge`/`bnez` branch resolution, then boots under
+  `qemu-riscv64`. (Note it clears the array first: a fresh `thread` array reads
+  as *any* value to the verifier -- only `global`s are modelled zero-initialised
+  -- so reading an uncleared cell would make `if flags[i] == 0` indeterminate.)
+- `bubble_sort` ([tests/bubble_sort/](tests/bubble_sort/)): bubble sort of a
+  six-element `[u32]` array whose **sortedness is proven** -- after the sort the
+  program `require`s `arr[k] <= arr[k+1]` for every adjacent pair, so `Valid`
+  proves the array came out sorted. Exercises computed indexing (`&arr + k*4`,
+  i.e. `mul`/`add`), u32 loads/stores at offsets 0 and 4, and `bge` over values
+  loaded from memory; boots and exits 0.
+- `collatz` ([tests/collatz/](tests/collatz/)): the Collatz step count from 7
+  (16 steps) proven at compile time. Combines register-register `div`/`mul`/`rem`
+  with the `if n % 2 == 0` zero-test branches (`bnez`/`beqz` on the `rem` result)
+  the `reg_*` tests do not reach; boots and exits 0.
 - `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
   digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic

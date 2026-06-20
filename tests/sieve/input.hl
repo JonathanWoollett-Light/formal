@@ -1,0 +1,58 @@
+# Sieve of Eratosthenes: count the primes below 30 and prove the count is 10
+# (2 3 5 7 11 13 17 19 23 29) at compile time.
+#
+# `flags[k]` starts 0 (a fresh thread array is zero-initialised) and is set to 1
+# once `k` is crossed out as composite. The verifier runs the whole sieve over
+# concrete indices, so the closing `require` is only reachable-as-satisfied if
+# the algorithm is correct -- the `Valid` outcome IS a proof the sieve counts
+# the primes below 30. The program then boots and exits 0.
+#
+# Registers: a0 = i, a1 = n, a2 = count, t0/t4 = pointers, t1 = flag,
+#            t2 = multiple j, t3 = the constant 1.
+
+flags: thread [u8]*30
+
+a1 = 30
+
+# --- clear the flags (every k starts as a prime candidate) ---
+a0 = 0
+while a0 < a1:
+    t0 = &flags
+    t0 = t0 + a0
+    t3 = 0
+    t0[0:1] = t3
+    a0 = a0 + 1
+
+a0 = 2
+
+# --- cross out the multiples of every prime ---
+while a0 < a1:
+    t0 = &flags
+    t0 = t0 + a0
+    t1 = t0[0:1]
+    if t1 == 0:
+        # a0 is prime: mark 2*a0, 3*a0, ... below n as composite.
+        t2 = a0 + a0
+        while t2 < a1:
+            t4 = &flags
+            t4 = t4 + t2
+            t3 = 1
+            t4[0:1] = t3
+            t2 = t2 + a0
+    a0 = a0 + 1
+
+# --- count the survivors in 2..n ---
+a2 = 0
+a0 = 2
+while a0 < a1:
+    t0 = &flags
+    t0 = t0 + a0
+    t1 = t0[0:1]
+    if t1 == 0:
+        a2 = a2 + 1
+    a0 = a0 + 1
+
+# --- prove there are exactly 10 primes below 30 ---
+t5 = 10
+require a2 == t5
+exit(0)

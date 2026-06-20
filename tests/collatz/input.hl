@@ -1,0 +1,29 @@
+# Collatz: the hailstone sequence from 7 reaches 1 in 16 steps
+# (7 22 11 34 17 52 26 13 40 20 10 5 16 8 4 2 1). The verifier follows the whole
+# sequence over concrete values, so the closing `require a1 == 16` is a
+# compile-time proof of the step count. The program then boots and exits 0.
+#
+# Each step is `n/2` when n is even and `3*n + 1` when odd, so this exercises
+# register-register `div`, `mul` and `rem` together with the zero-test branches
+# (`if n % 2 == 0`) the other arithmetic tests do not reach.
+#
+# Registers: a0 = n, a1 = steps, a2 = 1, a3 = 2, a4 = 3, t0 = n % 2.
+
+a0 = 7
+a1 = 0
+a2 = 1
+a3 = 2
+a4 = 3
+
+while a0 != a2:
+    t0 = a0 % a3
+    if t0 == 0:
+        a0 = a0 / a3
+    if t0 != 0:
+        a0 = a0 * a4
+        a0 = a0 + a2
+    a1 = a1 + a2
+
+t5 = 16
+require a1 == t5
+exit(0)
