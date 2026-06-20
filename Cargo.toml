@@ -18,6 +18,9 @@ rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 # Compact binary serde format; `use-std` gives `to_stdvec`/`from_bytes`.
 postcard = { version = "1", features = ["use-std"] }
+# Thousands separators for the big counts in progress reports / utilisation logs
+# (`1_234_567` -> `1,234,567`); used by the HPC logs and the test progress streams.
+thousands = "0.2"
 # The distributed backend's MPI bindings (rsmpi), behind `--features hpc`; links
 # a system MPI library at build time (see build.rs). Optional so the default
 # build needs no MPI.

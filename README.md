@@ -116,6 +116,44 @@ standard library provides `print` and `exit`; and inline assembly is always one
 verification model, and how to work on the compiler are in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
+## Watching verification progress
+
+Verifying a program can take millions of steps, so the tests and the distributed
+runs **do not print to the console** (live output corrupts the test runner's
+display). Each instead streams a tail-able report into
+`target/tmp/test-logs/<test-name>/` - follow one live with, e.g.:
+
+```powershell
+Get-Content -Wait target\tmp\test-logs\hpc_demo\hpc.log
+```
+
+A few terms show up in those reports:
+
+- **the sequential oracle** - the original, simple, single-threaded verifier (the
+  `Explorerer` state machine). It is slow but trusted, so the fast parallel and
+  distributed verifiers are checked against it: they must produce the *same*
+  answer. "Oracle" is the testing sense - the source of the known-correct result.
+  Its log is `verify.progress`; a line `step 173,351 (queue 12,834)` means it has
+  taken 173,351 steps and still has 12,834 pending program states queued up.
+- **wave** - the parallel verifiers explore breadth-first, one *wave* at a time: a
+  wave is a single synchronized round in which every pending state is advanced one
+  step together. Waves count the depth reached - only tens to hundreds even on big
+  programs.
+- **frontier** - how many pending states (the work) are in the current wave: the
+  width of the search at that depth. It balloons as the program forks (racy
+  interleavings and branches) and drains back to zero when verification finishes.
+- **core / node / rank** - a **core** is one CPU core (one worker thread); a
+  **node** is one machine, with many cores; a **rank** is one process in a
+  distributed (MPI) run, one per node. The `utilisation` reports show, per wave,
+  how many of each node's cores are busy and at what percentage:
+
+  ```text
+  wave 7 | frontier 12,438 | cores 22/24 (91%) | node0 8/8 (100%) | node1 8/8 (100%) | node2 6/8 (75%)
+  ```
+
+  A small program leaves most cores idle (little to spread out); a big one fills
+  them.
+
 ## Documentation
 
 - **[DEVELOPMENT.md](DEVELOPMENT.md)**: the technical reference. The language

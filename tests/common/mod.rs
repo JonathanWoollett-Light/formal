@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
+use thousands::Separable;
 
 /// The current test's name, sanitised for use as a path component. libtest /
 /// nextest name the running thread after the test function (e.g.
@@ -92,22 +93,23 @@ impl Progress {
 }
 
 /// Builds an observer for the `verify_configuration_*_observed` calls that
-/// streams a live per-wave **utilisation** line to
-/// `target/tmp/test-logs/<test>/<phase>.progress`. `unit` names a slot: `"core"`
-/// for the in-process pool, `"node"` for the distributed simulation. Each line
-/// shows the wave index, the frontier width, how many slots were busy, and the
-/// per-slot step counts, so you can watch utilisation ramp up as the frontier
-/// fans out and fall away in the tail:
+/// streams a live per-**node** utilisation breakdown to
+/// `target/tmp/test-logs/<test>/<phase>.progress`. The flat per-worker step counts
+/// are grouped into nodes of `cores_per_node` cores each (modelling a cluster of
+/// `ceil(workers / cores_per_node)` nodes), and each line reports, per node, how
+/// many of its cores were busy this wave and at what percentage - so you can watch
+/// utilisation climb as the frontier fans out and fall away in the tail:
 ///
 /// ```text
-/// wave 12 | frontier 8192 | 24/24 cores busy (100%) | per-core [341,338,...]
-/// wave 47 | frontier 3    | 3/24 cores busy (12%)   | per-core [1,1,1,0,...]
+/// wave 6  | frontier 5,000 | cores 24/24 (100%) | node0 8/8 (100%) | node1 8/8 (100%) | node2 8/8 (100%)
+/// wave 47 | frontier 3     | cores 3/24 (12%)   | node0 3/8 (37%)  | node1 0/8 (0%)   | node2 0/8 (0%)
 /// ```
 ///
-/// One line per wave (waves equal the BFS depth, which is small even when each
-/// wave is huge). Pass `Some(&observer)`; keep the returned value alive across the
-/// verification call.
-pub fn utilisation_log(phase: &str, unit: &'static str) -> impl Fn(&WaveReport) + Sync {
+/// One line per BFS wave (waves equal the BFS depth, which is small even when each
+/// wave is huge). Big counts are comma-grouped. Pass `Some(&observer)`; keep the
+/// returned value alive across the verification call.
+pub fn utilisation_log(phase: &str, cores_per_node: usize) -> impl Fn(&WaveReport) + Sync {
+    let cores_per_node = cores_per_node.max(1);
     // A `Mutex` (not `RefCell`) so the observer is `Sync` and can cross into the
     // rayon pool's `install`; it is only ever called between waves, so it never
     // contends.
@@ -115,22 +117,29 @@ pub fn utilisation_log(phase: &str, unit: &'static str) -> impl Fn(&WaveReport) 
         std::fs::File::create(format!("{}/{phase}.progress", test_log_dir())).ok(),
     );
     move |report: &WaveReport| {
-        let total = report.units.len();
-        let busy = report.units.iter().filter(|&&n| n > 0).count();
-        let pct = if total > 0 { 100 * busy / total } else { 0 };
-        let detail = report
-            .units
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
+        let pct = |busy: usize, total: usize| if total > 0 { 100 * busy / total } else { 0 };
+        let cores_total = report.units.len();
+        let cores_busy = report.units.iter().filter(|&&n| n > 0).count();
+        let mut line = format!(
+            "wave {} | frontier {} | cores {}/{} ({}%)",
+            report.wave.separate_with_commas(),
+            report.frontier.separate_with_commas(),
+            cores_busy.separate_with_commas(),
+            cores_total.separate_with_commas(),
+            pct(cores_busy, cores_total),
+        );
+        // Per node: how many of its cores stepped at least one continuation.
+        for (node, cores) in report.units.chunks(cores_per_node).enumerate() {
+            let busy = cores.iter().filter(|&&n| n > 0).count();
+            line.push_str(&format!(
+                " | node{node} {busy}/{} ({}%)",
+                cores.len(),
+                pct(busy, cores.len())
+            ));
+        }
         if let Ok(mut guard) = file.lock() {
             if let Some(handle) = guard.as_mut() {
-                let _ = writeln!(
-                    handle,
-                    "wave {} | frontier {} | {busy}/{total} {unit}s busy ({pct}%) | per-{unit} [{detail}]",
-                    report.wave, report.frontier
-                );
+                let _ = writeln!(handle, "{line}");
             }
         }
     }
@@ -212,7 +221,13 @@ pub unsafe fn trace_valid_path(
     // [`Progress`]).
     let mut progress = Progress::new("verify");
     for step in 0..STEP_CAP {
-        progress.update(|| format!("step {step} (queue {})", explorerer.queue.len()));
+        progress.update(|| {
+            format!(
+                "step {} (queue {})",
+                step.separate_with_commas(),
+                explorerer.queue.len().separate_with_commas()
+            )
+        });
         let pre = front_step(&explorerer);
         match explorerer.next_step() {
             Ok(ExplorePathResult::Continue(next)) => {

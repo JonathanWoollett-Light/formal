@@ -325,13 +325,15 @@ fn distributed_sim_matches_oracle() {
     let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
 
     let index = Ast::index(ast);
-    for ranks in [1usize, 3] {
+    // Simulate small clusters: `nodes` nodes, each with `CORES_PER_NODE` cores.
+    const CORES_PER_NODE: usize = 2;
+    for nodes in [1usize, 3] {
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(ranks)
+            .num_threads(nodes * CORES_PER_NODE)
             .build()
             .expect("build rayon pool");
-        // Stream per-node utilisation to test-logs/<test>/distributed-<ranks>.progress.
-        let utilisation = utilisation_log(&format!("distributed-{ranks}"), "node");
+        // Per-node utilisation -> test-logs/<test>/distributed-<nodes>nodes.progress.
+        let utilisation = utilisation_log(&format!("distributed-{nodes}nodes"), CORES_PER_NODE);
         let local = pool
             .install(|| unsafe {
                 verify_configuration_distributed_sim_observed(
@@ -342,20 +344,21 @@ fn distributed_sim_matches_oracle() {
                 )
             })
             .expect("distributed sim returned a compiler error")
-            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {ranks} ranks"));
+            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {nodes} nodes"));
         assert_eq!(
             local, expected,
-            "distributed-sim outputs differ from the oracle at {ranks} simulated rank(s)"
+            "distributed-sim outputs differ from the oracle on a {nodes}-node cluster"
         );
     }
 }
 
 /// The "cluster at maximal parallelism" run: drive both the distributed-transport
-/// simulation (continuations crossing a postcard serialize/deserialize, as
-/// between nodes) and the in-memory inner pool across **every logical core**, and
-/// **oversubscribed** (2x), confirming both still reproduce the oracle's outputs.
-/// The commutative-union reduce makes the result independent of the rank count,
-/// so 1 rank, all cores, and 2x-oversubscribed all agree with the oracle.
+/// simulation (continuations crossing a postcard serialize/deserialize, as between
+/// nodes) and the in-memory inner pool across simulated clusters of 1, 2, and 4
+/// nodes (each with `CORES_PER_NODE` cores), confirming both still reproduce the
+/// oracle's outputs. The commutative-union reduce makes the result independent of
+/// the worker count, so every topology agrees with the oracle; each run streams a
+/// live per-node utilisation breakdown to the test's log dir.
 #[test]
 fn cluster_sim_maximal_parallelism() {
     let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
@@ -367,17 +370,16 @@ fn cluster_sim_maximal_parallelism() {
     let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
     let index = Ast::index(ast);
 
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    for ranks in [1, cores, cores * 2] {
+    // Simulate clusters of `nodes` nodes, each with `CORES_PER_NODE` cores.
+    const CORES_PER_NODE: usize = 4;
+    for nodes in [1usize, 2, 4] {
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(ranks)
+            .num_threads(nodes * CORES_PER_NODE)
             .build()
             .expect("build rayon pool");
-        // Per-node utilisation of the distributed sim, then per-core utilisation of
-        // the in-process pool, each to its own <…>.progress under the test's log dir.
-        let sim_utilisation = utilisation_log(&format!("distributed-{ranks}"), "node");
+        // Per-node utilisation of the distributed sim, then of the in-process pool,
+        // each to its own <…>.progress under the test's log dir.
+        let sim_utilisation = utilisation_log(&format!("distributed-{nodes}nodes"), CORES_PER_NODE);
         let sim = pool
             .install(|| unsafe {
                 verify_configuration_distributed_sim_observed(
@@ -388,10 +390,13 @@ fn cluster_sim_maximal_parallelism() {
                 )
             })
             .expect("distributed sim returned a compiler error")
-            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {ranks} ranks"));
-        assert_eq!(sim, expected, "distributed sim differs at {ranks} ranks");
+            .unwrap_or_else(|| panic!("distributed sim rejected a valid config at {nodes} nodes"));
+        assert_eq!(
+            sim, expected,
+            "distributed sim differs on a {nodes}-node cluster"
+        );
 
-        let par_utilisation = utilisation_log(&format!("parallel-{ranks}"), "core");
+        let par_utilisation = utilisation_log(&format!("parallel-{nodes}nodes"), CORES_PER_NODE);
         let par = pool
             .install(|| unsafe {
                 verify_configuration_parallel_observed(
@@ -402,8 +407,11 @@ fn cluster_sim_maximal_parallelism() {
                 )
             })
             .expect("parallel pool returned a compiler error")
-            .unwrap_or_else(|| panic!("parallel pool rejected a valid config at {ranks} ranks"));
-        assert_eq!(par, expected, "parallel pool differs at {ranks} ranks");
+            .unwrap_or_else(|| panic!("parallel pool rejected a valid config at {nodes} nodes"));
+        assert_eq!(
+            par, expected,
+            "parallel pool differs on a {nodes}-node cluster"
+        );
     }
 }
 
@@ -449,20 +457,31 @@ fn uart_hello_maximal_parallelism() {
     };
     let expected = unsafe { valid_path_to_local(ast, &vp) }.expect("re-key reference");
 
-    // The inner parallel pool across every logical core, streaming per-core
-    // utilisation to target/tmp/test-logs/<test>/parallel.progress.
+    // The inner parallel pool across every logical core, viewed as a simulated
+    // 4-node cluster (each node `cores_per_node` cores); streams a live per-node
+    // utilisation breakdown to target/tmp/test-logs/<test>/parallel.progress.
     let index = Ast::index(ast);
-    let utilisation = utilisation_log("parallel", "core");
-    let local = unsafe {
-        verify_configuration_parallel_observed(
-            &index,
-            &sys,
-            &oracle.configuration,
-            Some(&utilisation),
-        )
-    }
-    .expect("parallel pool errored")
-    .expect("parallel pool rejected uart_hello's winning configuration");
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let nodes = 4usize;
+    let cores_per_node = cores.div_ceil(nodes).max(1);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(nodes * cores_per_node)
+        .build()
+        .expect("build rayon pool");
+    let utilisation = utilisation_log("parallel", cores_per_node);
+    let local = pool
+        .install(|| unsafe {
+            verify_configuration_parallel_observed(
+                &index,
+                &sys,
+                &oracle.configuration,
+                Some(&utilisation),
+            )
+        })
+        .expect("parallel pool errored")
+        .expect("parallel pool rejected uart_hello's winning configuration");
     assert_eq!(
         local, expected,
         "parallel uart_hello outputs differ from the fixed-config reference"

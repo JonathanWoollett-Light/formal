@@ -33,6 +33,7 @@ use mpi::traits::*;
 use mpi::{Count, Tag};
 use std::collections::{BTreeMap, VecDeque};
 use std::ptr::NonNull;
+use thousands::Separable;
 
 fn internal(message: impl Into<String>) -> crate::verifier::CompilerError {
     crate::verifier::CompilerError::Internal(message.into())
@@ -332,10 +333,10 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
             println!(
                 "[rank {rank} t={:.2}s] processed={} deque={} steals_sent={} work_received={}",
                 started.elapsed().as_secs_f64(),
-                stats.processed,
-                deque.len(),
-                stats.steals_sent,
-                stats.work_received,
+                stats.processed.separate_with_commas(),
+                deque.len().separate_with_commas(),
+                stats.steals_sent.separate_with_commas(),
+                stats.work_received.separate_with_commas(),
             );
         }
         // 1. Service all pending messages.
@@ -607,13 +608,13 @@ pub fn mpi_verify(program_path: &str, harts: &[u8]) {
             min_p = min_p.min(s.processed);
             max_p = max_p.max(s.processed);
             println!(
-                "  {:>4}  {:>9}  {:>11}  {:>13}  {:>9}  {:>10}  {:>7.3}",
+                "  {:>4}  {:>11}  {:>11}  {:>13}  {:>9}  {:>11}  {:>7.3}",
                 s.rank,
-                s.processed,
-                s.steals_sent,
-                s.steals_served,
-                s.work_received,
-                s.idle_iters,
+                s.processed.separate_with_commas(),
+                s.steals_sent.separate_with_commas(),
+                s.steals_served.separate_with_commas(),
+                s.work_received.separate_with_commas(),
+                s.idle_iters.separate_with_commas(),
                 s.seconds,
             );
         }
@@ -624,8 +625,11 @@ pub fn mpi_verify(program_path: &str, harts: &[u8]) {
         };
         let wall = stats.iter().map(|s| s.seconds).fold(0.0, f64::max);
         println!(
-            "  total processed={total_processed} across {size} rank(s); \
-             load balance max/min={balance:.2} (max {max_p}, min {min_p}); wall {wall:.3}s"
+            "  total processed={} across {size} rank(s); \
+             load balance max/min={balance:.2} (max {}, min {}); wall {wall:.3}s",
+            total_processed.separate_with_commas(),
+            max_p.separate_with_commas(),
+            min_p.separate_with_commas(),
         );
         println!(
             "[mpi-verify] ranks={size} program={program_path} config={configuration} \
