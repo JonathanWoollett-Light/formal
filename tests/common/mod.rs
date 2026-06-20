@@ -101,13 +101,16 @@ impl Progress {
 /// utilisation climb as the frontier fans out and fall away in the tail:
 ///
 /// ```text
-/// wave 6  | frontier 5,000 | cores 24/24 (100%) | node0 8/8 (100%) | node1 8/8 (100%) | node2 8/8 (100%)
-/// wave 47 | frontier 3     | cores 3/24 (12%)   | node0 3/8 (37%)  | node1 0/8 (0%)   | node2 0/8 (0%)
+/// wave      6 | frontier               5,000 | cores 24/24 (100%) | node0 8/8 (100%) | node1 8/8 (100%)
+/// wave     47 | frontier                   3 | cores  3/24 ( 12%) | node0 3/8 ( 37%) | node1 0/8 (  0%)
 /// ```
 ///
 /// One line per BFS wave (waves equal the BFS depth, which is small even when each
-/// wave is huge). Big counts are comma-grouped. Pass `Some(&observer)`; keep the
-/// returned value alive across the verification call.
+/// wave is huge). Every field is space-padded to a constant width so the line stays
+/// aligned as the values change: `wave` to 6 digits, `frontier` to 15 comma-grouped
+/// digits, each busy count to the width of its maximum, and the percent to 3. Big
+/// counts are comma-grouped. Pass `Some(&observer)`; keep the returned value alive
+/// across the verification call.
 pub fn utilisation_log(phase: &str, cores_per_node: usize) -> impl Fn(&WaveReport) + Sync {
     let cores_per_node = cores_per_node.max(1);
     // A `Mutex` (not `RefCell`) so the observer is `Sync` and can cross into the
@@ -118,23 +121,29 @@ pub fn utilisation_log(phase: &str, cores_per_node: usize) -> impl Fn(&WaveRepor
     );
     move |report: &WaveReport| {
         let pct = |busy: usize, total: usize| if total > 0 { 100 * busy / total } else { 0 };
-        let cores_total = report.units.len();
-        let cores_busy = report.units.iter().filter(|&&n| n > 0).count();
+        let total = report.units.len();
+        let busy = report.units.iter().filter(|&&n| n > 0).count();
+        // Constant-width fields: `frontier` for up to 15 comma-grouped digits (19
+        // chars), `wave` for 6, and each current busy count right-padded to the
+        // width of its maximum (total cores / a full node's cores).
+        let total_width = total.separate_with_commas().len();
+        let node_width = cores_per_node.separate_with_commas().len();
+        let frontier = report.frontier.separate_with_commas();
+        let busy_str = busy.separate_with_commas();
+        let total_str = total.separate_with_commas();
         let mut line = format!(
-            "wave {} | frontier {} | cores {}/{} ({}%)",
-            report.wave.separate_with_commas(),
-            report.frontier.separate_with_commas(),
-            cores_busy.separate_with_commas(),
-            cores_total.separate_with_commas(),
-            pct(cores_busy, cores_total),
+            "wave {:>6} | frontier {frontier:>19} | cores {busy_str:>total_width$}/{total_str} ({:>3}%)",
+            report.wave,
+            pct(busy, total),
         );
         // Per node: how many of its cores stepped at least one continuation.
         for (node, cores) in report.units.chunks(cores_per_node).enumerate() {
-            let busy = cores.iter().filter(|&&n| n > 0).count();
+            let n_busy = cores.iter().filter(|&&n| n > 0).count();
+            let n_busy_str = n_busy.separate_with_commas();
+            let n_total = cores.len();
             line.push_str(&format!(
-                " | node{node} {busy}/{} ({}%)",
-                cores.len(),
-                pct(busy, cores.len())
+                " | node{node} {n_busy_str:>node_width$}/{n_total} ({:>3}%)",
+                pct(n_busy, n_total),
             ));
         }
         if let Ok(mut guard) = file.lock() {
