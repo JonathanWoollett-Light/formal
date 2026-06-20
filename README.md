@@ -110,11 +110,17 @@ require t1 < t2      # proven to hold on EVERY interleaving, or the program is r
 unreachable
 ```
 
-Control flow is `if` / `while` / `require` blocks (there is no `goto`); the
-standard library provides `print` and `exit`; and inline assembly is always one
-`asm:` block away. The full language reference, the dialect it compiles to, the
-verification model, and how to work on the compiler are in
-[DEVELOPMENT.md](DEVELOPMENT.md).
+Control flow is `if` / `while` / `require` blocks (there is no `goto`).
+Arithmetic is register-register (`+`, `-`, `*`, `/`, `%`) or immediate; array
+indexing is `&arr + i*elem` then a slice. The standard library provides `exit`
+and a `print` that is **polymorphic over its argument** -- `print("hi")` writes a
+string, `print(42)` writes an integer, chosen at compile time with no runtime
+cost. Two verifier-only directives reason about runtime input: `forget x` makes
+the verifier blind to a value (proving the code for *every* value), and an
+`assume:` block narrows the verifier's state to keep a proof bounded. Inline
+assembly is always one `asm:` block away. The full language reference, the
+dialect it compiles to, the verification model, and how to work on the compiler
+are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Watching verification progress
 

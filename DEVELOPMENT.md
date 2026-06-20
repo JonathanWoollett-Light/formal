@@ -107,10 +107,13 @@ running the binary). `src/draw.rs` (an unreferenced verifier-tree visualisation
 helper with no public API) is excluded from the measurement - covering dead code
 would mean tests that exist only to move the number. The largest remaining gap is
 in `verifier_types.rs`/`verifier.rs`: those are mostly the **value/arithmetic
-paths for types and operations the language does not implement yet** (signed and
-64-bit arithmetic, multiply, indexed addressing - they `panic` on a `todo!`
-today). They are deliberately uncovered until the feature lands, so coverage of
-that code climbs **with** each new operation rather than from a test written
+paths for type/operation combinations the language does not implement yet**. The
+register-register arithmetic set (`add`/`sub`/`mul`/`div`/`rem`) and indexed
+addressing have since landed (with the `reg_*`/`indexed` tests), so those paths
+are now covered; what remains uncovered is the rarer combinations that still
+`panic` on a `todo!` (unions, multi-element list slices, some width/sign mixes,
+`.ascii`). They are deliberately uncovered until the feature lands, so coverage
+of that code climbs **with** each new operation rather than from a test written
 against an unimplemented path. Re-run `cargo cov` after adding a feature.
 
 Tests print **nothing live to the console** (interactive output corrupts the
@@ -663,9 +666,13 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 | `t0 = type(welcome)`                     | `#& t0, welcome`                                                                                                                                           |
 | `t0 = csr(mhartid)`                      | `csrr t0, mhartid`                                                                                                                                         |
 | `t1 = 0x10000000`                        | `li t1, 0x10000000` (radix text preserved)                                                                                                                 |
-| `t1 = t1 + 1` / `t1 = t1 - 8`            | `addi t1, t1, 1` / `addi t1, t1, -8`                                                                                                                       |
+| `t2 = t1`                                | `addi t2, t1, 0` (register move)                                                                                                                            |
+| `t1 = t1 + 1` / `t1 = t1 - 8`            | `addi t1, t1, 1` / `addi t1, t1, -8` (immediate `+`/`-` only)                                                                                               |
+| `t3 = t1 + t2` / `t3 = t1 - t2`          | `add t3, t1, t2` / `sub t3, t1, t2` (register-register)                                                                                                     |
+| `t3 = t1 * t2` / `t3 = t1 / t2` / `t3 = t1 % t2` | `mul` / `div` / `rem t3, t1, t2` (register-register; `*`/`/`/`%` have no immediate form, so the operand must be a register)                          |
 | `t0[0:4] = t1`                           | `sw t1, 0(t0)` (store; width 1 = `sb`, 4 = `sw`)                                                                                                           |
 | `t1 = t0[8:16]`                          | `ld t1, 8(t0)` (load; width 1 = `lb`, 4 = `lw`, 8 = `ld`)                                                                                                  |
+| `forget t0`                              | `#~ t0` (havoc: set `t0` to *any* value for the verifier; emits nothing)                                                                                    |
 | `section 0x100 0x200 rw`                 | `#@ 0x100 0x200 rw`                                                                                                                                        |
 | `fail` / `unreachable`                   | `#!` / `#?`                                                                                                                                                |
 | `asm:` + indented lines                  | each block line emitted verbatim (the inline-assembly escape hatch; an empty block is an error)                                                            |
@@ -705,6 +712,38 @@ instructions/directives indented four spaces, labels at column zero, platform
 line ending (`\r\n` on Windows, which the dialect parser requires there).
 Errors are `TranslateError { line, message }` (1-based line; no panics).
 
+**Indexed array access** is *not* a surface form; it falls out of the
+register-register multiply and add as `base + i*elem`, then a slice. So
+`arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0:4] = v`
+(see the `indexed` test). Keeping the 1:1 model means the cost (a `mul` + an
+`add`) is visible, and a *concrete* index lowers to a concrete address (the
+verifier's symbolic-index array writes are still unsupported, [§10](#10-known-limitations--todo-map)).
+
+**`forget <reg>`** (`#~`) and **`assume:`** are the two verifier-only directives
+for reasoning about a value the program reads at runtime. `forget t0` *havocs*
+`t0` to the full range of its type, so the verifier proves the code for **every**
+value (a sound over-approximation: the dual of `assume`); the runtime keeps
+whatever `t0` already held. `assume:` + an indented block has the verifier
+execute the block to **narrow** its symbolic state (e.g. `assume: n = 5` pins a
+concrete value, making otherwise-unbounded loops determinate), while codegen
+drops the whole block (it is bracketed `#(` / `#)`). `assume` is **unsound** by
+construction (it asserts a fact the verifier does not check), the deliberate
+escape hatch for making a runtime-`n` search tractable; `forget` then `assume`
+is the idiom for "read `n` at runtime, prove a bounded proxy" (see the
+`runtime_input`, `assume`, and `fannkuch_v1` tests). Both emit nothing.
+
+**Compile-time type dispatch.** `if typeof <x> == <type>:` is resolved by the
+**front-end**, not at runtime: it knows `x`'s category (an integer or register
+is a scalar; a label names string/array storage) and the literal `<type>`
+(parsed by the same type-expression parser `define` uses), compares them, and
+either translates the body inline (no branch emitted) or skips it entirely.
+Skipping is what lets one body carry arms for several argument types: the arm
+that does not match is never translated, so e.g. a string arm's `&msg` is not
+emitted (and cannot fail to translate) when `msg` is an integer. This is pure
+monomorphisation -- no runtime type check, nothing leaks into the binary -- and
+is what makes `print` polymorphic over `[u8]` (string) and `i64` (integer)
+without a separate `print_int`.
+
 `if`/`while` bodies are the **indented block** below the header (Python-style,
 matched on indentation depth, no explicit terminator); `asm:` works the same
 way. Dispatch order inside `statement` matters: assignment statements are
@@ -729,7 +768,16 @@ the body is translated afresh:
   appended, so the verifier knows the exact contents) and the parameter binds
   to its label (`&param` in the body becomes `&__strN`, as `print` uses it);
 - an **integer** argument binds the parameter to the literal value (`param` in
-  the body becomes the number, as `exit` uses it).
+  the body becomes the number, as `exit` uses it);
+- a **register** argument binds the parameter to that register (a scalar value,
+  so the body's `if typeof param == i64` arm is taken), used to print a computed
+  value, e.g. `print(a6)`.
+
+The body is **hygienic**: any local definition in it (`name: <locality> …`) is
+renamed to a fresh label per call (`__local0`, …, on a counter separate from the
+branch labels so renaming never perturbs them), so two calls do not collide on
+storage -- e.g. `print`'s integer scratch buffer, which two `print(int)`s would
+otherwise both define.
 
 A `def` itself emits **no** dialect lines: it is inert until called. The
 translator prepends [std/std.hl](std/std.hl) (the `STD` constant,
@@ -737,11 +785,15 @@ translator prepends [std/std.hl](std/std.hl) (the `STD` constant,
 prepending it to a program that calls nothing from it leaves the lowering
 byte-for-byte unchanged (this is why every existing test's `dialect.s` is
 unaffected). User error line numbers stay 1-based (the prelude length is
-subtracted). The library functions today are `print(msg)` (write `msg` to
-stdout, syscall 64) and `exit(code)` (end the process, syscall 93); both use
-`ecall`, so they target a hosted (Linux) process, not bare metal. See
-`linux_hello` ([§6](#6-integration-tests-tests)) and the contrast with
-`uart_hello` (which pokes the QEMU UART with raw assembly).
+subtracted). The library functions today are `print(msg)` and `exit(code)`
+(end the process, syscall 93); both use `ecall`, so they target a hosted (Linux)
+process, not bare metal. **`print` is polymorphic over its argument's type,
+resolved at compile time** (see the `if typeof` dispatch above): `print("hi")`
+lowers to a byte-walk + `write` (syscall 64); `print(42)` / `print(a6)` lower to
+an integer formatter (peel decimal digits with `/`/`%`, write the slice). The
+unmatched arm is never translated, so there is no runtime type check and no
+separate `print_int`. See `linux_hello` / `print_poly` ([§6](#6-integration-tests-tests))
+and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly).
 
 <a id="52-the-risc-v-dialect-as-actually-parsed"></a>
 
@@ -751,11 +803,15 @@ stdout, syscall 64) and `exit(code)` (end the process, syscall 93); both use
   `Define`, `#& <reg>, <label>` `Lat`, `#@ <start> <end> <perms>` `Region`
   (keyword `section`; declare an accessible memory region: bounds are immediates or registers,
   `end` exclusive, perms `r`/`w`/`rw`; executed in program order, so an
-  allocator can declare each allocation as it makes it). Plain `#…` comments and
-  inline `# …` comments are stripped.
-- **Instructions** (`Instruction` enum, [src/ast.rs:177](src/ast.rs#L177), 27
+  allocator can declare each allocation as it makes it), `#~ <reg>` `Forget`
+  (havoc a register to *any* value; verifier-only, codegen drops it), and
+  `#(` / `#)` `Assume` (bracket a block the verifier executes to narrow state and
+  codegen drops; the `assume:` escape hatch). Plain `#…` comments and inline
+  `# …` comments are stripped.
+- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 33
   variants): `csrr`, `bnez`, `j`, `wfi`, `ecall`, labels (`foo:`), `.global`,
   `.data`, `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `addi`,
+  `add`, `sub`, `mul`, `div`, `rem` (register-register RV64M arithmetic),
   `blt`, `lb`, `beqz`, `sb`, `bge`, `ld`, `bne`, `beq`, plus the directives
   above. `ecall` is the boundary to the host/OS: the verifier does not model
   its effect (it is a no-op for checking, non-racy, no state change) and
@@ -908,10 +964,10 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
 - `fannkuch_redux` ([tests/fannkuch_redux/](tests/fannkuch_redux/)): the
   Benchmarks-Game fannkuch-redux (generate all n! permutations, count pancake
   flips, track max flips + the alternating checksum) for n = 5, the first
-  **real algorithm** written in the dialect. Because the dialect has no
-  multiply, no register-register arithmetic, and no indexed addressing, every
-  array access is a pointer walk and every reg+reg combine a `+/-1` loop, yet
-  the whole thing lowers to ~120 instructions over three `[u32]*5` thread
+  **real algorithm** written in the dialect. It predates the dialect's multiply,
+  register-register arithmetic, and indexed addressing (all added later), so
+  every array access is a pointer walk and every reg+reg combine a `+/-1` loop,
+  yet the whole thing lowers to ~120 instructions over three `[u32]*5` thread
   arrays. The distinguishing part: the two closing `require`s assert
   `max flips == 7` and `checksum == 11` (the known fannkuch(5) answer), so the
   proof's `Valid` outcome **is** a compile-time proof the algorithm is correct;
@@ -919,6 +975,33 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   computing and exiting 0 with no output (the answer was already proven). This
   test motivated the integer-arm extensions to the value model (see
   [§9](#9-conventions--gotchas)).
+- `reg_add` / `reg_sub` / `reg_mul` / `reg_div` / `reg_rem`
+  ([tests/](tests/)): one per register-register arithmetic op, each computing a
+  value (e.g. `5! = 120`, `100/7/3 = 4`) and proving it with a closing `require`,
+  then booting under `qemu-riscv64`. Cover the `add`/`sub`/`mul`/`div`/`rem`
+  lowering, the verifier's interval arithmetic, and codegen end to end.
+- `indexed` ([tests/indexed/](tests/indexed/)): computed-index array access
+  (`arr[i]` as `&arr + i*4`, then a slice) -- the point of adding multiply +
+  register-register add; writes/reads `arr[1]` and `arr[3]` at computed addresses
+  and proves their sum.
+- `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
+  digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
+- `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
+  `print`** -- `print("Hi ")` + `print(42)` + `print(7)` -> `Hi 427`, the string
+  arm and the integer arm of one `print` selected by the compile-time `if typeof`
+  dispatch (and two integer prints exercising body-local-label hygiene). Asserts
+  no directive leaks into the binary.
+- `runtime_input` ([tests/runtime_input/](tests/runtime_input/)): a value the
+  verifier cannot see, via `forget` -- it proves `arr[a0 % 4]` in bounds for
+  *every* `a0` while the runtime keeps `a0 = 12`.
+- `assume` ([tests/assume/](tests/assume/)): the `forget` + `assume:` idiom --
+  `forget a0` havocs the value, `assume: a0 = 5` narrows it for a bounded proof;
+  neither directive appears in the binary.
+- `fannkuch_v1` ([tests/fannkuch_v1/](tests/fannkuch_v1/)): **V1** of the
+  fannkuch split -- single-threaded, the input `n` read at runtime with the
+  verifier blind to it (`forget`) and narrowed to 5 for a bounded proof
+  (`assume`), arrays sized for the maximum n, the checksum + max flip count
+  printed with the polymorphic `print`. Boots and prints `11\nPfannkuchen(5) = 7`.
 - `heap_regions` ([tests/heap_regions/](tests/heap_regions/)): `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them; the latter would panic in
