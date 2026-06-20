@@ -24,28 +24,39 @@ use formal::*;
 /// the earlier runtime failures). The leader computes fannkuch(12) and writes the
 /// result to the QEMU virt UART (0x10000000) as decimal -- bare metal, no `ecall`.
 /// Booted under QEMU with the long-compute config (normal TCG, no per-instruction
-/// log; ~1-2 min for 479M permutations); the UART receives
-/// `3968050\nPfannkuchen(12) = 65` -- the answer from the C reference.
+/// log); the UART receives `3968050\nPfannkuchen(12) = 65` -- the answer from the C
+/// reference -- and the program then writes the `sifive_test` finisher to halt the
+/// machine cleanly, so the run ends the instant the result is out (~3 min for 479M
+/// permutations) rather than spinning until the watchdog timeout.
 ///
-/// **Gated `#[ignore]`**: computing 479M permutations under bare-metal
-/// `qemu-system-riscv64` (full machine emulation, ~7x slower than the hosted
-/// user-mode `qemu-riscv64`) takes ~10 minutes, too slow for the default suite.
-/// Run it explicitly to verify the full n = 12 output:
-/// `cargo nextest run --run-ignored all fannkuch_v2`.
+/// **Gated `#[ignore]`**: 479M permutations under bare-metal `qemu-system-riscv64`
+/// (full machine emulation, ~7x slower than the hosted user-mode `qemu-riscv64`)
+/// is ~3 min, too slow for the default suite. Run it explicitly to verify the full
+/// n = 12 output: `cargo nextest run --run-ignored all fannkuch_v2`.
 #[test]
-#[ignore = "n=12 is ~10 min under bare-metal QEMU; run with --run-ignored"]
+#[ignore = "n=12 is ~3 min under bare-metal QEMU; run with --run-ignored"]
 fn fannkuch_v2() {
     let mut ast = setup_test("fannkuch_v2/dialect.s");
     let translated = hl::translate(include_str!("input.hl")).expect("hl translation failed");
     assert_eq!(normalize(translated), normalize(include_str!("dialect.s")));
 
-    // The QEMU `virt` UART MMIO region.
-    let sections = vec![Section {
-        address: MemoryValueI64::from(0x10000000),
-        size: MemoryValueI64::from(1),
-        permissions: Permissions::Write,
-        volatile: true,
-    }];
+    // The QEMU `virt` UART MMIO region, and the `sifive_test` finisher at
+    // 0x100000 (a 0x5555 write exits qemu cleanly, so the run ends the moment the
+    // result is written instead of spinning in `wfi` until the watchdog timeout).
+    let sections = vec![
+        Section {
+            address: MemoryValueI64::from(0x10000000),
+            size: MemoryValueI64::from(1),
+            permissions: Permissions::Write,
+            volatile: true,
+        },
+        Section {
+            address: MemoryValueI64::from(0x100000),
+            size: MemoryValueI64::from(4),
+            permissions: Permissions::Write,
+            volatile: true,
+        },
+    ];
     let explorerer = unsafe {
         Explorerer::new(
             ast,

@@ -1030,12 +1030,17 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   runtime computes the real n = 12. The arrays are initialised over **all 12
   elements** with a literal bound so the dead-data compaction keeps them
   full-sized (else they would be sized to the verified n = 3 and the runtime n = 12
-  would read past them -- see [§9](#9-conventions--gotchas)). The leader writes the
+  would read past them -- see [§9](#9-conventions--gotchas)). The flip-count inner
+  loop addresses the far end of each reversal directly (`&work + k*4`, a `mul`)
+  instead of walking to it, removing an O(k) loop per flip. The leader writes the
   result to the QEMU virt UART as decimal; booted under the **long-compute** config
   (`run_program_smp(.., long=true)`: normal multi-threaded TCG, no per-instruction
-  log, 420s timeout), the UART receives `3968050\nPfannkuchen(12) = 65` -- the
-  answer from the C reference. **`#[ignore]`d**: ~10 min under bare-metal QEMU
-  (~7x slower than user-mode), so run it explicitly (`--run-ignored`).
+  log, 420s timeout cap), the UART receives `3968050\nPfannkuchen(12) = 65` -- the
+  answer from the C reference. It then writes the QEMU virt **`sifive_test`**
+  finisher (`0x5555` to `0x100000`) to halt the machine cleanly, so the run ends the
+  instant the result is out (deterministic, no watchdog-timeout race). **`#[ignore]`d**:
+  ~3 min under bare-metal QEMU (~7x slower than user-mode), so run it explicitly
+  (`--run-ignored`).
 - `atomic_add` ([tests/atomic_add/](tests/atomic_add/)): `amoadd.w` end to end --
   an inline-asm atomic parsed back from the `asm:` block and modeled as a
   read-modify-write; proven (old value returned, counter incremented) and booted.
