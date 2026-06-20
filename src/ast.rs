@@ -273,6 +273,7 @@ pub enum Instruction {
     Add(Add),
     Sub(Sub),
     Mul(Mul),
+    Rem(Rem),
     Blt(Blt),
     Lb(Lb),
     Beqz(Beqz),
@@ -316,6 +317,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
         ['s', 'u', 'b', ' ', rem @ ..] => Instruction::Sub(new_sub(rem)),
         ['m', 'u', 'l', ' ', rem @ ..] => Instruction::Mul(new_mul(rem)),
+        ['r', 'e', 'm', ' ', rem @ ..] => Instruction::Rem(new_rem(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
@@ -352,6 +354,7 @@ impl fmt::Display for Instruction {
             Add(add) => write!(f, "{add}"),
             Sub(sub) => write!(f, "{sub}"),
             Mul(mul) => write!(f, "{mul}"),
+            Rem(rem) => write!(f, "{rem}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
@@ -1011,6 +1014,30 @@ impl fmt::Display for Mul {
 
 fn new_mul(src: &[char]) -> Mul {
     Mul {
+        out: new_register(&src[0..2]).unwrap(),
+        lhs: new_register(&src[4..6]).unwrap(),
+        rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// Register-register remainder `rem rd, rs1, rs2` (signed, like RV64M `rem`). The
+/// front-end emits this for `reg = a % b`; the verifier only models a positive
+/// constant divisor (the `assume:` range-narrowing use).
+#[derive(Debug, Clone)]
+pub struct Rem {
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Register,
+}
+
+impl fmt::Display for Rem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "rem {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
+fn new_rem(src: &[char]) -> Rem {
+    Rem {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),

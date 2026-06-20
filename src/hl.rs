@@ -787,25 +787,24 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
     // Arithmetic: `reg = reg2 + imm` / `reg = reg2 - imm` (immediate `addi`), or
     // register-register `reg = a + b` / `reg = a * b` (`add` / `mul`).
     let tokens: Vec<&str> = rhs.split_whitespace().collect();
-    if let [base, op @ ("+" | "-" | "*"), operand] = tokens.as_slice() {
+    if let [base, op @ ("+" | "-" | "*" | "%"), operand] = tokens.as_slice() {
         if !is_register(base) {
             return Err(format!("`{base}` is not a register"));
         }
-        // Register-register forms lower to `add` / `sub` / `mul`.
+        // Register-register forms lower to `add` / `sub` / `mul` / `rem`.
         if is_register(operand) {
             return match *op {
                 "+" => Ok(format!("    add {lhs}, {base}, {operand}")),
                 "-" => Ok(format!("    sub {lhs}, {base}, {operand}")),
                 "*" => Ok(format!("    mul {lhs}, {base}, {operand}")),
+                "%" => Ok(format!("    rem {lhs}, {base}, {operand}")),
                 _ => unreachable!(),
             };
         }
-        // Immediate forms: `+`/`-` lower to `addi`; `*` needs a register operand
-        // (there is no multiply-immediate).
-        if *op == "*" {
-            return Err(format!(
-                "multiply needs a register operand, not `{operand}`"
-            ));
+        // Immediate forms: `+`/`-` lower to `addi`; `*`/`%` need a register
+        // operand (there is no multiply- or remainder-immediate).
+        if *op == "*" || *op == "%" {
+            return Err(format!("`{op}` needs a register operand, not `{operand}`"));
         }
         if parse_int(operand).is_none() {
             return Err(format!("invalid immediate `{operand}`"));

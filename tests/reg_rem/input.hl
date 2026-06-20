@@ -1,0 +1,20 @@
+# Register-register remainder: `reg = a % b` lowers to `rem`. Two concrete
+# remainders plus an add, proven at compile time. (The verifier models `%` by a
+# positive constant divisor; an *unknown* dividend narrows to `0..d-1`, which is
+# what the `assume:` directive uses to bound an otherwise-unbounded search.)
+r: thread [u32]*1
+t0 = &r
+
+t1 = 17
+t2 = 5
+t3 = t1 % t2      # rem -> 17 % 5 = 2
+t4 = 100
+t5 = 7
+t4 = t4 % t5      # rem -> 100 % 7 = 2
+t3 = t3 + t4      # 2 + 2 = 4
+
+t0[0:4] = t3
+t1 = t0[0:4]
+a0 = 4
+require t1 == a0
+exit(0)

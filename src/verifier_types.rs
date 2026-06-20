@@ -12,6 +12,7 @@ use std::iter::once;
 use std::iter::repeat;
 use std::ops::Add;
 use std::ops::Mul;
+use std::ops::Rem;
 use std::ops::Sub;
 use std::ptr::NonNull;
 use thiserror::Error;
@@ -854,6 +855,37 @@ impl Sub for MemoryValue {
             x => todo!("{x:?}"),
         }
     }
+}
+impl Rem for MemoryValue {
+    type Output = Self;
+    fn rem(self, rhs: Self) -> Self::Output {
+        use MemoryValue::*;
+        match (self, rhs) {
+            // Remainder by a **positive constant** divisor `d`. This is the
+            // narrowing primitive `assume:` relies on: any value `% d` lies in
+            // `0..d`, so a wholly-unknown dividend narrows to `[0, d-1]`, while a
+            // concrete dividend gives the exact remainder. `li` yields `I64`.
+            (I64(a), I64(b)) => I64(rem_by_constant(&a, &b)),
+            x => todo!("{x:?}"),
+        }
+    }
+}
+/// `a % d` for a positive-constant divisor `d`: exact when `a` is concrete,
+/// otherwise the full remainder range `[0, d-1]`. Panics if `d` is not a positive
+/// constant (the front-end only emits `%` with such divisors via `assume:`).
+fn rem_by_constant(a: &MemoryValueI64, d: &MemoryValueI64) -> MemoryValueI64 {
+    assert!(
+        d.start() == d.stop() && d.start() > 0,
+        "`%` requires a positive constant divisor, got {d:?}"
+    );
+    let divisor = d.start();
+    let value = if a.start() == a.stop() {
+        let r = a.start() % divisor;
+        MemoryValueI64::new(r, r)
+    } else {
+        MemoryValueI64::new(0, divisor - 1)
+    };
+    value.expect("rem: 0..d-1 is a valid range")
 }
 impl MemoryValue {
     fn get(&self, subslice: &SubSlice) -> Result<MemoryValue, MemoryValueGetError> {
