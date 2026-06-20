@@ -6,4 +6,7 @@ nt = "nextest run" #  --show-progress none
 #   cargo cov --summary-only        # coverage % per file, to the terminal
 #   cargo cov --html                # full HTML report under target/llvm-cov/html
 #   cargo cov --open                # ... and open it
-cov = "llvm-cov nextest"
+# `src/draw.rs` (an unreferenced verifier-tree visualisation helper with no public
+# API) is excluded: it is not part of the compile/verify pipeline, so covering it
+# would mean writing tests purely to exercise dead code.
+cov = "llvm-cov nextest --ignore-filename-regex draw\\.rs"

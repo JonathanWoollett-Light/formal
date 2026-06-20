@@ -99,6 +99,20 @@ useful "is this code exercised at all" signal. Adding a behaviour to the verifie
 should come with a test that covers it (e.g. `tests/reg_add` covers the `add`
 instruction's lowering + symbolic semantics).
 
+The aim is high coverage from **sensible programs and inputs**, not contrived
+line-poking. The baseline is ~79% of regions (`lib.rs` ~97%, `hl.rs` ~89% via
+`tests/compile_api` exercising `formal::compile` and `tests/translate_errors`
+exercising the front-end's rejection paths; `main.rs` ~70% via `tests/cli`
+running the binary). `src/draw.rs` (an unreferenced verifier-tree visualisation
+helper with no public API) is excluded from the measurement - covering dead code
+would mean tests that exist only to move the number. The largest remaining gap is
+in `verifier_types.rs`/`verifier.rs`: those are mostly the **value/arithmetic
+paths for types and operations the language does not implement yet** (signed and
+64-bit arithmetic, multiply, indexed addressing - they `panic` on a `todo!`
+today). They are deliberately uncovered until the feature lands, so coverage of
+that code climbs **with** each new operation rather than from a test written
+against an unimplemented path. Re-run `cargo cov` after adding a feature.
+
 Tests print **nothing live to the console** (interactive output corrupts the
 runner's display); long phases stream progress to
 `target/tmp/test-logs/<test>/<phase>.progress` via the `Progress` helper in
