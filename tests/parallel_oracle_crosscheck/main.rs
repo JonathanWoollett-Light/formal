@@ -237,6 +237,26 @@ fn parallel_sweep_all_invalid_is_invalid() {
     assert!(matches!(result, ExplorePathResult::Invalid));
 }
 
+/// The distributed-transport simulation rejects a configuration that conflicts
+/// with the program (returns `None`), the invalid-path counterpart of
+/// [`distributed_sim_matches_oracle`]: the wrong (`u8`) candidate must be
+/// rejected even though every continuation still crosses the postcard
+/// serialize/deserialize round-trip. Also drives the non-observed
+/// [`verify_configuration_distributed_sim`] entry point.
+#[test]
+fn distributed_sim_wrong_type_is_invalid() {
+    let ast = setup_test("parallel_oracle_crosscheck/annotated.s");
+    let sys = systems();
+    let wrong = cfg(LabelLocality::Global, Type::U8);
+    let index = Ast::index(ast);
+    let outcome = unsafe { verify_configuration_distributed_sim(&index, &sys, &wrong) }
+        .expect("distributed sim returned a compiler error");
+    assert!(
+        outcome.is_none(),
+        "a u8 configuration must be invalid for a program that stores u32"
+    );
+}
+
 /// Broaden coverage to an **inferred** program (`racy_store_inferred`): on the
 /// oracle's winning configuration, the three fixed-config inner paths must agree
 /// with each other. (For an inferred program the oracle's grow-only outputs
