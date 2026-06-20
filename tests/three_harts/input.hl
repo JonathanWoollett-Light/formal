@@ -1,0 +1,11 @@
+# Minimal 3-hart leader/worker probe: the leader (mhartid == 0) proves a fact;
+# every other hart falls through to wfi. No shared memory, so the harts are
+# independent (non-racy) and the interleaving collapses.
+t0 = csr(mhartid)
+if t0 == 0:
+    t1 = 7
+    t2 = 7
+    require t1 == t2
+asm:
+    wfi
+unreachable

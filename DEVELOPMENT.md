@@ -352,8 +352,15 @@ classifying against the pre-front state would miss that definition. The arms:
   is non-racy.
 - Conditional branches are resolved _concretely_ from the symbolic register
   ranges using `compare`/`compare_scalar` (`RangeOrdering`/`RangeScalarOrdering`);
-  `csrr … mhartid` is special-cased (hart 0 vs non-zero). A taken jump records
-  the branch node in `jumped`.
+  `csrr … mhartid` is special-cased. This is the **symbolic hart-id model**: a
+  `csrr mhartid` yields a symbolic `Csr(Mhartid)` value, not a concrete id, and a
+  branch on it resolves only by `== 0` / `!= 0`, keyed on the internal hart
+  index (index 0 reads 0; every other index is non-zero). So the verifier assumes
+  only that **exactly one hart reads 0 and the ids are otherwise opaque** -- never
+  that they are contiguous (`0,1,2`); the real hardware could hand out `[0, 15, 7]`.
+  A program can therefore elect a single leader (`if mhartid == 0:`) but cannot
+  use the id as a 0..N-1 rank. (See `fannkuch_v2`/`three_harts`.) A taken jump
+  records the branch node in `jumped`.
 - **Interleaving rule:** if _any_ hart's next step is non-racy, only that single
   deterministic node is queued (collapsing redundant interleavings; this is
   what bounds the `h^r` blow-up); only when _all_ harts' next steps are racy does
@@ -1002,6 +1009,22 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   verifier blind to it (`forget`) and narrowed to 5 for a bounded proof
   (`assume`), arrays sized for the maximum n, the checksum + max flip count
   printed with the polymorphic `print`. Boots and prints `11\nPfannkuchen(5) = 7`.
+- `three_harts` ([tests/three_harts/](tests/three_harts/)): a fast minimal
+  3-hart smoke test. A leader/worker program (`if mhartid == 0:` gates the
+  leader; others skip to a shared inline-asm `wfi`) verifies under a 3-hart
+  configuration. No shared memory, so the harts are independent (non-racy) and
+  the interleaving collapses -- it verifies in milliseconds.
+- `fannkuch_v2` ([tests/fannkuch_v2/](tests/fannkuch_v2/)): **V2** of the
+  fannkuch split -- multi-threaded (3 harts) + inline assembly, bare metal. All
+  three harts read `mhartid`; the symbolic hart-id model guarantees only that
+  exactly one reads 0 and the ids are unique (they could be `[0, 15, 7]`), so the
+  program uses the one distinction the verifier can make -- `mhartid == 0` -- to
+  gate the leader's work, while the others skip to a shared `wfi`. The leader
+  reads `n` at runtime (`forget`+`assume`), computes fannkuch(n), and writes the
+  result to the QEMU virt UART (0x10000000) as decimal -- bare metal, no `ecall`.
+  Boots under QEMU; the UART receives `2\n2` (fannkuch(3)). `n` is kept small
+  because the leader runs a long solo stretch while the workers sit parked far
+  back -- the O(N^2) worst case for the front-search (see [§9](#9-conventions--gotchas)).
 - `heap_regions` ([tests/heap_regions/](tests/heap_regions/)): `#@` region declarations
   (immediate bounds accessed at a non-zero offset, and register bounds exactly
   as wide as the store that hits them; the latter would panic in
@@ -1358,6 +1381,17 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   free. Correctness depends on hand-maintained invariants (e.g. exactly one node
   per hart before the root; the head/tail pointers are accurate). Almost every
   verifier function is `unsafe`.
+- **Multi-hart front search is O(distance between harts).** `queue_up` finds each
+  hart's current front by walking the verifier tree back from the leaf until it
+  has seen all `harts` ([src/verifier.rs:1195](src/verifier.rs#L1195)). This is
+  cheap when the harts advance together (e.g. a racy program where every hart
+  branches often) but **O(N²)** for a **leader/worker** program where one hart
+  runs a long solo stretch while the others sit parked far back: each step walks
+  back past the whole stretch. `fannkuch_v2` is this case, which is why it keeps
+  `n` small. The debug-only loop backstop is generous (1e9) rather than tight so
+  the legitimate deep walk does not trip it; the real guard is the "reached root"
+  check. A cached/incremental front map would remove the O(N²) (future work, part
+  of the parallel rework).
 - **One `AstNode` = one `Layout::new::<AstNode>()` allocation.** Every AST node is
   its own allocation: `new_ast` allocates them per node, `compress` re-allocates
   them per node, and the optimizer frees them per node (`remove_untouched` /

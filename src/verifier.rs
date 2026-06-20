@@ -1202,8 +1202,13 @@ impl Explorerer {
             .configuration
             .harts;
         fronts.insert(current.hart, current.node);
+        // Backstop against a malformed (cyclic) tree; the real guard is the
+        // "reached root" check below. The bound must exceed the deepest legitimate
+        // walk, which is the whole path when one hart runs far ahead of the others
+        // (e.g. a leader/worker program where the leader runs a long stretch while
+        // the workers are parked), so it is generous rather than tight.
         #[cfg(debug_assertions)]
-        let mut check = (0..1000).into_iter();
+        let mut check = 0u64..1_000_000_000;
         while fronts.len() < harts as usize {
             debug_assert!(check.next().is_some());
             let PrevVerifierNode::Branch(branch) = current.prev else {

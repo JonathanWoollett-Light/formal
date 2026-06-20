@@ -1,0 +1,180 @@
+# fannkuch-redux V2: multi-threaded (3 harts) + inline assembly, bare metal.
+#
+# This is the multi-hart counterpart of fannkuch_v1. Three harts boot at the same
+# entry and read `mhartid`; the **symbolic hart-id model** guarantees only that
+# exactly one of them reads 0 and the ids are unique (they could be [0, 15, 7]),
+# so the program must not assume contiguous ids. It uses the one distinction the
+# verifier can make -- `mhartid == 0` -- to gate the leader's work; every other
+# hart skips straight to the shared `wfi` (inline assembly). All harts converge on
+# the same terminal, so the verifier can track all three fronts. Because the
+# workers do no shared work, their (non-racy) steps collapse and the leader's
+# thread-local fannkuch verifies as cheaply as the single-hart V1.
+#
+# The leader reads `n` at runtime (verifier-blind via `forget`, narrowed by
+# `assume`), computes fannkuch(n), and writes the checksum and max flip count to
+# the QEMU virt UART (0x10000000) as decimal text -- bare metal, no `ecall`.
+
+# uart_int(v): write the non-negative integer v to the UART as decimal. Digit
+# extraction (`/`/`%`) into a thread-local buffer, then the slice to the UART.
+def uart_int(v):
+    t5 = v
+    buf: thread [u8]*20
+    t0 = &buf
+    t0 = t0 + 20
+    t1 = 10
+    a2 = 0
+    while t5 != 0:
+        t2 = t5 % t1
+        t5 = t5 / t1
+        t2 = t2 + 48
+        t0 = t0 - 1
+        t0[0:1] = t2
+        a2 = a2 + 1
+    t3 = 0x10000000
+    while a2 != 0:
+        t4 = t0[0:1]
+        t3[0:1] = t4
+        t0 = t0 + 1
+        a2 = a2 - 1
+
+# every hart reads mhartid; only the leader (== 0) runs the body below.
+t0 = csr(mhartid)
+if t0 == 0:
+    perm: thread [u32]*16
+    work: thread [u32]*16
+    cnt: thread [u32]*16
+
+    # n: read at runtime, verifier-blind (forget), narrowed to 3 (assume). Kept
+    # small: the leader runs a long solo stretch while the workers are parked, the
+    # O(N^2) worst case for the verifier's front-search.
+    a2 = 3
+    forget a2
+    assume:
+        a2 = 3
+
+    # init perm[i] = i for i in 0..n
+    t0 = &perm
+    t1 = 0
+    while t1 != a2:
+        t0[0:4] = t1
+        t0 = t0 + 4
+        t1 = t1 + 1
+
+    # init cnt[i] = 0 for i in 0..n
+    t0 = &cnt
+    t1 = 0
+    t3 = 0
+    while t1 != a2:
+        t0[0:4] = t3
+        t0 = t0 + 4
+        t1 = t1 + 1
+
+    a5 = 0
+    a6 = 0
+    a7 = 0
+    a4 = 0
+
+    while a4 == 0:
+        # copy perm -> work
+        t0 = &perm
+        t1 = &work
+        t2 = 0
+        while t2 != a2:
+            t4 = t0[0:4]
+            t1[0:4] = t4
+            t0 = t0 + 4
+            t1 = t1 + 4
+            t2 = t2 + 1
+
+        # count flips on work
+        a0 = 0
+        t0 = &work
+        t1 = t0[0:4]
+        while t1 != 0:
+            t2 = &work
+            t3 = &work
+            t4 = 0
+            while t4 != t1:
+                t3 = t3 + 4
+                t4 = t4 + 1
+            t4 = 0
+            t5 = t1 + 0
+            while t4 < t5:
+                t1 = t2[0:4]
+                a1 = t3[0:4]
+                t2[0:4] = a1
+                t3[0:4] = t1
+                t2 = t2 + 4
+                t3 = t3 - 4
+                t4 = t4 + 1
+                t5 = t5 - 1
+            a0 = a0 + 1
+            t1 = t0[0:4]
+
+        # max flips
+        if a0 > a5:
+            a5 = a0 + 0
+
+        # checksum += (parity == 0 ? flips : -flips)
+        t0 = a0 + 0
+        if a7 == 0:
+            while t0 != 0:
+                a6 = a6 + 1
+                t0 = t0 - 1
+        if a7 != 0:
+            while t0 != 0:
+                a6 = a6 - 1
+                t0 = t0 - 1
+
+        # toggle parity
+        t0 = a7 + 0
+        a7 = 1
+        if t0 != 0:
+            a7 = 0
+
+        # next permutation by prefix rotation
+        a4 = 1
+        a3 = 1
+        while a3 < a2:
+            t0 = &perm
+            t1 = t0[0:4]
+            t2 = &perm
+            t3 = 0
+            while t3 < a3:
+                t4 = t2[4:8]
+                t2[0:4] = t4
+                t2 = t2 + 4
+                t3 = t3 + 1
+            t2[0:4] = t1
+            t2 = &cnt
+            t3 = 0
+            while t3 < a3:
+                t2 = t2 + 4
+                t3 = t3 + 1
+            t4 = t2[0:4]
+            t4 = t4 + 1
+            t2[0:4] = t4
+            t5 = 1
+            if t4 <= a3:
+                a4 = 0
+                a3 = a2 + 0
+                t5 = 0
+            if t5 != 0:
+                t3 = 0
+                t2[0:4] = t3
+                a3 = a3 + 1
+
+    # output "<checksum>\n<maxflips>\n" to the UART
+    uart_int(a6)
+    t3 = 0x10000000
+    t4 = 10
+    t3[0:1] = t4
+    uart_int(a5)
+    t3 = 0x10000000
+    t4 = 10
+    t3[0:1] = t4
+
+# all harts converge here and park.
+asm:
+    wfi
+unreachable
