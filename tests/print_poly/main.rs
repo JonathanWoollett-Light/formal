@@ -9,7 +9,9 @@ use formal::*;
 /// `print(42)` to the digit formatter, selected by the front-end's `if typeof`
 /// dispatch (no runtime type check, no separate `print_int`, and the unmatched
 /// arm -- including its otherwise-ill-typed `&msg` on an integer -- is never
-/// translated). Booted under `qemu-riscv64`; stdout must be exactly `Hi 42`.
+/// translated). The two integer prints also exercise call hygiene: each gets a
+/// fresh scratch-buffer label, so they do not collide. Booted under
+/// `qemu-riscv64`; stdout must be exactly `Hi 427`.
 #[test]
 fn print_poly() {
     let mut ast = setup_test("print_poly/dialect.s");
@@ -63,7 +65,7 @@ fn print_poly() {
 
     let stdout = run_linux("print_poly", &asm);
     assert_eq!(
-        stdout, "Hi 42",
-        "polymorphic print writes the string then the integer"
+        stdout, "Hi 427",
+        "polymorphic print writes the string then both integers"
     );
 }

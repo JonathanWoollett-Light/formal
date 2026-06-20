@@ -174,6 +174,7 @@ pub fn translate(source: &str) -> Result<String, TranslateError> {
         out: Vec::new(),
         labels: 0,
         strings: 0,
+        locals: 0,
         functions: HashMap::new(),
         depth: 0,
     };
@@ -204,6 +205,11 @@ struct Translator {
     out: Vec<String>,
     labels: usize,
     strings: usize,
+    /// Counter for hygienic renaming of a `def` body's local definitions; kept
+    /// separate from `labels` so freshening them does not perturb branch-label
+    /// numbering (and thus the pinned translations of callers that take a
+    /// different `if typeof` arm).
+    locals: usize,
     functions: HashMap<String, FuncDef>,
     /// Inlining depth, a guard against a `def` that calls itself.
     depth: usize,
@@ -221,6 +227,14 @@ impl Translator {
     fn fresh_string(&mut self) -> String {
         let label = format!("__str{}", self.strings);
         self.strings += 1;
+        label
+    }
+
+    /// Allocates the next hygienic label for a `def` body's local definition
+    /// (`__local0`, ...). Separate from `fresh_label` (see `locals`).
+    fn fresh_local(&mut self) -> String {
+        let label = format!("__local{}", self.locals);
+        self.locals += 1;
         label
     }
 
@@ -329,13 +343,34 @@ impl Translator {
             Some(func) => func.clone(),
             None => return Err(err(format!("unknown function `{name}`"))),
         };
+        // Hygiene: give each call's body-local definitions (`name: <locality> ...`)
+        // a fresh label, so repeated calls do not collide on storage -- e.g.
+        // `print`'s integer scratch buffer, which two `print(int)`s would otherwise
+        // both define. Each fresh name is substituted through the body alongside the
+        // parameter binding.
+        let mut subs: Vec<(String, String)> = vec![(func.param.clone(), binding)];
+        for l in &func.body {
+            if let Some((decl, rest)) = l.text.trim().split_once(':') {
+                let decl = decl.trim();
+                let rest = rest.trim_start();
+                if is_label(decl) && (rest.starts_with("thread") || rest.starts_with("global")) {
+                    subs.push((decl.to_string(), self.fresh_local()));
+                }
+            }
+        }
         let inlined: Vec<Line> = func
             .body
             .iter()
-            .map(|l| Line {
-                number: l.number,
-                indent: l.indent,
-                text: substitute_token(&l.text, &func.param, &binding),
+            .map(|l| {
+                let mut text = l.text.clone();
+                for (from, to) in &subs {
+                    text = substitute_token(&text, from, to);
+                }
+                Line {
+                    number: l.number,
+                    indent: l.indent,
+                    text,
+                }
             })
             .collect();
         if let Some(first) = inlined.first() {
