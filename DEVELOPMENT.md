@@ -588,6 +588,20 @@ __<label>_type` (load the generated descriptor's address); `#!` (fail) →
   compacted to its runtime-accessed bytes (a never-accessed variable emits just
   its label); regions with an under-determined access keep the full
   `size(type)`.
+- **Per-hart thread-local storage.** The verifier already models a `thread`
+  variable as a distinct copy per contiguous hart index (`MemoryLabel::Thread {
+  label, hart }`); codegen reproduces that at runtime. When a `thread` variable
+  with real storage is used by **more than one hart**, all thread-locals are laid
+  out as one 8-aligned block, the block is replicated once per hart, and a boot
+  prologue sets `tp = mhartid * block_size` (mhartid is the contiguous hart index
+  on the targeted platforms); each `la` of a thread-local then adds `tp`, so hart
+  `h`'s copy is `label + h*block_size`. This is inert for single-hart use (one
+  copy, `tp = 0`) and for descriptor-only reads (empty block), so those programs
+  emit exactly as before. Without it, concurrent harts would share one fixed
+  address and clobber each other; the `tls_probe` test pins the runtime behaviour.
+  This is what lets a multi-hart program keep private per-hart `thread` arrays
+  (e.g. a real parallel work-sharing computation, rather than the leader/worker
+  pattern where only one hart touches thread-local memory).
 
 **Toolchain gotchas** (see [scripts/build-run.sh](scripts/build-run.sh)):
 

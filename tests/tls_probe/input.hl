@@ -1,0 +1,49 @@
+# Per-hart thread-local storage probe (2 harts). Each hart claims a rank via an
+# atomic, stores a distinct value (rank+1) in a `thread` variable `mine`, reads it
+# back, and writes it to a per-rank global slot; the last finisher sums the slots
+# (1 + 2 = 3) to the UART. The verifier models `mine` as a separate copy per hart;
+# this proves the codegen does too -- with the old single-copy thread-local
+# codegen the two harts would share one `mine`, clobber each other, and the sum
+# would not be 3.
+rank_counter: global u32
+done_counter: global u32
+slots: global [u32]*2
+mine: thread u32
+
+t0 = &rank_counter
+t1 = 1
+asm:
+    amoadd.w a3, t1, (t0)
+
+# mine (thread-local) = rank + 1, then read it back.
+t0 = &mine
+a4 = a3 + 1
+t0[0:4] = a4
+a5 = t0[0:4]
+
+# slots[rank] = mine
+t5 = 4
+t2 = a3 * t5
+t0 = &slots
+t0 = t0 + t2
+t0[0:4] = a5
+
+# the last finisher sums the slots and writes the digit to the UART.
+t0 = &done_counter
+t1 = 1
+asm:
+    amoadd.w t2, t1, (t0)
+a0 = 1
+if t2 == a0:
+    t0 = &slots
+    a5 = t0[0:4]
+    t0 = t0 + 4
+    a6 = t0[0:4]
+    a5 = a5 + a6
+    t3 = 0x10000000
+    t4 = a5 + 48
+    t3[0:1] = t4
+
+asm:
+    wfi
+unreachable

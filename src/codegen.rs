@@ -77,10 +77,61 @@ pub fn emit_executable(
         pinned_nodes,
     );
 
+    // Per-hart thread-local storage. The verifier already models each `thread`
+    // variable as a distinct copy per (contiguous) hart index; the codegen must
+    // reproduce that at runtime. We lay every `thread` variable out as one block
+    // and replicate it once per hart, so hart `h`'s copy of a variable is at
+    // `label + h*block_size`. A hart computes its base offset `tp = mhartid *
+    // block_size` once at boot (mhartid is the contiguous hart index on the
+    // platforms we target), and each `la` of a thread-local adds `tp`. This is a
+    // no-op for single-hart use (one copy, `tp = 0`), so it only activates when a
+    // `thread` variable is actually touched by more than one hart -- leaving every
+    // existing single-hart / leader-worker program byte-identical.
+    let hart_copies = configuration
+        .0
+        .values()
+        .filter_map(|(loc, _)| match loc {
+            LabelLocality::Thread(harts) => harts.iter().max().map(|h| *h as usize + 1),
+            LabelLocality::Global => None,
+        })
+        .max()
+        .unwrap_or(0);
+    // Offset of each thread-local within the per-hart block, and the block size
+    // (8-aligned so replicas stay aligned).
+    let mut tls_offset: std::collections::BTreeMap<Label, u64> = Default::default();
+    let mut tls_block = 0u64;
+    if hart_copies > 1 {
+        for (label, (loc, ty)) in &configuration.0 {
+            if !matches!(loc, LabelLocality::Thread(_)) {
+                continue;
+            }
+            let stored = match layouts.get(label) {
+                Some(layout) if layout.compact => layout.total_emitted(),
+                _ => size(ty),
+            };
+            tls_block = tls_block.next_multiple_of(8);
+            tls_offset.insert(label.clone(), tls_block);
+            tls_block += stored;
+        }
+        tls_block = tls_block.next_multiple_of(8);
+    }
+    // Enable per-hart TLS only when a `thread` variable with real storage is used
+    // by more than one hart (a descriptor-only read leaves the block empty, and
+    // single-hart use needs no offset -- both keep the old single-copy layout).
+    let tls = hart_copies > 1 && tls_block > 0;
+
     // The input has no explicit entry (verification starts from the first line),
     // so add the `_start` entry the linker needs. Execution begins at the first
     // instruction, exactly where verification began.
     let mut text = String::from(".global _start\n_start:\n");
+    if tls {
+        // Per-hart thread-local base: tp = mhartid * block_size. `t0` is a scratch
+        // here; the verified program writes every register before reading it.
+        text.push_str(&format!(
+            "    csrr tp, mhartid  # per-hart thread-local base\n    \
+             li t0, {tls_block}\n    mul tp, tp, t0\n"
+        ));
+    }
 
     // .text: walk the AST, lowering the verification directives to real RISC-V
     // and re-pointing immediates at the compacted layout where required.
@@ -119,6 +170,14 @@ pub fn emit_executable(
             Instruction::Unreachable(_) => {
                 text.push_str("    j __halt  # unreachable (program end)\n")
             }
+            // Address of a per-hart thread-local: add the hart's TLS base (`tp`).
+            Instruction::La(La { register, label })
+                if tls && matches!(configuration.get(label), Some((Locality::Thread, _))) =>
+            {
+                text.push_str(&format!(
+                    "    la {register}, {label}\n    add {register}, {register}, tp  # thread-local\n"
+                ));
+            }
             // Labels and `.global` print at column 0; everything else is indented.
             Instruction::Label(_) | Instruction::Global(_) => text.push_str(&format!("{instr}\n")),
             other => text.push_str(&format!("    {other}\n")),
@@ -139,7 +198,11 @@ pub fn emit_executable(
     // .bss: zero-initialized storage for every inferred variable, compacted to
     // its runtime-accessed bytes where the layout allows.
     let mut bss = String::new();
-    for (label, (_locality, ty)) in &configuration.0 {
+    for (label, (loc, ty)) in &configuration.0 {
+        // Thread-locals are emitted together as the per-hart block below.
+        if tls && matches!(loc, LabelLocality::Thread(_)) {
+            continue;
+        }
         let stored = match layouts.get(label) {
             Some(layout) if layout.compact => layout.total_emitted(),
             _ => size(ty),
@@ -148,6 +211,41 @@ pub fn emit_executable(
         bss.push_str(&format!("    .balign 8\n{label}:\n"));
         if stored > 0 {
             bss.push_str(&format!("    .zero {stored}\n"));
+        }
+    }
+    // The per-hart thread-local block: block 0 carries the labels at their computed
+    // offsets; `hart_copies - 1` further block_size copies reserve the other harts'.
+    if tls {
+        bss.push_str("    .balign 8\n");
+        let mut emitted = 0u64;
+        for (label, (loc, ty)) in &configuration.0 {
+            if !matches!(loc, LabelLocality::Thread(_)) {
+                continue;
+            }
+            let off = tls_offset[label];
+            if off > emitted {
+                bss.push_str(&format!("    .zero {}\n", off - emitted));
+                emitted = off;
+            }
+            let stored = match layouts.get(label) {
+                Some(layout) if layout.compact => layout.total_emitted(),
+                _ => size(ty),
+            };
+            bss.push_str(&format!("{label}:\n"));
+            if stored > 0 {
+                bss.push_str(&format!("    .zero {stored}\n"));
+                emitted += stored;
+            }
+        }
+        if tls_block > emitted {
+            bss.push_str(&format!("    .zero {}\n", tls_block - emitted));
+        }
+        if hart_copies > 1 {
+            bss.push_str(&format!(
+                "    .zero {}  # {} more per-hart copies\n",
+                (hart_copies as u64 - 1) * tls_block,
+                hart_copies - 1
+            ));
         }
     }
 
