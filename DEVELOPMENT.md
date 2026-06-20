@@ -90,7 +90,13 @@ Tests print **nothing live to the console** (interactive output corrupts the
 runner's display); long phases stream progress to
 `target/tmp/test-logs/<test>/<phase>.progress` via the `Progress` helper in
 `tests/common/mod.rs` (`Get-Content -Wait` to follow). Each test's `target/tmp`
-output is grouped under its own `target/tmp/test-logs/<test>/` directory. **`wsl.exe` must be
+output is grouped under its own `target/tmp/test-logs/<test>/` directory. The
+parallel-emulation tests additionally stream a live **utilisation** breakdown
+(one line per BFS wave: frontier width, busy slots, and the per-slot step counts)
+to `parallel-<n>.progress` (per **core**, the in-process pool) and
+`distributed-<n>.progress` (per **node**, the distributed simulation), via
+`utilisation_log` + the `verify_configuration_*_observed` entry points: watch
+utilisation climb as the frontier fans out and fall away in the tail. **`wsl.exe` must be
 spawned detached from the console** (`CREATE_NO_WINDOW` in `run_in_qemu`): if
 it attaches to the parent console it mutates the console mode and corrupts all
 subsequent runner output in that window (staircased lines; progress bars

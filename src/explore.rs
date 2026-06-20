@@ -309,6 +309,23 @@ pub unsafe fn valid_path_to_local(
     )
 }
 
+/// A per-wave snapshot of how a wave-synchronised parallel/distributed search
+/// spread its work, for live **utilisation** logging. Reported once per BFS wave,
+/// between waves (so it never affects the result or its determinism).
+///
+/// `units[i]` is how many continuations worker (in-process pool) or simulated
+/// node (distributed simulation) `i` stepped this wave; `0` means it sat idle
+/// (the frontier was narrower than the worker count, or the scheduler gave it
+/// nothing). The units sum to [`WaveReport::frontier`].
+pub struct WaveReport {
+    /// 0-based wave index (the BFS depth reached so far).
+    pub wave: usize,
+    /// Continuations entering this wave - the work available to spread.
+    pub frontier: usize,
+    /// Per-worker / per-node count of continuations stepped this wave.
+    pub units: Vec<usize>,
+}
+
 /// The **deep inner parallel** search: explore one fixed configuration's
 /// frontier across a rayon work pool, the answer to "a single configuration must
 /// still use many cores". Continuations are pointer-free and `Send`, so a whole
@@ -331,7 +348,24 @@ pub unsafe fn verify_configuration_parallel(
     systems: &[InnerVerifierConfiguration],
     configuration: &TypeConfiguration,
 ) -> Result<Option<LocalAccumulators>, CompilerError> {
+    verify_configuration_parallel_observed(ast, systems, configuration, None)
+}
+
+/// As [`verify_configuration_parallel`], but reports per-wave **utilisation** to
+/// `observer` (once per BFS wave, between waves) so a test can stream a live
+/// per-core utilisation log. The observer only reads counters; it never affects
+/// the returned result.
+///
+/// # Safety
+/// As [`verify_configuration_parallel`].
+pub unsafe fn verify_configuration_parallel_observed(
+    ast: &Ast,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+    observer: Option<&(dyn Fn(&WaveReport) + Sync)>,
+) -> Result<Option<LocalAccumulators>, CompilerError> {
     use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let start = ast.head().ok_or_else(|| {
         CompilerError::Internal("verify_configuration_parallel: empty AST".to_string())
@@ -358,16 +392,42 @@ pub unsafe fn verify_configuration_parallel(
         .collect();
 
     let mut total = LocalAccumulators::default();
+    let workers = rayon::current_num_threads();
+    let mut wave_index = 0usize;
 
     // Process the frontier wave by wave; each wave is stepped in parallel.
     while !frontier.is_empty() {
         type WaveItem = (Vec<Continuation>, Option<Terminal>, LocalAccumulators);
+        // Per-worker step counts, allocated only when an observer wants them.
+        let counts: Vec<AtomicUsize> = if observer.is_some() {
+            (0..workers).map(|_| AtomicUsize::new(0)).collect()
+        } else {
+            Vec::new()
+        };
         let wave = frontier
             .par_iter()
             // SAFETY: `ast` is read-only and shared across workers; `cont`
             // references its nodes.
-            .map(|cont| unsafe { step_local(ast, configuration, cont) })
+            .map(|cont| {
+                if !counts.is_empty() {
+                    if let Some(worker) = rayon::current_thread_index() {
+                        if let Some(slot) = counts.get(worker) {
+                            slot.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                unsafe { step_local(ast, configuration, cont) }
+            })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
+
+        if let Some(observe) = observer {
+            observe(&WaveReport {
+                wave: wave_index,
+                frontier: frontier.len(),
+                units: counts.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
+            });
+        }
+        wave_index += 1;
 
         let mut next = Vec::new();
         for (successors, terminal, local) in wave {
@@ -478,7 +538,23 @@ pub unsafe fn verify_configuration_distributed_sim(
     systems: &[InnerVerifierConfiguration],
     configuration: &TypeConfiguration,
 ) -> Result<Option<LocalAccumulators>, CompilerError> {
+    verify_configuration_distributed_sim_observed(ast, systems, configuration, None)
+}
+
+/// As [`verify_configuration_distributed_sim`], but reports per-wave
+/// **utilisation** to `observer` (once per wave, between waves) so a test can
+/// stream a live per-node utilisation log. The observer never affects the result.
+///
+/// # Safety
+/// As [`verify_configuration_distributed_sim`].
+pub unsafe fn verify_configuration_distributed_sim_observed(
+    ast: &Ast,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+    observer: Option<&(dyn Fn(&WaveReport) + Sync)>,
+) -> Result<Option<LocalAccumulators>, CompilerError> {
     use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let encode = |cont: &Continuation| -> Result<Vec<u8>, CompilerError> {
         postcard::to_stdvec(cont)
@@ -515,12 +591,27 @@ pub unsafe fn verify_configuration_distributed_sim(
         .collect::<Result<_, _>>()?;
 
     let mut total = LocalAccumulators::default();
+    let workers = rayon::current_num_threads();
+    let mut wave_index = 0usize;
 
     while !frontier.is_empty() {
         type WaveItem = (Vec<Vec<u8>>, Option<Terminal>, LocalAccumulators);
+        // Per-node step counts, allocated only when an observer wants them.
+        let counts: Vec<AtomicUsize> = if observer.is_some() {
+            (0..workers).map(|_| AtomicUsize::new(0)).collect()
+        } else {
+            Vec::new()
+        };
         let wave = frontier
             .par_iter()
             .map(|bytes| -> Result<WaveItem, CompilerError> {
+                if !counts.is_empty() {
+                    if let Some(worker) = rayon::current_thread_index() {
+                        if let Some(slot) = counts.get(worker) {
+                            slot.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
                 // Receive: deserialize the migrated continuation, step it, then
                 // re-serialize the successors for the next hop.
                 let cont = decode(bytes)?;
@@ -534,6 +625,15 @@ pub unsafe fn verify_configuration_distributed_sim(
                 Ok((successors, terminal, local))
             })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
+
+        if let Some(observe) = observer {
+            observe(&WaveReport {
+                wave: wave_index,
+                frontier: frontier.len(),
+                units: counts.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
+            });
+        }
+        wave_index += 1;
 
         let mut next = Vec::new();
         for (successors, terminal, local) in wave {

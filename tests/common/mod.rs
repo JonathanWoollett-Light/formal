@@ -91,6 +91,51 @@ impl Progress {
     }
 }
 
+/// Builds an observer for the `verify_configuration_*_observed` calls that
+/// streams a live per-wave **utilisation** line to
+/// `target/tmp/test-logs/<test>/<phase>.progress`. `unit` names a slot: `"core"`
+/// for the in-process pool, `"node"` for the distributed simulation. Each line
+/// shows the wave index, the frontier width, how many slots were busy, and the
+/// per-slot step counts, so you can watch utilisation ramp up as the frontier
+/// fans out and fall away in the tail:
+///
+/// ```text
+/// wave 12 | frontier 8192 | 24/24 cores busy (100%) | per-core [341,338,...]
+/// wave 47 | frontier 3    | 3/24 cores busy (12%)   | per-core [1,1,1,0,...]
+/// ```
+///
+/// One line per wave (waves equal the BFS depth, which is small even when each
+/// wave is huge). Pass `Some(&observer)`; keep the returned value alive across the
+/// verification call.
+pub fn utilisation_log(phase: &str, unit: &'static str) -> impl Fn(&WaveReport) + Sync {
+    // A `Mutex` (not `RefCell`) so the observer is `Sync` and can cross into the
+    // rayon pool's `install`; it is only ever called between waves, so it never
+    // contends.
+    let file = std::sync::Mutex::new(
+        std::fs::File::create(format!("{}/{phase}.progress", test_log_dir())).ok(),
+    );
+    move |report: &WaveReport| {
+        let total = report.units.len();
+        let busy = report.units.iter().filter(|&&n| n > 0).count();
+        let pct = if total > 0 { 100 * busy / total } else { 0 };
+        let detail = report
+            .units
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        if let Ok(mut guard) = file.lock() {
+            if let Some(handle) = guard.as_mut() {
+                let _ = writeln!(
+                    handle,
+                    "wave {} | frontier {} | {busy}/{total} {unit}s busy ({pct}%) | per-{unit} [{detail}]",
+                    report.wave, report.frontier
+                );
+            }
+        }
+    }
+}
+
 /// Parses and compresses a dialect file given relative to `tests/` (each test
 /// folder stores its own `dialect.s`, generated from its `input.hl` by
 /// `hl::translate` and pinned by the test), returning the head of the AST.
