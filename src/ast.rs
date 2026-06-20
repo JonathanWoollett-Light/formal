@@ -270,6 +270,7 @@ pub enum Instruction {
     Sw(Sw),
     Lw(Lw),
     Addi(Addi),
+    Add(Add),
     Blt(Blt),
     Lb(Lb),
     Beqz(Beqz),
@@ -310,6 +311,7 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['s', 'w', ' ', rem @ ..] => Instruction::Sw(new_sw(rem)),
         ['l', 'w', ' ', rem @ ..] => Instruction::Lw(new_lw(rem)),
         ['a', 'd', 'd', 'i', ' ', rem @ ..] => Instruction::Addi(new_addi(rem)),
+        ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
@@ -343,6 +345,7 @@ impl fmt::Display for Instruction {
             Sw(sw) => write!(f, "{sw}"),
             Lw(lw) => write!(f, "{lw}"),
             Addi(addi) => write!(f, "{addi}"),
+            Add(add) => write!(f, "{add}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
@@ -935,6 +938,30 @@ fn new_addi(src: &[char]) -> Addi {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_immediate(&rhs).unwrap(),
+    }
+}
+
+/// Register-register addition `add rd, rs1, rs2` (64-bit, like RV64 `add`). The
+/// front-end emits this for `reg = a + b` when `b` is a register (the immediate
+/// form lowers to `addi`).
+#[derive(Debug, Clone)]
+pub struct Add {
+    pub out: Register,
+    pub lhs: Register,
+    pub rhs: Register,
+}
+
+impl fmt::Display for Add {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "add {}, {}, {}", self.out, self.lhs, self.rhs)
+    }
+}
+
+fn new_add(src: &[char]) -> Add {
+    Add {
+        out: new_register(&src[0..2]).unwrap(),
+        lhs: new_register(&src[4..6]).unwrap(),
+        rhs: new_register(&src[8..10]).unwrap(),
     }
 }
 

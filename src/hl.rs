@@ -784,19 +784,25 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
         return Ok(format!("    csrr {lhs}, {inner}"));
     }
 
-    // Arithmetic: `reg = reg2 + imm` / `reg = reg2 - imm`.
+    // Arithmetic: `reg = reg2 + imm` / `reg = reg2 - imm` (immediate), or
+    // `reg = reg2 + reg3` (register-register addition).
     let tokens: Vec<&str> = rhs.split_whitespace().collect();
-    if let [base, op @ ("+" | "-"), imm] = tokens.as_slice() {
+    if let [base, op @ ("+" | "-"), operand] = tokens.as_slice() {
         if !is_register(base) {
             return Err(format!("`{base}` is not a register"));
         }
-        if parse_int(imm).is_none() {
-            return Err(format!("invalid immediate `{imm}`"));
+        // Register-register addition lowers to `add`; `-` keeps the immediate
+        // form (a register subtraction would need its own instruction).
+        if *op == "+" && is_register(operand) {
+            return Ok(format!("    add {lhs}, {base}, {operand}"));
+        }
+        if parse_int(operand).is_none() {
+            return Err(format!("invalid immediate `{operand}`"));
         }
         let imm = if *op == "-" {
-            format!("-{imm}")
+            format!("-{operand}")
         } else {
-            (*imm).to_string()
+            (*operand).to_string()
         };
         return Ok(format!("    addi {lhs}, {base}, {imm}"));
     }

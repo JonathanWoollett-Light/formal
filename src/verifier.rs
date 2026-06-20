@@ -656,6 +656,7 @@ impl Explorerer {
             | Instruction::Li(_)
             | Instruction::Label(_)
             | Instruction::Addi(_)
+            | Instruction::Add(_)
             | Instruction::Blt(_)
             | Instruction::Csrr(_)
             | Instruction::Bne(_)
@@ -1945,6 +1946,7 @@ unsafe fn compute_next(
                 | Instruction::Lat(_)
                 | Instruction::Li(_)
                 | Instruction::Addi(_)
+                | Instruction::Add(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 | Instruction::Blt(_)
@@ -2390,6 +2392,7 @@ unsafe fn compute_next(
                 | Instruction::Lat(_)
                 | Instruction::Li(_)
                 | Instruction::Addi(_)
+                | Instruction::Add(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 | Instruction::Sw(_)
@@ -2594,6 +2597,24 @@ unsafe fn apply_node(
             state.registers[hartu]
                 .insert(*out, out_value)
                 .internal("apply: addi register insert failed")?;
+        }
+        Instruction::Add(Add { out, lhs, rhs }) => {
+            let lhs_value = state.registers[hartu]
+                .get(lhs)
+                .cloned()
+                .internal("apply: add lhs register has no value")?;
+            let rhs_value = state.registers[hartu]
+                .get(rhs)
+                .cloned()
+                .internal("apply: add rhs register has no value")?;
+            let out_value = lhs_value + rhs_value;
+            // Register-register arithmetic carries no rewritable immediate, so
+            // compaction (which re-points immediate offsets) can never adjust this
+            // node: pin it so a region reached through it stays uncompacted.
+            sinks.pinned_nodes.insert(node);
+            state.registers[hartu]
+                .insert(*out, out_value)
+                .internal("apply: add register insert failed")?;
         }
         #[allow(unreachable_patterns)]
         Instruction::Csrr(Csrr { dest, src }) => match src {
