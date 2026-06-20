@@ -1731,6 +1731,56 @@ program remain legible from the source. Inline assembly stays available via
 the `asm:` block (spelled like `if:`), so nothing expressible in the dialect
 is ever out of reach. The language's name is still undecided.
 
+### Parallelism & SIMD (landed, and the next steps)
+
+**Landed** (see [§6](#6-integration-tests-tests) tests `fannkuch_v2`, `tls_probe`,
+`vector_add`, and the **parallel-program obstacles** in [§9](#9-conventions--gotchas)):
+- Real multi-hart **work-sharing** (`fannkuch_v2`): block decomposition + per-hart
+  thread-local arrays + a lock-free `amoadd`/`amomax` reduction.
+- **Per-hart thread-local storage** in codegen (`tp = mhartid * block_size`).
+- **`amomax`** (atomic max) and **`fence`** instructions.
+- The **register-only RISC-V V subset** (`vsetivli`, `vmv.v.i`, `vadd.vv`,
+  `vmv.x.s`), verified and booted (`vector_add`).
+
+**Next steps, in priority order:**
+
+1. **Vectorise the fannkuch flip (the headline SIMD win).** Needs two more vector
+   ops the V extension already provides and QEMU already runs (both confirmed):
+   - **`vle32.v` / `vse32.v`** (vector load/store). The hard part is the verifier
+     model: a vector load reads `vl` consecutive lanes from memory into a
+     `MemoryValue::List`. Model it per-lane via the existing scalar
+     `find_state_load` / `find_state_store` (loop `i in 0..vl`, offset `i*4`),
+     loading each lane into the destination vector register's slot and collecting
+     a `List`; mirror for store. Record the accessed range `[rs1, rs1+vl*4)` so
+     compaction sees it.
+   - **`vrgather.vv`** (gather/permute) -- the SIMD pancake-flip primitive: `vd[i]
+     = vs1[vs2[i]]`. Model as indexing the `vs1` lane list by the concrete `vs2`
+     index lanes. A reverse-of-first-k flip becomes one `vrgather` with a reversal
+     mask, replacing the scalar swap loop.
+   Then a `fannkuch_v3`-style SIMD inner loop (permutation in one vector register,
+   flips via `vrgather`, find-length via `vmsne`+`vfirst`). This is the ~10-20x
+   lever versus the SSE C reference discussed in §7.2.
+
+2. **Weak-memory soundness.** The verifier explores hart interleavings under a
+   **sequentially-consistent** model, so multi-hart programs run under round-robin
+   TCG (not MTTCG); a `fence` is available but QEMU MTTCG did not reliably honour it
+   in testing. Either model weak memory in the verifier or have codegen insert the
+   acquire/release fences a verified cross-hart hand-off needs. This connects
+   directly to the HPC distributed-verifier plan's determinism guardrails.
+
+3. **Fork on indeterminate comparisons.** `queue_up` errors on an indeterminate
+   `bge`/`blt`/`beqz` (e.g. on a `forget`-havoced register) instead of exploring
+   both directions. Making it fork would let `forget`/`assume` express any
+   data-dependent branch whose direction depends on the runtime `n` (the
+   verify-small/run-large branch hazard); `amomax` was the targeted fix for the
+   one case (the parallel max-combine) that hit it.
+
+4. **Scale the inner search past 2 harts.** 3-hart verification is infeasible today
+   (`queue_up`'s O(N^2) front-search; [§9](#9-conventions--gotchas)). A
+   cached/incremental front map removes the O(N^2); beyond that, the
+   distributed-verifier rework (this branch, `hpc-distributed-verifier`) is the path
+   to verifying larger configurations and hart counts.
+
 ### Ambitions
 
 The motivating end-states for the language: a bare-metal OS running DOOM; a
