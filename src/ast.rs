@@ -278,6 +278,7 @@ pub enum Instruction {
     Mul(Mul),
     Div(Div),
     Rem(Rem),
+    Amoadd(Amoadd),
     Blt(Blt),
     Lb(Lb),
     Beqz(Beqz),
@@ -325,6 +326,9 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['m', 'u', 'l', ' ', rem @ ..] => Instruction::Mul(new_mul(rem)),
         ['d', 'i', 'v', ' ', rem @ ..] => Instruction::Div(new_div(rem)),
         ['r', 'e', 'm', ' ', rem @ ..] => Instruction::Rem(new_rem(rem)),
+        ['a', 'm', 'o', 'a', 'd', 'd', '.', 'w', ' ', rem @ ..] => {
+            Instruction::Amoadd(new_amoadd(rem))
+        }
         ['b', 'l', 't', ' ', rem @ ..] => Instruction::Blt(new_blt(rem)),
         ['l', 'b', ' ', rem @ ..] => Instruction::Lb(new_lb(rem)),
         ['b', 'e', 'q', 'z', ' ', rem @ ..] => Instruction::Beqz(new_beqz(rem)),
@@ -363,6 +367,7 @@ impl fmt::Display for Instruction {
             Mul(mul) => write!(f, "{mul}"),
             Div(div) => write!(f, "{div}"),
             Rem(rem) => write!(f, "{rem}"),
+            Amoadd(x) => write!(f, "{x}"),
             Blt(blt) => write!(f, "{blt}"),
             Lb(lb) => write!(f, "{lb}"),
             Beqz(beqz) => write!(f, "{beqz}"),
@@ -1074,6 +1079,34 @@ fn new_rem(src: &[char]) -> Rem {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// Atomic fetch-add `amoadd.w rd, rs2, (rs1)` (RV32A/RV64A, word). Atomically:
+/// `rd = mem[rs1]; mem[rs1] = rd + rs2`. The single indivisible read-modify-write
+/// the harts use to claim a unique work index from a shared counter.
+#[derive(Debug, Clone)]
+pub struct Amoadd {
+    /// Destination: receives the old value.
+    pub rd: Register,
+    /// The addend.
+    pub rs2: Register,
+    /// The address register (the shared word).
+    pub rs1: Register,
+}
+
+impl fmt::Display for Amoadd {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "amoadd.w {}, {}, ({})", self.rd, self.rs2, self.rs1)
+    }
+}
+
+fn new_amoadd(src: &[char]) -> Amoadd {
+    // `rd, rs2, (rs1)`: rd at 0..2, rs2 at 4..6, rs1 at 9..11 (after `, (`).
+    Amoadd {
+        rd: new_register(&src[0..2]).unwrap(),
+        rs2: new_register(&src[4..6]).unwrap(),
+        rs1: new_register(&src[9..11]).unwrap(),
     }
 }
 

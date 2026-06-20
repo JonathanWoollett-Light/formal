@@ -1,0 +1,19 @@
+# Atomic fetch-add (`amoadd.w`), the read-modify-write primitive the harts use to
+# claim work from a shared counter. Written as inline assembly (the dialect
+# instruction is parsed back from the `asm:` block, so the verifier models it --
+# it is not opaque). Single hart here, proving the RMW semantics: the old value
+# is returned and the memory is incremented in one step.
+counter: thread [u32]*1
+t0 = &counter
+t1 = 5
+t0[0:4] = t1          # counter = 5
+t3 = 3
+asm:
+    amoadd.w t2, t3, (t0)   # t2 = old (5); counter = 5 + 3 = 8
+
+a0 = 5
+require t2 == a0      # the returned old value
+t4 = t0[0:4]
+a1 = 8
+require t4 == a1      # the incremented counter
+exit(0)

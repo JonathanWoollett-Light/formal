@@ -190,6 +190,18 @@ pub unsafe fn step(
         Instruction::Lb(Lb { from, offset, .. }) => {
             check_load_at(&cont.state, hart, active, sinks, from, offset, 1)?
         }
+        // An atomic accesses `(rs1)` (zero offset): validate it like a 4-byte
+        // store (read and write hit the same address, so the store check covers
+        // both).
+        Instruction::Amoadd(Amoadd { rs1, .. }) => {
+            let zero = Offset {
+                value: Immediate {
+                    radix: 10,
+                    value: 0,
+                },
+            };
+            check_store_at(&cont.state, hart, active, sinks, rs1, &zero, 4)?
+        }
         // A `define`/`la`/`lat` must match the fixed configuration the way the
         // oracle's `load_label` validates; this also guards `apply_node`'s
         // annotation asserts, reached only once `load_label` has accepted.
@@ -755,6 +767,17 @@ impl Explorerer {
                 offset,
             }) => {
                 self = match self.check_load(leaf_ptr, branch, from, offset, 1)? {
+                    ControlFlow::Continue(x) => x,
+                    ControlFlow::Break(outcome) => return Ok(outcome),
+                };
+            }
+            // An atomic accesses `(rs1)` (zero offset): validate the 4-byte access
+            // like a store (read and write hit the same address).
+            Instruction::Amoadd(Amoadd { rs1, .. }) => {
+                let zero = Offset {
+                    value: Immediate { radix: 10, value: 0 },
+                };
+                self = match self.check_store(leaf_ptr, branch, rs1, &zero, 4)? {
                     ControlFlow::Continue(x) => x,
                     ControlFlow::Break(outcome) => return Ok(outcome),
                 };
@@ -2008,7 +2031,10 @@ unsafe fn compute_next(
                 | Instruction::Sw(Sw { to: register, .. })
                 | Instruction::Ld(Ld { from: register, .. })
                 | Instruction::Lw(Lw { from: register, .. })
-                | Instruction::Lb(Lb { from: register, .. }) => {
+                | Instruction::Lb(Lb { from: register, .. })
+                // An atomic RMW is the racy primitive: it accesses `(rs1)`, racy
+                // exactly when that points at a global (the shared counter).
+                | Instruction::Amoadd(Amoadd { rs1: register, .. }) => {
                     let value = state.registers[hart as usize]
                         .get(register)
                         .internal("queue_up: racy access register has no value")?;
@@ -2434,6 +2460,7 @@ unsafe fn compute_next(
                 | Instruction::Mul(_)
                 | Instruction::Div(_)
                 | Instruction::Rem(_)
+                | Instruction::Amoadd(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
                 | Instruction::Sw(_)
@@ -2599,6 +2626,31 @@ unsafe fn apply_node(
         }
         Instruction::Lb(Lb { to, from, offset }) => {
             find_state_load(state, sinks, node, hartu, to, from, offset, 1)?;
+        }
+        Instruction::Amoadd(Amoadd { rd, rs2, rs1 }) => {
+            // Atomic word read-modify-write: `rd = mem[rs1]; mem[rs1] = rd + rs2`,
+            // one indivisible step (its racy ordering against other harts is what
+            // `queue_up` enumerates). `amoadd.w` has no offset immediate (the
+            // address is exactly rs1), so pin the node against compaction's offset
+            // rewriting.
+            let zero = Offset {
+                value: Immediate {
+                    radix: 10,
+                    value: 0,
+                },
+            };
+            find_state_load(state, sinks, node, hartu, rd, rs1, &zero, 4)?;
+            let old = state.registers[hartu]
+                .get(rd)
+                .internal("amoadd: rd has no value after load")?
+                .clone();
+            let addend = state.registers[hartu]
+                .get(rs2)
+                .internal("amoadd: rs2 has no value")?
+                .clone();
+            let updated = old + addend;
+            store_value_at(state, sinks, node, hartu, rs1, &zero, 4, updated)?;
+            sinks.pinned_nodes.insert(node);
         }
         Instruction::Addi(Addi { out, lhs, rhs }) => {
             let lhs_value = state.registers[hartu]
@@ -2862,13 +2914,29 @@ fn find_state_store(
     offset: impl Borrow<Offset>,
     len: u64,
 ) -> Result<(), CompilerError> {
-    let to_value = state.registers[hartu]
-        .get(to)
-        .internal("store: destination register has no value")?
-        .clone();
     let from_value = state.registers[hartu]
         .get(from)
         .internal("store: source register has no value")?
+        .clone();
+    store_value_at(state, sinks, node, hartu, to, offset, len, from_value)
+}
+
+/// The store half of [`find_state_store`], given the value directly so an atomic
+/// read-modify-write (`amoadd`) can write a computed value without a source
+/// register.
+fn store_value_at(
+    state: &mut State,
+    sinks: &mut RecordSinks,
+    node: NonNull<AstNode>,
+    hartu: usize,
+    to: impl Borrow<Register>,
+    offset: impl Borrow<Offset>,
+    len: u64,
+    from_value: MemoryValue,
+) -> Result<(), CompilerError> {
+    let to_value = state.registers[hartu]
+        .get(to)
+        .internal("store: destination register has no value")?
         .clone();
     match &to_value {
         MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr {
