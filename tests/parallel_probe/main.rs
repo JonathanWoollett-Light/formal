@@ -45,6 +45,7 @@ fn parallel_probe() {
         run_program_smp(
             "parallel_probe",
             2,
+            false,
             ast,
             &v.configuration,
             &v.accessed,

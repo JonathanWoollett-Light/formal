@@ -388,6 +388,23 @@ fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
 ///
 /// [riscv-gnu-toolchain]: https://github.com/riscv-collab/riscv-gnu-toolchain/releases
 pub fn run_in_qemu(name: &str, asm: &str, smp: u8) -> QemuOutcome {
+    run_in_qemu_opts(name, asm, smp, false)
+}
+
+/// Like [`run_in_qemu`] but, with `long = true`, runs a long compute (e.g. a large
+/// fannkuch n) to completion: normal TCG (not `one-insn-per-tb`) and no
+/// per-instruction `exec` logging -- both of which would make 479M instructions
+/// take hours and produce an astronomically large log -- and a long timeout.
+/// Fault detection (`guest_errors`) is kept.
+pub fn run_in_qemu_opts(name: &str, asm: &str, smp: u8, long: bool) -> QemuOutcome {
+    let (timeout, accel, logd) = if long {
+        // `thread=multi` (MTTCG) runs each hart on its own host core, so the
+        // leader gets a full core instead of round-robin time-slicing against the
+        // parked workers.
+        ("420", "tcg,thread=multi", "guest_errors")
+    } else {
+        ("3", "tcg,one-insn-per-tb=on", "guest_errors,exec,nochain")
+    };
     use std::process::Command;
 
     let dir = env!("CARGO_MANIFEST_DIR");
@@ -414,8 +431,8 @@ rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
 # `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
 # (to stderr, which is unbuffered, so the host can watch the count live for
 # progress reporting); `guest_errors` shares the same log for fault detection.
-timeout 3 qemu-system-riscv64 -machine virt -smp {smp} -bios none -display none -monitor none \
-    -accel tcg,one-insn-per-tb=on -d guest_errors,exec,nochain \
+timeout {timeout} qemu-system-riscv64 -machine virt -smp {smp} -bios none -display none -monitor none \
+    -accel {accel} -d {logd} \
     -serial "file:$G/{name}.serial" -kernel "$G/{name}.elf" \
     >/dev/null 2>"$G/{name}.qemu.log" || true
 echo "===SERIAL_BEGIN==="
@@ -541,6 +558,7 @@ pub unsafe fn run_program(
     run_program_smp(
         name,
         1,
+        false,
         ast,
         configuration,
         accessed,
@@ -553,11 +571,13 @@ pub unsafe fn run_program(
 /// Like [`run_program`] but boots `harts` harts (`qemu -smp harts`): for a
 /// genuinely multi-threaded program whose harts must all run (work-claiming
 /// atomics, a last-finisher barrier), not just a leader. The verified hart count
-/// and the booted hart count then match.
+/// and the booted hart count then match. `long = true` uses the long-compute QEMU
+/// config (see [`run_in_qemu_opts`]) for a large fannkuch n.
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn run_program_smp(
     name: &str,
     harts: u8,
+    long: bool,
     ast: Option<NonNull<AstNode>>,
     configuration: &TypeConfiguration,
     accessed: &AccessedRanges,
@@ -599,7 +619,7 @@ pub unsafe fn run_program_smp(
         );
     }
 
-    let outcome = run_in_qemu(name, &asm, harts);
+    let outcome = run_in_qemu_opts(name, &asm, harts, long);
     assert_eq!(
         outcome.faults, 0,
         "{name}: program faulted in QEMU ({} CPU exception(s)):\n{}",
@@ -640,7 +660,7 @@ G="$(wslpath '{gen}')"
 # Static ELF with entry `_start`; `--no-relax` keeps `la` PC-relative (no `gp`).
 "$LD" --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 echo "===OUT_BEGIN==="
-timeout 10 "$QEMU" "$G/{name}.elf" || true
+timeout 150 "$QEMU" "$G/{name}.elf" || true
 echo "===OUT_END==="
 echo "===END==="
 "#

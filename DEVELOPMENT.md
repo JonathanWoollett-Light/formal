@@ -1024,11 +1024,18 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   exactly one reads 0 and the ids are unique (they could be `[0, 15, 7]`), so the
   program uses the one distinction the verifier can make -- `mhartid == 0` -- to
   gate the leader's work, while the others skip to a shared `wfi`. The leader
-  reads `n` at runtime (`forget`+`assume`), computes fannkuch(n), and writes the
-  result to the QEMU virt UART (0x10000000) as decimal -- bare metal, no `ecall`.
-  Boots under QEMU; the UART receives `2\n2` (fannkuch(3)). `n` is kept small
-  because the leader runs a long solo stretch while the workers sit parked far
-  back -- the O(N^2) worst case for the front-search (see [§9](#9-conventions--gotchas)).
+  reads `n` at runtime = **12** (the benchmark input); the verifier is blind to it
+  (`forget`) and an `assume` narrows it to 3, so the *verified* search stays small
+  (the leader is a long solo stretch -- the O(N^2) front-search case) while the
+  runtime computes the real n = 12. The arrays are initialised over **all 12
+  elements** with a literal bound so the dead-data compaction keeps them
+  full-sized (else they would be sized to the verified n = 3 and the runtime n = 12
+  would read past them -- see [§9](#9-conventions--gotchas)). The leader writes the
+  result to the QEMU virt UART as decimal; booted under the **long-compute** config
+  (`run_program_smp(.., long=true)`: normal multi-threaded TCG, no per-instruction
+  log, 420s timeout), the UART receives `3968050\nPfannkuchen(12) = 65` -- the
+  answer from the C reference. **`#[ignore]`d**: ~10 min under bare-metal QEMU
+  (~7x slower than user-mode), so run it explicitly (`--run-ignored`).
 - `atomic_add` ([tests/atomic_add/](tests/atomic_add/)): `amoadd.w` end to end --
   an inline-asm atomic parsed back from the `asm:` block and modeled as a
   read-modify-write; proven (old value returned, counter incremented) and booted.
@@ -1415,6 +1422,17 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   the legitimate deep walk does not trip it; the real guard is the "reached root"
   check. A cached/incremental front map would remove the O(N²) (future work, part
   of the parallel rework).
+- **Dead-data compaction sizes arrays to the _verified_ `n`.** Codegen sizes each
+  variable's `.bss` storage to the bytes the verifier saw accessed (it removes
+  dead gaps too, keeping `.zero` padding only below the last live byte;
+  [§4.8](#48-code-generation--emit_executable-srccodegenrs)). So with
+  `forget`+`assume` narrowing the verifier to a small `n`, an array initialised
+  over `0..n` is emitted at that small size -- and a **larger runtime `n`** then
+  reads past it, producing invalid permutations whose flip loop never terminates
+  (the bug behind every early `fannkuch_v2` runtime failure). Fix: initialise the
+  arrays over the full **runtime** range with a *literal* bound (e.g. `0..12`, not
+  `0..n`), so every element is live and the array stays full-sized. `fannkuch_v2`
+  does this to run n = 12 while verifying n = 3.
 - **One `AstNode` = one `Layout::new::<AstNode>()` allocation.** Every AST node is
   its own allocation: `new_ast` allocates them per node, `compress` re-allocates
   them per node, and the optimizer frees them per node (`remove_untouched` /

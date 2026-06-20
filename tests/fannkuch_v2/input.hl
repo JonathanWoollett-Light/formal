@@ -37,6 +37,16 @@ def uart_int(v):
         t0 = t0 + 1
         a2 = a2 - 1
 
+# uart_str(s): write the NUL-terminated string s to the UART.
+def uart_str(s):
+    a1 = &s
+    t2 = a1[0:1]
+    t3 = 0x10000000
+    while t2 != 0:
+        t3[0:1] = t2
+        a1 = a1 + 1
+        t2 = a1[0:1]
+
 # every hart reads mhartid; only the leader (== 0) runs the body below.
 t0 = csr(mhartid)
 if t0 == 0:
@@ -44,28 +54,38 @@ if t0 == 0:
     work: thread [u32]*16
     cnt: thread [u32]*16
 
-    # n: read at runtime, verifier-blind (forget), narrowed to 3 (assume). Kept
-    # small: the leader runs a long solo stretch while the workers are parked, the
-    # O(N^2) worst case for the verifier's front-search.
-    a2 = 3
+    # n: read at runtime, n = 12 (the benchmark input). The verifier is blind to
+    # it (forget) and an assume narrows it to 3 so verification stays bounded (the
+    # leader runs a long solo stretch while the workers park -- the O(N^2)
+    # front-search worst case -- so the *verified* n is kept small).
+    a2 = 12
     forget a2
     assume:
         a2 = 3
 
-    # init perm[i] = i for i in 0..n
+    # init **all 12** elements (the max n) with a *literal* bound, so the dead-data
+    # compaction keeps the arrays full-sized. Otherwise they are sized to the
+    # verified n (3) and the runtime n = 12 reads past the array -> invalid
+    # permutations -> the flip loop never terminates. perm gets the identity,
+    # cnt and work get 0.
     t0 = &perm
     t1 = 0
-    while t1 != a2:
+    t3 = 12
+    while t1 != t3:
         t0[0:4] = t1
         t0 = t0 + 4
         t1 = t1 + 1
-
-    # init cnt[i] = 0 for i in 0..n
     t0 = &cnt
     t1 = 0
-    t3 = 0
-    while t1 != a2:
-        t0[0:4] = t3
+    t2 = 0
+    while t1 != t3:
+        t0[0:4] = t2
+        t0 = t0 + 4
+        t1 = t1 + 1
+    t0 = &work
+    t1 = 0
+    while t1 != t3:
+        t0[0:4] = t2
         t0 = t0 + 4
         t1 = t1 + 1
 
@@ -164,15 +184,15 @@ if t0 == 0:
                 t2[0:4] = t3
                 a3 = a3 + 1
 
-    # output "<checksum>\n<maxflips>\n" to the UART
+    # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" to the UART (the
+    # Benchmarks Game format). n is in a2; save it (the prints clobber a2).
+    a3 = a2 + 0
     uart_int(a6)
-    t3 = 0x10000000
-    t4 = 10
-    t3[0:1] = t4
+    uart_str("\nPfannkuchen(")
+    uart_int(a3)
+    uart_str(") = ")
     uart_int(a5)
-    t3 = 0x10000000
-    t4 = 10
-    t3[0:1] = t4
+    uart_str("\n")
 
 # all harts converge here and park.
 asm:
