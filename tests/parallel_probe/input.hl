@@ -1,0 +1,37 @@
+# Parallel structure probe (2 harts): each claims a rank via amoadd on a zero-init
+# counter, writes rank+1 to a shared slot, and the last finisher sums the slots
+# (1+2 = 3) to the UART. No barriers.
+rank_counter: global u32
+done_counter: global u32
+slots: global [u32]*2
+
+t0 = &rank_counter
+t1 = 1
+asm:
+    amoadd.w a3, t1, (t0)
+
+a4 = a3 + 1
+t5 = 4
+t2 = a3 * t5
+t0 = &slots
+t0 = t0 + t2
+t0[0:4] = a4
+
+t0 = &done_counter
+t1 = 1
+asm:
+    amoadd.w t2, t1, (t0)
+a0 = 1
+if t2 == a0:
+    t0 = &slots
+    a5 = t0[0:4]
+    t0 = t0 + 4
+    a6 = t0[0:4]
+    a5 = a5 + a6
+    t3 = 0x10000000
+    t4 = a5 + 48
+    t3[0:1] = t4
+
+asm:
+    wfi
+unreachable

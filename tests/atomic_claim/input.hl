@@ -1,0 +1,13 @@
+# Lock-free work claiming across harts. The shared `rank` counter is a zero-init
+# global; each hart atomically fetch-adds 1 to claim a unique rank. With two harts
+# the ranks are 0 and 1, so every hart's claim is < 2 regardless of interleaving.
+rank: global u32
+t0 = &rank
+t1 = 1
+asm:
+    amoadd.w t2, t1, (t0)   # t2 = this hart's claimed rank; rank += 1
+a0 = 2
+require t2 < a0            # the claim is in range on every interleaving
+asm:
+    wfi
+unreachable

@@ -81,7 +81,7 @@ fn runtime_locality_read_keeps_the_byte() {
 
     // Boot it in QEMU (requires the toolchain + QEMU): the program reads the
     // emitted locality byte and halts: no output, no fault.
-    let outcome = run_in_qemu("locality_runtime_read", &asm);
+    let outcome = run_in_qemu("locality_runtime_read", &asm, 1);
     assert_eq!(
         outcome.faults, 0,
         "locality_runtime_read faulted in QEMU:\n{}",

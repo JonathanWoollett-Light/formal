@@ -387,7 +387,7 @@ fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
 /// overridden with the `RISCV_BIN` environment variable.
 ///
 /// [riscv-gnu-toolchain]: https://github.com/riscv-collab/riscv-gnu-toolchain/releases
-pub fn run_in_qemu(name: &str, asm: &str) -> QemuOutcome {
+pub fn run_in_qemu(name: &str, asm: &str, smp: u8) -> QemuOutcome {
     use std::process::Command;
 
     let dir = env!("CARGO_MANIFEST_DIR");
@@ -414,7 +414,7 @@ rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
 # `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
 # (to stderr, which is unbuffered, so the host can watch the count live for
 # progress reporting); `guest_errors` shares the same log for fault detection.
-timeout 3 qemu-system-riscv64 -machine virt -bios none -display none -monitor none \
+timeout 3 qemu-system-riscv64 -machine virt -smp {smp} -bios none -display none -monitor none \
     -accel tcg,one-insn-per-tb=on -d guest_errors,exec,nochain \
     -serial "file:$G/{name}.serial" -kernel "$G/{name}.elf" \
     >/dev/null 2>"$G/{name}.qemu.log" || true
@@ -538,6 +538,33 @@ pub unsafe fn run_program(
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
 ) -> String {
+    run_program_smp(
+        name,
+        1,
+        ast,
+        configuration,
+        accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
+    )
+}
+
+/// Like [`run_program`] but boots `harts` harts (`qemu -smp harts`): for a
+/// genuinely multi-threaded program whose harts must all run (work-claiming
+/// atomics, a last-finisher barrier), not just a leader. The verified hart count
+/// and the booted hart count then match.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn run_program_smp(
+    name: &str,
+    harts: u8,
+    ast: Option<NonNull<AstNode>>,
+    configuration: &TypeConfiguration,
+    accessed: &AccessedRanges,
+    transitions: &AccessTransitions,
+    uncompactable: &BTreeSet<Label>,
+    pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+) -> String {
     let asm = emit_executable(
         ast,
         configuration,
@@ -572,7 +599,7 @@ pub unsafe fn run_program(
         );
     }
 
-    let outcome = run_in_qemu(name, &asm);
+    let outcome = run_in_qemu(name, &asm, harts);
     assert_eq!(
         outcome.faults, 0,
         "{name}: program faulted in QEMU ({} CPU exception(s)):\n{}",

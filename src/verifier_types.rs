@@ -832,6 +832,9 @@ impl Add for MemoryValue {
             (U32(a), U32(b)) => I64(MemoryValueI64::from(a)
                 .add(&MemoryValueI64::from(b))
                 .unwrap()),
+            // An accumulator (already widened to `I64`) plus another loaded `U32`,
+            // as when summing per-hart partial results.
+            (I64(a), U32(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
             (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
                 // dbg!(&b);
                 let c = MemoryValueI64::try_from(a.offset).unwrap();
