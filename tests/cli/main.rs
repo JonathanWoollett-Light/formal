@@ -71,3 +71,72 @@ fn mpi_subcommand_without_feature_errors() {
         "expected an `hpc`-feature hint, got: {stderr}"
     );
 }
+
+/// `formal mpi-verify` built without the `hpc` feature reports the same
+/// `hpc`-required message (a separate subcommand arm from `mpi-selftest`).
+#[test]
+fn mpi_verify_without_feature_errors() {
+    let output = formal()
+        .arg("mpi-verify")
+        .output()
+        .expect("run `formal mpi-verify`");
+    assert!(
+        !output.status.success(),
+        "mpi-verify without `hpc` should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("hpc"),
+        "expected an `hpc`-feature hint"
+    );
+}
+
+/// `formal new` with no project name prints the `new` usage and exits non-zero.
+#[test]
+fn new_without_name_prints_usage() {
+    let output = formal().arg("new").output().expect("run `formal new`");
+    assert!(
+        !output.status.success(),
+        "`formal new` with no name should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage: formal new"),
+        "expected the `new` usage text"
+    );
+}
+
+/// When `cargo new` fails, `formal new` reports the error and exits non-zero
+/// rather than panicking. Running it twice in the same directory makes the
+/// second `cargo new` fail (the destination already exists), driving
+/// `new_project`'s error path.
+#[test]
+fn new_into_existing_directory_fails() {
+    let dir = std::env::temp_dir().join(format!("formal-cli-existing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+
+    let first = formal()
+        .args(["new", "demo"])
+        .current_dir(&dir)
+        .status()
+        .expect("run `formal new demo`");
+    assert!(
+        first.success(),
+        "the first `formal new demo` should succeed"
+    );
+
+    let second = formal()
+        .args(["new", "demo"])
+        .current_dir(&dir)
+        .output()
+        .expect("re-run `formal new demo`");
+    assert!(
+        !second.status.success(),
+        "a second `formal new demo` (destination exists) should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("formal new:"),
+        "expected the `formal new:` error prefix"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
