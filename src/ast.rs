@@ -210,6 +210,8 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
         ['#', '$', ' ', rem @ ..] => Instruction::Define(new_cast(rem)),
         ['#', '&', ' ', rem @ ..] => Instruction::Lat(new_lat(rem)),
         ['#', '@', ' ', rem @ ..] => Instruction::Region(new_region(rem)),
+        ['#', '('] => Instruction::Assume(Assume { open: true }),
+        ['#', ')'] => Instruction::Assume(Assume { open: false }),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -286,6 +288,7 @@ pub enum Instruction {
     Lat(Lat),
     Beq(Beq),
     Region(Region),
+    Assume(Assume),
 }
 
 impl Instruction {
@@ -366,6 +369,7 @@ impl fmt::Display for Instruction {
             Define(cast) => write!(f, "{cast}"),
             Beq(beq) => write!(f, "{beq}"),
             Region(region) => write!(f, "{region}"),
+            Assume(assume) => write!(f, "{assume}"),
         }
     }
 }
@@ -1041,6 +1045,23 @@ fn new_rem(src: &[char]) -> Rem {
         out: new_register(&src[0..2]).unwrap(),
         lhs: new_register(&src[4..6]).unwrap(),
         rhs: new_register(&src[8..10]).unwrap(),
+    }
+}
+
+/// An `assume:` block marker: `#(` opens, `#)` closes. The instructions between
+/// them are **verified** (they narrow the symbolic state, e.g. `n = n % 4` bounds
+/// an otherwise-unknown runtime value) but are **not emitted** to the binary, so
+/// the running program keeps the original, unnarrowed value. A deliberate,
+/// unsound-by-design narrowing that makes an unbounded runtime-`n` search
+/// tractable for the verifier.
+#[derive(Debug, Clone)]
+pub struct Assume {
+    pub open: bool,
+}
+
+impl fmt::Display for Assume {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", if self.open { "#(" } else { "#)" })
     }
 }
 

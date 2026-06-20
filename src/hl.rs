@@ -397,6 +397,17 @@ impl Translator {
             return Ok(());
         }
 
+        // `assume:` block: the indented body is translated normally (so e.g.
+        // `n = n % t` becomes `rem`) but bracketed by `#(` / `#)`, which the
+        // verifier executes to narrow its symbolic state while codegen drops the
+        // whole block. A deliberate, unsound narrowing for tractability.
+        if stripped == "assume:" {
+            self.out.push("    #(".to_string());
+            self.body(lines, position, line)?;
+            self.out.push("    #)".to_string());
+            return Ok(());
+        }
+
         // Keyword statements.
         if stripped == "fail" {
             self.out.push("    #!".to_string());

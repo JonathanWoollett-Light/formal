@@ -85,8 +85,20 @@ pub fn emit_executable(
     // .text: walk the AST, lowering the verification directives to real RISC-V
     // and re-pointing immediates at the compacted layout where required.
     let mut next = ast;
+    // An `assume:` block (`#(` ... `#)`) is verified (it narrowed the symbolic
+    // state) but must not run, so it is skipped here along with its markers.
+    let mut in_assume = false;
     while let Some(node) = next {
         let instr = unsafe { &node.as_ref().value.this };
+        if let Instruction::Assume(assume) = instr {
+            in_assume = assume.open;
+            next = unsafe { node.as_ref().next };
+            continue;
+        }
+        if in_assume {
+            next = unsafe { node.as_ref().next };
+            continue;
+        }
         let patched = rewrites
             .get(&node)
             .and_then(|immediate| patch_immediate(instr, *immediate));

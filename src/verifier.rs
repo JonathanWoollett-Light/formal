@@ -672,6 +672,9 @@ impl Explorerer {
             | Instruction::Ecall(_)
             | Instruction::Beq(_)
             | Instruction::J(_)
+            // `assume:` markers cannot be invalid; they only bracket a block the
+            // verifier executes (to narrow state) and codegen drops.
+            | Instruction::Assume(_)
             // `#@` cannot itself be invalid; its effect (declaring a section) is
             // applied during state replay in `find_state`.
             | Instruction::Region(_) => {}
@@ -1955,6 +1958,9 @@ unsafe fn compute_next(
                 | Instruction::Rem(_)
                 | Instruction::Csrr(_)
                 | Instruction::Define(_)
+                // `assume:` markers (`#(`/`#)`) carry no runtime effect and are
+                // never emitted; they advance like a label.
+                | Instruction::Assume(_)
                 | Instruction::Blt(_)
                 | Instruction::Bne(_)
                 | Instruction::Bnez(_)
@@ -2411,6 +2417,7 @@ unsafe fn compute_next(
                 | Instruction::Lb(_)
                 | Instruction::Fail(_)
                 | Instruction::Ecall(_)
+                | Instruction::Assume(_)
                 | Instruction::Region(_) => followup(
                     node_ref
                         .next
@@ -2688,6 +2695,9 @@ unsafe fn apply_node(
         // write/exit happens in the host), so applying it leaves state unchanged.
         Instruction::Ecall(_) => {}
         Instruction::Unreachable(_) => {}
+        // `assume:` markers (`#(`/`#)`) have no state effect; the body between
+        // them applies normally, narrowing state. Codegen drops the whole block.
+        Instruction::Assume(_) => {}
         // `#@ <start> <end> <perms>`: declare a memory region the program may
         // access. Takes effect when executed (so e.g. a heap allocator declares
         // each allocation as it makes it), extending the sections that raw-address
