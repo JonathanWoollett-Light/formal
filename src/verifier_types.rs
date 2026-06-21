@@ -855,6 +855,9 @@ impl Add for MemoryValue {
                 .add(&MemoryValueI64::from(b))
                 .unwrap()),
             (I64(a), I32(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
+            // A loaded `I32` plus a register immediate (`addi`, e.g. the `a = b`
+            // move) widens to `I64`, as the `(U32, I64)` arm does.
+            (I32(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
             x => todo!("{x:?}"),
         }
     }
@@ -1375,6 +1378,7 @@ impl MemoryValue {
             (U16(a), U16(b)) => Some(a.compare(b)),
             (I16(a), I16(b)) => Some(a.compare(b)),
             (U32(a), U32(b)) => Some(a.compare(b)),
+            (I32(a), I32(b)) => Some(a.compare(b)),
             (U64(a), U64(b)) => Some(a.compare(b)),
             (I64(a), I64(b)) => Some(a.compare(b)),
             (U32(a), U8(b)) => Some(a.compare(&MemoryValueU32::from(b.clone()))),
@@ -1391,6 +1395,8 @@ impl MemoryValue {
             // loaded from memory): promote the narrower operand to `I64`.
             (I64(a), U8(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
             (I64(a), U32(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
+            (I64(a), I32(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
+            (I32(a), I64(b)) => Some(MemoryValueI64::from(a.clone()).compare(b)),
             x => todo!("{x:?}"),
         }
     }
