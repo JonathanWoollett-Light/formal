@@ -42,8 +42,10 @@ fn store_offset_widens_inferred_type() {
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps for the six failed candidates plus
-    // the successful u64 exploration.
-    assert_eq!(trace.len(), 29);
+    // the successful u64 exploration (and the closing `exit(0)`).
+    if !blessing() {
+        assert_eq!(trace.len(), 32);
+    }
 
     // The type search walks every too-small candidate before u64 holds.
     assert_eq!(
@@ -97,23 +99,17 @@ fn store_offset_widens_inferred_type() {
         &uncompactable,
         &pinned_nodes,
     );
-    let expected = normalize(include_str!("emitted.s"));
-    assert_eq!(normalize(asm), expected);
+    bless_asm(
+        "offset_widened_inference/emitted.s",
+        asm.clone(),
+        include_str!("emitted.s"),
+    );
 
-    // Boot it in QEMU (requires the toolchain + QEMU): no output, no fault.
-    let serial = unsafe {
-        run_program(
-            "offset_widened_inference",
-            ast,
-            &configuration,
-            &accessed,
-            &transitions,
-            &uncompactable,
-            &pinned_nodes,
-        )
-    };
+    // Run it as a hosted Linux program under `qemu-riscv64` (the hosted-Linux
+    // stream): it computes and exits cleanly with no output.
+    let stdout = run_linux("offset_widened_inference", &asm);
     assert_eq!(
-        serial, "",
-        "offset_widened_inference produces no UART output"
+        stdout, "",
+        "offset_widened_inference computes and exits cleanly with no output"
     );
 }

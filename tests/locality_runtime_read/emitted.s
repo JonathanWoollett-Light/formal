@@ -4,6 +4,9 @@ _start:
     la t0, __x_type  # #& t0, x
     li t5, 0
     lb t1, 0(t0)
+    li a0, 0
+    li a7, 93
+    ecall
 __halt:
     wfi
     j __halt

@@ -9,6 +9,7 @@ use formal::*;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
@@ -363,6 +364,166 @@ pub struct QemuOutcome {
     pub faults: usize,
     /// The head of QEMU's `guest_errors` log (for diagnostics on failure).
     pub fault_log: String,
+    /// Runtime instrumentation gathered during the boot (instructions executed,
+    /// memory working set over time, wall-clock execution time). See [`QemuStats`].
+    pub stats: QemuStats,
+}
+
+/// Runtime instrumentation for a QEMU boot, gathered by the `formal_stats` TCG
+/// plugin ([tools/qemu-plugin/formal_stats.c]) plus the host's own timing.
+///
+/// The plugin reports the exact number of guest instructions executed and the
+/// guest memory **working set over execution time**: each time the set of
+/// distinct 4 KiB pages the guest has touched (instruction fetches + non-IO
+/// data accesses) grows, it records `(instructions so far, page count)`, which
+/// fully describes the monotonic footprint curve. From that curve this type
+/// derives the peak footprint and the time-weighted percentiles of memory usage
+/// (the footprint reached by the time a given fraction of instructions had run).
+///
+/// Every field is optional: if the plugin could not be built/loaded (no WSL
+/// `gcc`, no network for the header, an unsupported QEMU), the boot still runs
+/// and these are simply absent.
+#[derive(Default, Clone)]
+pub struct QemuStats {
+    /// Total guest instructions executed across all harts.
+    pub instructions: Option<u64>,
+    /// Per-hart instruction counts (`(vcpu_index, instructions)`).
+    pub per_vcpu: Vec<(u32, u64)>,
+    /// Footprint growth curve: `(instructions_so_far, distinct_pages)`, in order.
+    pub growth: Vec<(u64, u64)>,
+    /// Peak working set, in pages.
+    pub peak_pages: Option<u64>,
+    /// Page size in bytes (4096).
+    pub page_size: u64,
+    /// Wall-clock time QEMU spent executing the program (until clean exit, or
+    /// until the boot timeout for programs that park in a `wfi` loop).
+    pub wall: Option<Duration>,
+}
+
+impl QemuStats {
+    /// The working set (in pages) in force once `instr` instructions had
+    /// executed: the footprint is a monotonic step function of instruction time.
+    fn pages_at(&self, instr: u64) -> u64 {
+        let mut pages = 0;
+        for &(i, p) in &self.growth {
+            if i <= instr {
+                pages = p;
+            } else {
+                break;
+            }
+        }
+        pages
+    }
+
+    /// The `p`-th percentile (0.0..=1.0) of memory usage, in KiB: the footprint
+    /// reached by the time fraction `p` of all instructions had executed. Since
+    /// the footprint only grows, this is the footprint at instruction
+    /// `p * total`. `None` if instruction counting was unavailable.
+    pub fn mem_percentile_kib(&self, p: f64) -> Option<u64> {
+        let total = self.instructions?;
+        let pages = if total == 0 {
+            self.peak_pages.unwrap_or(0)
+        } else {
+            self.pages_at((p * total as f64) as u64)
+        };
+        Some(pages * self.page_size / 1024)
+    }
+
+    /// Peak working set in KiB.
+    pub fn peak_kib(&self) -> Option<u64> {
+        self.peak_pages.map(|pg| pg * self.page_size / 1024)
+    }
+
+    /// A one-line human summary (instructions, memory percentiles + peak, time).
+    pub fn summary(&self) -> String {
+        let insns = self
+            .instructions
+            .map(|n| n.separate_with_commas())
+            .unwrap_or_else(|| "n/a".into());
+        let mem = match (
+            self.mem_percentile_kib(0.5),
+            self.mem_percentile_kib(0.99),
+            self.peak_kib(),
+        ) {
+            (Some(p50), Some(p99), Some(peak)) => {
+                format!("mem p50 {p50} KiB / p99 {p99} KiB / peak {peak} KiB")
+            }
+            _ => "mem n/a".into(),
+        };
+        let time = self
+            .wall
+            .map(|d| format!("{:.3}s", d.as_secs_f64()))
+            .unwrap_or_else(|| "n/a".into());
+        format!("{insns} instructions, {mem}, {time}")
+    }
+}
+
+/// Parses the plugin's stats file (see [tools/qemu-plugin/formal_stats.c]) into a
+/// [`QemuStats`] (leaving `wall` for the caller to fill from host timing).
+fn parse_plugin_stats(text: &str) -> QemuStats {
+    let mut stats = QemuStats {
+        page_size: 4096,
+        ..Default::default()
+    };
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("insns") => stats.instructions = it.next().and_then(|n| n.parse().ok()),
+            Some("vcpu") => {
+                if let (Some(i), Some(n)) = (it.next(), it.next()) {
+                    if let (Ok(i), Ok(n)) = (i.parse(), n.parse()) {
+                        stats.per_vcpu.push((i, n));
+                    }
+                }
+            }
+            Some("grow") => {
+                if let (Some(i), Some(p)) = (it.next(), it.next()) {
+                    if let (Ok(i), Ok(p)) = (i.parse(), p.parse()) {
+                        stats.growth.push((i, p));
+                    }
+                }
+            }
+            Some("peak_pages") => stats.peak_pages = it.next().and_then(|n| n.parse().ok()),
+            Some("page_size") => {
+                if let Some(sz) = it.next().and_then(|n| n.parse().ok()) {
+                    stats.page_size = sz;
+                }
+            }
+            _ => {}
+        }
+    }
+    stats
+}
+
+/// Writes a human-readable stats summary to
+/// `target/tmp/test-logs/<test>/<name>.stats` and echoes a one-line summary via
+/// `eprintln!` (visible with nextest's `--no-capture`), so the runtime numbers
+/// (which feed the website's comparison) are easy to harvest.
+fn report_stats(name: &str, stats: &QemuStats) {
+    let line = format!("{name}: {}", stats.summary());
+    eprintln!("{line}");
+    let mut body = format!("{line}\n");
+    if let Some(insns) = stats.instructions {
+        body.push_str(&format!("instructions {insns}\n"));
+    }
+    for (i, n) in &stats.per_vcpu {
+        body.push_str(&format!("hart {i} {n}\n"));
+    }
+    if let Some(peak) = stats.peak_kib() {
+        body.push_str(&format!(
+            "peak_memory_kib {peak} ({} pages)\n",
+            stats.peak_pages.unwrap_or(0)
+        ));
+    }
+    for q in [0.5, 0.9, 0.99] {
+        if let Some(kib) = stats.mem_percentile_kib(q) {
+            body.push_str(&format!("mem_p{:02} {kib} KiB\n", (q * 100.0) as u32));
+        }
+    }
+    if let Some(d) = stats.wall {
+        body.push_str(&format!("wall_seconds {:.3}\n", d.as_secs_f64()));
+    }
+    let _ = std::fs::write(format!("{}/{name}.stats", test_log_dir()), body);
 }
 
 fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
@@ -428,6 +589,90 @@ fn toolchain_shell(script: &str) -> std::process::Command {
     }
 }
 
+/// Provisions the `formal_stats` QEMU TCG plugin
+/// ([tools/qemu-plugin/formal_stats.c]) and returns the shell path to a `.so`
+/// that the locally-installed QEMU will load, or `None` if it cannot be made
+/// available (then the boot runs without it and [`QemuStats`] is empty).
+///
+/// `user_mode` selects which QEMU the plugin must satisfy: the bare-metal tests
+/// use `qemu-system-riscv64`, [`run_linux`] uses the user-mode `qemu-riscv64`,
+/// and the two binaries can require **different** plugin API versions (Debian's
+/// QEMU 8.2.2 wants v1 for system emulation but v2 for user mode). The work
+/// (download the header, compile per-version `.so`s, probe which version the
+/// target QEMU accepts) runs once in WSL and is cached both on disk (under
+/// `target/qemu-plugin/`) and in-process.
+fn ensure_plugin(user_mode: bool) -> Option<String> {
+    static SYSTEM: OnceLock<Option<String>> = OnceLock::new();
+    static USER: OnceLock<Option<String>> = OnceLock::new();
+    let cell = if user_mode { &USER } else { &SYSTEM };
+    cell.get_or_init(|| provision_plugin(user_mode)).clone()
+}
+
+fn provision_plugin(user_mode: bool) -> Option<String> {
+    if std::env::var_os("FORMAL_NO_PLUGIN").is_some() {
+        return None;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let cache = format!("{dir}/target/qemu-plugin");
+    std::fs::create_dir_all(&cache).ok()?;
+    let cache_w = script_path(&cache);
+    let src_w = script_path(&format!("{dir}/tools/qemu-plugin/formal_stats.c"));
+    let bin = riscv_bin();
+    let mode = if user_mode { "user" } else { "system" };
+    // Download the (glib-free v8.2.2) header once, build the plugin for each
+    // candidate API version on demand, and pick the first version the target
+    // QEMU actually loads. The chosen `.so` path is memoised in `chosen_<mode>`
+    // so later test processes skip the probe entirely. Builds go through a
+    // temp + atomic rename so parallel test processes don't corrupt the `.so`.
+    let script = format!(
+        r#"set -e
+CACHE="{cache_w}"
+SRC="{src_w}"
+BIN="{bin}"
+mode="{mode}"
+mkdir -p "$CACHE"
+CHOSEN="$CACHE/chosen_$mode"
+if [ -f "$CHOSEN" ]; then so=$(cat "$CHOSEN"); [ -f "$so" ] && {{ echo "$so"; exit 0; }}; fi
+command -v gcc >/dev/null 2>&1 || exit 0
+HDR="$CACHE/qemu-plugin.h"
+if [ ! -f "$HDR" ]; then
+  curl -fsSL -o "$HDR.tmp.$$" "https://gitlab.com/qemu-project/qemu/-/raw/v8.2.2/include/qemu/qemu-plugin.h" 2>/dev/null && mv -f "$HDR.tmp.$$" "$HDR" || {{ rm -f "$HDR.tmp.$$"; exit 0; }}
+fi
+QSYS="qemu-system-riscv64"
+QUSR="${{BIN:+$BIN/}}qemu-riscv64"
+AS="${{BIN:+$BIN/}}riscv64-unknown-elf-as"
+LD="${{BIN:+$BIN/}}riscv64-unknown-elf-ld"
+# A kernel that immediately halts the machine (sifive_test finisher), so the
+# system-mode probe exits at once instead of running until the timeout.
+PELF="$CACHE/probe.elf"
+if [ "$mode" = system ] && [ ! -f "$PELF" ]; then
+  printf '.global _start\n_start:\n li t0,0x100000\n li t1,0x5555\n sw t1,0(t0)\n' > "$CACHE/probe.s"
+  "$AS" -march=rv64gcv -o "$CACHE/probe.o" "$CACHE/probe.s" 2>/dev/null && \
+  "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$PELF" "$CACHE/probe.o" 2>/dev/null || true
+fi
+probe() {{ # $1 = so
+  if [ "$mode" = system ]; then
+    err=$(timeout 8 "$QSYS" -machine virt -smp 1 -bios none -display none -monitor none -serial none -accel tcg -plugin "$1,out=/dev/null" -kernel "$PELF" 2>&1 || true)
+  else
+    err=$(timeout 8 "$QUSR" -plugin "$1,out=/dev/null" /bin/true 2>&1 || true)
+  fi
+  echo "$err" | grep -q "Could not load plugin" && return 1 || return 0
+}}
+for v in 1 2 3 4; do
+  SO="$CACHE/formal_stats_v$v.so"
+  if [ ! -f "$SO" ]; then
+    gcc -O2 -Wall -fPIC -shared -DFORMAL_PLUGIN_VERSION=$v -I"$CACHE" -o "$SO.tmp.$$" "$SRC" 2>/dev/null && mv -f "$SO.tmp.$$" "$SO" || {{ rm -f "$SO.tmp.$$"; continue; }}
+  fi
+  if probe "$SO"; then echo "$SO" > "$CHOSEN"; echo "$SO"; exit 0; fi
+done
+exit 0
+"#
+    );
+    let output = toolchain_shell(&script).output().ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
 /// Writes the generated program `asm` to `target/gen/<name>.s`, then, under WSL,
 /// assembles + links it with the RISC-V GNU toolchain and boots it in
 /// `qemu-system-riscv64 -machine virt`, returning the captured UART output and
@@ -448,37 +693,74 @@ pub fn run_in_qemu(name: &str, asm: &str, smp: u8) -> QemuOutcome {
 }
 
 /// Like [`run_in_qemu`] but, with `long = true`, runs a long compute (e.g. a large
-/// fannkuch n) to completion: normal TCG (not `one-insn-per-tb`) and no
-/// per-instruction `exec` logging -- both of which would make 479M instructions
-/// take hours and produce an astronomically large log -- and a long timeout.
-/// Fault detection (`guest_errors`) is kept.
+/// fannkuch n) to completion under a long timeout.
+///
+/// Both modes boot under round-robin (single-threaded) TCG, NOT MTTCG. The
+/// verifier proves programs under a sequentially-consistent memory model;
+/// round-robin TCG is SC (one hart runs at a time, shared memory, no
+/// reordering), so a verified cross-hart program (e.g. the parallel fannkuch's
+/// slot combine) is correct. MTTCG (`thread=multi`) is weakly ordered and would
+/// need memory fences QEMU does not reliably honor here.
+///
+/// When the [`ensure_plugin`] TCG plugin is available, the boot is instrumented:
+/// it counts guest instructions and tracks the memory working set with near-zero
+/// effect on speed, so even the long fannkuch run (hundreds of millions of
+/// instructions) reports an exact instruction count and a memory profile -- and
+/// the QEMU wall-clock execution time is recorded. Without the plugin a short
+/// run falls back to `one-insn-per-tb` + `-d exec` line counting for the
+/// instruction total (the memory profile is then unavailable). `guest_errors`
+/// fault detection is kept in all cases. The gathered numbers are returned in
+/// [`QemuOutcome::stats`] and logged via [`report_stats`].
 pub fn run_in_qemu_opts(name: &str, asm: &str, smp: u8, long: bool) -> QemuOutcome {
-    let (timeout, accel, logd) = if long {
-        // Round-robin (single-threaded) TCG, NOT MTTCG. The verifier proves
-        // programs under a sequentially-consistent memory model; round-robin TCG
-        // is SC (one hart runs at a time, shared memory, no reordering), so a
-        // verified cross-hart program (e.g. the parallel fannkuch's slot combine)
-        // is correct. MTTCG (`thread=multi`) is weakly ordered and would need
-        // memory fences that QEMU does not reliably honor here -- it produced
-        // stale cross-hart reads. The cost is no wall-clock parallelism (harts
-        // time-slice), which is fine for these gated long-compute tests.
-        ("420", "tcg", "guest_errors")
+    let plugin = ensure_plugin(false);
+    // With the plugin, plain TCG suffices (it counts inline); without it, a short
+    // run uses `one-insn-per-tb` + `-d exec` so the host can count executed
+    // instructions by counting `Trace` log lines. A long fallback run does
+    // neither (per-instruction logging would make 479M instructions take hours).
+    let timeout = if long {
+        if plugin.is_some() {
+            "1200"
+        } else {
+            "420"
+        }
     } else {
-        ("3", "tcg,one-insn-per-tb=on", "guest_errors,exec,nochain")
+        "3"
+    };
+    let accel = if !long && plugin.is_none() {
+        "tcg,one-insn-per-tb=on"
+    } else {
+        "tcg"
+    };
+    let logd = if plugin.is_none() && !long {
+        "guest_errors,exec,nochain"
+    } else {
+        "guest_errors"
     };
 
     let dir = env!("CARGO_MANIFEST_DIR");
     let gen = format!("{dir}/target/gen");
     std::fs::create_dir_all(&gen).expect("create target/gen");
     std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
+    let stats_path = format!("{gen}/{name}.plugin.stats");
+    let _ = std::fs::remove_file(&stats_path);
 
     let bin = riscv_bin();
     let gpath = script_path(&gen);
+    // `$G/{name}.plugin.stats` (a path the plugin and the host both see through
+    // `/mnt`) receives the instruction/memory stats; `out=` is dropped when no
+    // plugin is available.
+    let plugin_arg = match &plugin {
+        Some(so) => format!(r#"-plugin "{so},out=$G/{name}.plugin.stats""#),
+        None => String::new(),
+    };
     // `--no-relax`: keep `la` PC-relative; a bare-metal program has no `gp`. The
     // program halts in a `wfi` loop, so `timeout` bounds the run; the UART output
-    // is captured to a file and the CPU faults to the `guest_errors` log.
-    // `${{BIN:+$BIN/}}` prefixes the tools with `$BIN/` only when `BIN` is set,
-    // so an empty `BIN` (native host) resolves them through `PATH`.
+    // is captured to a file and the CPU faults to the `guest_errors` log. The
+    // QEMU invocation is wrapped in `date` so the host learns the guest's
+    // wall-clock execution time (for a clean-exiting program; a `wfi`-parked one
+    // simply runs to the timeout). `${{BIN:+$BIN/}}` prefixes the tools with
+    // `$BIN/` only when `BIN` is set, so an empty `BIN` (native host) resolves
+    // them through `PATH`.
     let script = format!(
         r#"set -e
 BIN="{bin}"
@@ -490,19 +772,20 @@ G="{gpath}"
 "$AS" -march=rv64gcv -o "$G/{name}.o" "$G/{name}.s"
 "$LD" -Ttext=0x80000000 --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 rm -f "$G/{name}.serial" "$G/{name}.qemu.log"
-# `one-insn-per-tb` + `-d exec,nochain` log one line per *executed instruction*
-# (to stderr, which is unbuffered, so the host can watch the count live for
-# progress reporting); `guest_errors` shares the same log for fault detection.
+QS=$(date +%s.%N)
 timeout {timeout} qemu-system-riscv64 -machine virt -smp {smp} -bios none -display none -monitor none \
-    -accel {accel} -d {logd} \
+    -accel {accel} -d {logd} {plugin_arg} \
     -serial "file:$G/{name}.serial" -kernel "$G/{name}.elf" \
     >/dev/null 2>"$G/{name}.qemu.log" || true
+QE=$(date +%s.%N)
 echo "===SERIAL_BEGIN==="
 cat "$G/{name}.serial" 2>/dev/null
 echo ""
 echo "===SERIAL_END==="
 FAULTS="$(grep -c riscv_cpu_do_interrupt "$G/{name}.qemu.log" 2>/dev/null || true)"
 echo "===FAULTS===${{FAULTS:-0}}"
+echo "===SECONDS==="
+awk "BEGIN{{print $QE-$QS}}"
 echo "===LOG==="
 grep -v '^Trace' "$G/{name}.qemu.log" 2>/dev/null | head -c 2000 || true
 echo ""
@@ -511,15 +794,14 @@ echo "===END==="
     );
 
     // Run the (multi-second: QEMU runs under a fixed timeout) build+boot on a
-    // worker thread and report live progress meanwhile: elapsed time plus the
-    // number of guest instructions executed so far, read from the exec log QEMU
-    // writes as it runs.
+    // worker thread and report live progress meanwhile.
     let worker = {
         let script = script.clone();
         std::thread::spawn(move || toolchain_shell(&script).output())
     };
-    // Progress (elapsed time + live guest instruction count, read from the exec
-    // log QEMU writes as it runs) streams to `target/tmp/<test>.qemu.progress`.
+    // Progress streams to `target/tmp/test-logs/<test>/qemu.progress`: elapsed
+    // time, plus (in the no-plugin fallback) the live guest instruction count
+    // read from the exec log QEMU writes as it runs.
     let mut progress = Progress::new("qemu");
     let log_path = format!("{gen}/{name}.qemu.log");
     let started = Instant::now();
@@ -528,10 +810,12 @@ echo "===END==="
             let instructions = std::fs::read_to_string(&log_path)
                 .map(|log| log.lines().filter(|l| l.starts_with("Trace")).count())
                 .unwrap_or(0);
-            format!(
-                "{:.1}s, {instructions} instructions executed",
-                started.elapsed().as_secs_f32()
-            )
+            let insns = if instructions > 0 {
+                format!(", {instructions} instructions executed")
+            } else {
+                String::new()
+            };
+            format!("{:.1}s{insns}", started.elapsed().as_secs_f32())
         });
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -567,18 +851,33 @@ echo "===END==="
     let serial = between(&stdout, "===SERIAL_BEGIN===", "===SERIAL_END===")
         .trim_matches('\n')
         .to_string();
-    let faults = between(&stdout, "===FAULTS===", "===LOG===")
+    let faults = between(&stdout, "===FAULTS===", "===SECONDS===")
         .trim()
         .parse()
         .unwrap_or(usize::MAX);
     let fault_log = between(&stdout, "===LOG===", "===END===")
         .trim()
         .to_string();
+    let wall = between(&stdout, "===SECONDS===", "===LOG===")
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(Duration::from_secs_f64);
+
+    let mut stats = std::fs::read_to_string(&stats_path)
+        .map(|t| parse_plugin_stats(&t))
+        .unwrap_or_default();
+    if stats.page_size == 0 {
+        stats.page_size = 4096;
+    }
+    stats.wall = wall;
+    report_stats(name, &stats);
 
     QemuOutcome {
         serial,
         faults,
         fault_log,
+        stats,
     }
 }
 
@@ -685,13 +984,34 @@ pub unsafe fn run_program_smp(
 /// Requires the RISC-V GNU toolchain and `qemu-riscv64`; like [`run_in_qemu`] it
 /// panics (failing the test) if they are missing, rather than skipping.
 pub fn run_linux(name: &str, asm: &str) -> String {
+    run_linux_opts(name, asm, false)
+}
+
+/// Like [`run_linux`] but, with `long = true`, allows a much longer run (for a
+/// heavy hosted compute such as the multi-threaded `fannkuch_v2` at n = 12, whose
+/// harts run as real OS threads under qemu-user MTTCG). Identical otherwise.
+pub fn run_linux_opts(name: &str, asm: &str, long: bool) -> String {
+    let timeout = if long { "1200" } else { "150" };
     let dir = env!("CARGO_MANIFEST_DIR");
     let gen = format!("{dir}/target/gen");
     std::fs::create_dir_all(&gen).expect("create target/gen");
     std::fs::write(format!("{gen}/{name}.s"), asm).expect("write generated .s");
+    let stats_path = format!("{gen}/{name}.plugin.stats");
+    let _ = std::fs::remove_file(&stats_path);
 
     let bin = riscv_bin();
     let gpath = script_path(&gen);
+    // Instrument with the user-mode `formal_stats` plugin when available (a
+    // hosted program exits cleanly, so its atexit dump is exact); time the run.
+    // A `long` run skips the plugin: its per-access overhead would dominate a
+    // heavy compute, defeating the point of running hosted for speed (e.g.
+    // fannkuch_v2 at n=12 is ~36s plugin-free vs minutes with it). Such runs are
+    // timed by wall-clock only.
+    let plugin = if long { None } else { ensure_plugin(true) };
+    let plugin_arg = match &plugin {
+        Some(so) => format!(r#"-plugin "{so},out=$G/{name}.plugin.stats""#),
+        None => String::new(),
+    };
     let script = format!(
         r#"set -e
 BIN="{bin}"
@@ -704,8 +1024,17 @@ G="{gpath}"
 # Static ELF with entry `_start`; `--no-relax` keeps `la` PC-relative (no `gp`).
 "$LD" --no-relax -e _start -o "$G/{name}.elf" "$G/{name}.o"
 echo "===OUT_BEGIN==="
-timeout 150 "$QEMU" "$G/{name}.elf" || true
+QS=$(date +%s.%N)
+RC=0
+timeout {timeout} "$QEMU" {plugin_arg} "$G/{name}.elf" 2>"$G/{name}.qemu.err" || RC=$?
+QE=$(date +%s.%N)
 echo "===OUT_END==="
+echo "===RC===$RC"
+echo "===QERR==="
+grep -a "uncaught target signal" "$G/{name}.qemu.err" 2>/dev/null | head -c 300 || true
+echo ""
+echo "===SECONDS==="
+awk "BEGIN{{print $QE-$QS}}"
 echo "===END==="
 "#
     );
@@ -752,6 +1081,39 @@ echo "===END==="
         "assembling/linking/running the Linux `{name}` program failed:\n\
          --- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
+
+    // A hosted program must run to a clean exit; a guest crash (e.g. reading a
+    // machine-mode CSR like `mhartid`, or multi-hart thread-local storage, which
+    // are illegal in user mode) raises a target signal and exits 128+sig. Detect
+    // it so such a program cannot silently "pass" with empty output and a bogus
+    // (near-zero) instruction count -- it belongs in the bare-metal stream.
+    let rc: i32 = between(&stdout, "===RC===", "===QERR===")
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    let qerr = between(&stdout, "===QERR===", "===SECONDS===").trim();
+    assert!(
+        rc < 128 && !qerr.contains("uncaught target signal"),
+        "`{name}`: the hosted program crashed under qemu-riscv64 (exit {rc}); it is \
+         not a valid user-mode Linux program -- e.g. it reads a machine-mode CSR \
+         (`mhartid`) or uses multi-hart thread-local storage, so it belongs in the \
+         bare-metal stream (`run_program`).\n{qerr}"
+    );
+
+    let wall = between(&stdout, "===SECONDS===", "===END===")
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(Duration::from_secs_f64);
+    let mut stats = std::fs::read_to_string(&stats_path)
+        .map(|t| parse_plugin_stats(&t))
+        .unwrap_or_default();
+    if stats.page_size == 0 {
+        stats.page_size = 4096;
+    }
+    stats.wall = wall;
+    report_stats(name, &stats);
+
     between(&stdout, "===OUT_BEGIN===", "===OUT_END===")
         .trim_matches('\n')
         .to_string()

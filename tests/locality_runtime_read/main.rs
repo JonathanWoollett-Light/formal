@@ -11,10 +11,11 @@ use std::collections::BTreeSet;
 /// removes only information consulted exclusively at compile time: what the
 /// program actually reads is emitted.
 ///
-/// Note this test cannot use `run_program` (whose no-`.byte` assertion encodes
-/// "these programs never read locality at runtime"; this program exists to
-/// violate exactly that), so it lowers and boots via `emit_executable` +
-/// `run_in_qemu` directly.
+/// Note this program intentionally emits and reads a `.byte` (the locality), so
+/// it cannot use `run_program` (whose no-`.byte` assertion encodes "these
+/// programs never read locality at runtime"). It runs in the hosted-Linux stream
+/// via `run_linux`, which boots the emitted program under `qemu-riscv64` without
+/// that assertion.
 #[test]
 fn runtime_locality_read_keeps_the_byte() {
     let mut ast = setup_test("locality_runtime_read/dialect.s");
@@ -45,13 +46,18 @@ fn runtime_locality_read_keeps_the_byte() {
         pinned_nodes,
     } = expect_valid(&trace, result);
 
-    let expected_trace = [
-        "h0/1 | #$ x global u8 | Config: [x:Gu8,] | q1 t1 j0",
-        "h0/1 | #& t0, x | Config: [x:Gu8,] | q1 t2 j0",
-        "h0/1 | li t5, 0 | Config: [x:Gu8,] | q1 t3 j0",
-        "h0/1 | lb t1, 24(t0) | Config: [x:Gu8,] | q0 t4 j0",
-    ];
-    assert_trace(&trace, &expected_trace);
+    if !blessing() {
+        let expected_trace = [
+            "h0/1 | #$ x global u8 | Config: [x:Gu8,] | q1 t1 j0",
+            "h0/1 | #& t0, x | Config: [x:Gu8,] | q1 t2 j0",
+            "h0/1 | li t5, 0 | Config: [x:Gu8,] | q1 t3 j0",
+            "h0/1 | lb t1, 24(t0) | Config: [x:Gu8,] | q1 t4 j0",
+            "h0/1 | li a0, 0 | Config: [x:Gu8,] | q1 t5 j0",
+            "h0/1 | li a7, 93 | Config: [x:Gu8,] | q1 t6 j0",
+            "h0/1 | ecall | Config: [x:Gu8,] | q0 t7 j0",
+        ];
+        assert_trace(&trace, &expected_trace);
+    }
 
     // Exactly the locality byte is accessed.
     assert_eq!(
@@ -76,19 +82,18 @@ fn runtime_locality_read_keeps_the_byte() {
         &uncompactable,
         &pinned_nodes,
     );
-    let expected = normalize(include_str!("emitted.s"));
-    assert_eq!(normalize(&asm), expected);
-
-    // Boot it in QEMU (requires the toolchain + QEMU): the program reads the
-    // emitted locality byte and halts: no output, no fault.
-    let outcome = run_in_qemu("locality_runtime_read", &asm, 1);
-    assert_eq!(
-        outcome.faults, 0,
-        "locality_runtime_read faulted in QEMU:\n{}",
-        outcome.fault_log
+    bless_asm(
+        "locality_runtime_read/emitted.s",
+        asm.clone(),
+        include_str!("emitted.s"),
     );
+
+    // Run it as a hosted Linux program under `qemu-riscv64` (the hosted-Linux
+    // stream): the program reads the emitted locality byte and exits cleanly
+    // with no output.
+    let stdout = run_linux("locality_runtime_read", &asm);
     assert_eq!(
-        outcome.serial, "",
-        "locality_runtime_read produces no UART output"
+        stdout, "",
+        "locality_runtime_read computes and exits cleanly with no output"
     );
 }

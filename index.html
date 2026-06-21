@@ -344,6 +344,40 @@
         font-size: 1.1em;
         color: var(--md-sys-color-on-surface);
       }
+      /* Runtime measurements (formal column only): instructions executed, memory
+         working set, and execution time, measured by booting the program under
+         QEMU with a TCG instrumentation plugin. */
+      .runtime-stats {
+        margin: 0.5rem 0 0;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--md-sys-color-outline-variant);
+        font-size: 0.92rem;
+        line-height: 1.55;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      .runtime-stats b {
+        color: var(--md-sys-color-on-surface);
+      }
+      .runtime-stats .head {
+        display: block;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        opacity: 0.7;
+        margin-bottom: 0.2rem;
+      }
+      /* Execution-time value carries a native tooltip (set in JS) with the host
+         specs + QEMU setup the time was measured under. */
+      .runtime-stats b.tip {
+        cursor: help;
+        border-bottom: 1px dotted var(--md-sys-color-outline-variant);
+      }
+      .compare-note {
+        margin: 1.25rem 0 0;
+        font-size: 0.85rem;
+        line-height: 1.55;
+        color: var(--md-sys-color-on-surface-variant);
+      }
 
       /* ---- Directives table ---- */
       table.directives {
@@ -460,7 +494,12 @@
           ships. fannkuch goes one further: its result is
           <i>proven correct at compile time</i> (the verifier checks the max
           flip count and checksum against the known answer), so the program need
-          only compute and exit.
+          only compute and exit. Each column also reports what the program does
+          <i>when it runs</i>: the exact number of guest instructions it
+          executes, its peak memory working set, and its execution time. Every
+          program is built for RISC-V and run under QEMU with a small
+          instrumentation plugin, so the figures compare like for like (details
+          below the panels).
         </p>
         <div
           class="tabs lang-tabs"
@@ -541,6 +580,15 @@ grep -cE '^    [a-z]' build/main.s</code></pre>
               >
               bytes
             </p>
+            <p class="runtime-stats">
+              <span class="head">measured at runtime (under QEMU)</span>
+              <b id="formal-exec">108</b> instructions executed<br /><b
+                id="formal-mem"
+                >8 KiB</b
+              >
+              peak memory<br /><b id="formal-time" class="tip">16 ms</b>
+              execution time
+            </p>
           </div>
           <div>
             <h5 id="lang-name">Rust</h5>
@@ -557,8 +605,51 @@ objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+
                 ><br /><b id="lang-bytes">26,720</b> bytes</span
               >
             </p>
+            <p class="runtime-stats" id="lang-runtime">
+              <span class="head">measured at runtime (under QEMU)</span>
+              <b id="lang-exec">1,365</b> instructions executed<br /><b
+                id="lang-mem"
+                >24 KiB</b
+              >
+              peak memory<br /><b id="lang-time" class="tip">20 ms</b>
+              execution time
+            </p>
           </div>
         </div>
+        <p class="compare-note">
+          <b>How it's measured.</b> <b>Instructions</b> and <b>bytes</b> are the
+          static binary: machine instructions in the compiled program (formal
+          counts its emitted assembly; the others
+          <span class="code">objdump</span> their stripped static binary) and
+          the binary's size. The <b>runtime</b> figures are measured by running
+          each program under <span class="code">qemu</span> for RISC-V with a
+          small
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tools/qemu-plugin/formal_stats.c"
+            >TCG plugin</a
+          >
+          that reports the exact guest instructions executed and the peak memory
+          <i>working set</i> (distinct 4&nbsp;KiB pages touched: instruction
+          fetches and data). Every program is built for RISC-V Linux (musl,
+          static) and run under the same <b>user-mode</b>
+          <span class="code">qemu-riscv64</span> (formal as it compiles, the
+          others from the source shown), so the numbers are directly comparable.
+          Instructions and memory come from instrumented (plugin) runs; the
+          heavy fannkuch is <i>timed</i> plugin-free, because the plugin's
+          per-access cost would otherwise dwarf the compute (Hello World is
+          tiny, so its plugin run's time stands in). The plugin records the
+          working set <i>over time</i>; the harness reports p50/p90/p99
+          percentiles and the panel shows the peak.
+          <b>fannkuch-redux runs n = 12</b> everywhere (the value formal proves
+          and computes); Hello World is the hosted
+          <span class="code">tests/linux_hello</span> and each language's
+          equivalent. Ada is shown static-only (no RISC-V Ada toolchain was
+          available to run it here). Note formal's fannkuch (<span class="code"
+            >tests/fannkuch_v2</span
+          >) runs its two harts as real OS threads in parallel (spawned with
+          <span class="code">clone</span>), while the language versions are
+          single-threaded.
+        </p>
       </section>
 
       <section>
@@ -1133,130 +1224,260 @@ while t5 != t2:             # top-tested loop
         var RUST_BUILD =
           "CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=";
         var OBJDUMP = "objdump -d %s | grep -cE '^[[:space:]]+[0-9a-f]+:'";
-        var FK_FORMAL = `# fannkuch-redux for n = 5. No multiply, no register-register arithmetic,
-# no indexed addressing: every array access is a pointer walk, every reg+reg
-# combine a +/-1 loop. a5/a6/a7 hold max-flips / checksum / parity; the two
-# \`require\`s PROVE the known fannkuch(5) result (7, 11) at compile time.
-perm: thread [u32]*5
-work: thread [u32]*5
-cnt: thread [u32]*5
+        var FK_FORMAL = `# fannkuch-redux: REAL 2-hart parallel work-sharing, hosted Linux (tests/fannkuch_v2).
+# Runs in user mode: the hosted codegen spawns the second hart as an OS thread
+# (clone + CLONE_SETTLS per-hart tp), so the two harts run on two cores in parallel.
+# The n! permutations split into n contiguous blocks under the rotation enumeration;
+# each hart claims a rank (amoadd) and walks alternating blocks into its OWN per-hart
+# perm/work/cnt thread-local arrays, then combines lock-free (amoadd into per-rank
+# checksum slots, amomax into a shared max word); the last finisher prints with the
+# std print (Linux write) and every thread exits. n is read at runtime (= 12), hidden
+# from the verifier (forget) and narrowed to 3 (assume) so verification is bounded.
 
-# init perm[i] = i, cnt[i] = 0
+# shared globals (zero-init .bss)
+rank_counter: global u32
+done_counter: global u32
+cs_slots: global [u32]*2
+max_global: global u32
+
+# per-hart thread-local state (a distinct copy per hart, via per-hart TLS)
+perm: thread [u32]*16
+work: thread [u32]*16
+cnt: thread [u32]*16
+myrank: thread u32
+blockc: thread u32
+
+# n: runtime = 12, verifier-blind (forget), narrowed to 3 (assume).
+a2 = 12
+forget a2
+assume:
+    a2 = 3
+
+# full-init perm[i]=i, cnt=0, work=0 over all 12 (literal bound) so the dead-data
+# compaction keeps the arrays full-sized for the runtime n.
 t0 = &perm
 t1 = 0
-t2 = 5
-while t1 != t2:
+t3 = 12
+while t1 != t3:
     t0[0:4] = t1
     t0 = t0 + 4
     t1 = t1 + 1
 t0 = &cnt
 t1 = 0
-t3 = 0
-while t1 != t2:
-    t0[0:4] = t3
+t2 = 0
+while t1 != t3:
+    t0[0:4] = t2
     t0 = t0 + 4
     t1 = t1 + 1
+t0 = &work
+t1 = 0
+while t1 != t3:
+    t0[0:4] = t2
+    t0 = t0 + 4
+    t1 = t1 + 1
+
+# claim a unique rank h via an atomic fetch-add on the zero-init counter.
+t0 = &rank_counter
+t1 = 1
+asm:
+    amoadd.w a3, t1, (t0)
+# remember the rank (for the slot index) and seed the first block c = h.
+t0 = &myrank
+t0[0:4] = a3
+t0 = &blockc
+t0[0:4] = a3
+
+# partial accumulators (this hart's contribution across its blocks).
 a5 = 0
 a6 = 0
-a7 = 0
-a4 = 0
 
-while a4 == 0:
-    # copy perm -> work
+# ===== block loop: for c = h, h+2, ... while c < n =====
+t0 = &blockc
+t0 = t0[0:4]
+while t0 < a2:
+    # --- build the block's start permutation: perm[j] = (c + j) % n ---
+    t1 = &blockc
+    t1 = t1[0:4]
     t0 = &perm
-    t1 = &work
     t2 = 0
-    t3 = 5
-    while t2 != t3:
-        t4 = t0[0:4]
-        t1[0:4] = t4
+    while t2 != a2:
+        t3 = t1 + t2
+        t4 = t3 % a2
+        t0[0:4] = t4
         t0 = t0 + 4
-        t1 = t1 + 4
         t2 = t2 + 1
-    # count flips: reverse work[0..k] until work[0] == 0
-    a0 = 0
-    t0 = &work
-    t1 = t0[0:4]
-    while t1 != 0:
-        t2 = &work
-        t3 = &work
-        t4 = 0
-        while t4 != t1:
-            t3 = t3 + 4
-            t4 = t4 + 1
-        t4 = 0
-        t5 = t1 + 0
-        while t4 < t5:
-            t1 = t2[0:4]
-            a1 = t3[0:4]
-            t2[0:4] = a1
-            t3[0:4] = t1
-            t2 = t2 + 4
-            t3 = t3 - 4
-            t4 = t4 + 1
-            t5 = t5 - 1
-        a0 = a0 + 1
-        t1 = t0[0:4]
-    # max flips, then checksum += (parity 0 ? flips : -flips), then toggle parity
-    if a0 > a5:
-        a5 = a0 + 0
-    t0 = a0 + 0
-    if a7 == 0:
-        while t0 != 0:
-            a6 = a6 + 1
-            t0 = t0 - 1
-    if a7 != 0:
-        while t0 != 0:
-            a6 = a6 - 1
-            t0 = t0 - 1
-    t0 = a7 + 0
-    a7 = 1
-    if t0 != 0:
-        a7 = 0
-    # next permutation by prefix rotation
-    a4 = 1
-    a3 = 1
-    a2 = 5
-    while a3 < a2:
-        t0 = &perm
-        t1 = t0[0:4]
-        t2 = &perm
-        t3 = 0
-        while t3 < a3:
-            t4 = t2[4:8]
-            t2[0:4] = t4
-            t2 = t2 + 4
-            t3 = t3 + 1
-        t2[0:4] = t1
-        t2 = &cnt
-        t3 = 0
-        while t3 < a3:
-            t2 = t2 + 4
-            t3 = t3 + 1
-        t4 = t2[0:4]
-        t4 = t4 + 1
-        t2[0:4] = t4
-        t5 = 1
-        if t4 <= a3:
-            a4 = 0
-            a3 = a2 + 0
-            t5 = 0
-        if t5 != 0:
-            t3 = 0
-            t2[0:4] = t3
-            a3 = a3 + 1
 
-# prove the known fannkuch(5) result, then exit
-t0 = 7
-require a5 == t0
-t0 = 11
-require a6 == t0
-exit(0)`;
+    # --- reset the odometer cnt[i] = 0 ---
+    t0 = &cnt
+    t2 = 0
+    t3 = 0
+    while t2 != a2:
+        t0[0:4] = t3
+        t0 = t0 + 4
+        t2 = t2 + 1
+
+    # the block starts at global parity 0.
+    a7 = 0
+
+    # --- walk the block's (n-1)! permutations ---
+    a4 = 0
+    while a4 == 0:
+        # copy perm -> work
+        t0 = &perm
+        t1 = &work
+        t2 = 0
+        while t2 != a2:
+            t4 = t0[0:4]
+            t1[0:4] = t4
+            t0 = t0 + 4
+            t1 = t1 + 4
+            t2 = t2 + 1
+
+        # count flips on work
+        a0 = 0
+        t0 = &work
+        t1 = t0[0:4]
+        while t1 != 0:
+            # &work[k] directly (k = t1); t4 holds the stride (4) for one multiply,
+            # then becomes the reverse counter.
+            t2 = &work
+            t4 = 4
+            t3 = t1 * t4
+            t3 = t2 + t3
+            t4 = 0
+            t5 = t1 + 0
+            while t4 < t5:
+                t1 = t2[0:4]
+                a1 = t3[0:4]
+                t2[0:4] = a1
+                t3[0:4] = t1
+                t2 = t2 + 4
+                t3 = t3 - 4
+                t4 = t4 + 1
+                t5 = t5 - 1
+            a0 = a0 + 1
+            t1 = t0[0:4]
+
+        # max flips
+        if a0 > a5:
+            a5 = a0 + 0
+
+        # checksum += (parity == 0 ? flips : -flips)
+        t0 = a0 + 0
+        if a7 == 0:
+            while t0 != 0:
+                a6 = a6 + 1
+                t0 = t0 - 1
+        if a7 != 0:
+            while t0 != 0:
+                a6 = a6 - 1
+                t0 = t0 - 1
+
+        # toggle parity
+        t0 = a7 + 0
+        a7 = 1
+        if t0 != 0:
+            a7 = 0
+
+        # next permutation, BOUNDED to the lower digits (a3 < n-1) so the walk
+        # stays inside this block (the top digit cnt[n-1] is never carried).
+        a1 = a2 - 1
+        a4 = 1
+        a3 = 1
+        while a3 < a1:
+            t0 = &perm
+            t1 = t0[0:4]
+            t2 = &perm
+            t3 = 0
+            while t3 < a3:
+                t4 = t2[4:8]
+                t2[0:4] = t4
+                t2 = t2 + 4
+                t3 = t3 + 1
+            t2[0:4] = t1
+            t2 = &cnt
+            t3 = 0
+            while t3 < a3:
+                t2 = t2 + 4
+                t3 = t3 + 1
+            t4 = t2[0:4]
+            t4 = t4 + 1
+            t2[0:4] = t4
+            t5 = 1
+            if t4 <= a3:
+                a4 = 0
+                a3 = a1 + 0
+                t5 = 0
+            if t5 != 0:
+                t3 = 0
+                t2[0:4] = t3
+                a3 = a3 + 1
+
+    # --- advance to this hart's next block: c += 2 ---
+    t0 = &blockc
+    t1 = t0[0:4]
+    t1 = t1 + 2
+    t0[0:4] = t1
+    t0 = t1
+
+# ===== combine: per-rank checksum slot + atomic-max the flip count =====
+t0 = &myrank
+t1 = t0[0:4]
+t2 = 4
+t3 = t1 * t2
+t0 = &cs_slots
+t0 = t0 + t3
+t0[0:4] = a6
+# atomically max this hart's partial into the global max: a lock-free reduction.
+# amomax is a SINGLE instruction, so -- unlike a compare-and-select max in the
+# finisher -- there is no branch for remove_branches to specialise away at the
+# small verified n (where the two harts' partials happen to be equal).
+t0 = &max_global
+asm:
+    amomax.w t1, a5, (t0)
+
+# ===== finisher detection: the last hart combines and outputs =====
+# Release fence: make this hart's slot writes globally visible BEFORE it bumps the
+# done counter, so the finisher (which observes the bump) is guaranteed to see them.
+# The verifier explores all interleavings (SC), but QEMU MTTCG is weakly ordered.
+t0 = &done_counter
+t1 = 1
+asm:
+    fence rw, rw
+    amoadd.w t2, t1, (t0)
+a0 = 1
+if t2 == a0:
+    # Acquire fence: order the done-counter read before the slot reads below.
+    asm:
+        fence rw, rw
+    # total checksum = cs_slots[0] + cs_slots[1]
+    t0 = &cs_slots
+    a5 = t0[0:4]
+    t0 = t0 + 4
+    a6 = t0[0:4]
+    a5 = a5 + a6
+    # total max flips: read the global the harts accumulated with amomax. No
+    # combine, no branch -- the verify-small/run-large branch hazard is gone.
+    t0 = &max_global
+    a6 = t0[0:4]
+    # output "<checksum>\\nPfannkuchen(<n>) = <maxflips>\\n" (save n; \`print\`
+    # clobbers a0-a2/t0-t2/t5 but preserves a3/a5/a6 between calls).
+    a3 = a2 + 0
+    print(a5)
+    print("\\nPfannkuchen(")
+    print(a3)
+    print(") = ")
+    print(a6)
+    print("\\n")
+
+# every hart converges here; \`unreachable\` ends its thread (the finisher has
+# already printed), so the process exits once the last thread is done.
+unreachable`;
         var FK_C = `#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 int main(int argc, char **argv){
-    int n = argc>1 ? atoi(argv[1]) : 7;
+    int n = argc>1 ? atoi(argv[1]) : 12;
     int perm[32], cnt[32], work[32];
     for(int i=0;i<n;i++){ perm[i]=i; cnt[i]=0; }
     int maxflips=0, parity=0; long checksum=0;
@@ -1287,7 +1508,7 @@ int main(int argc, char **argv){
 #include <vector>
 #include <algorithm>
 int main(int argc, char **argv){
-    int n = argc>1 ? std::stoi(argv[1]) : 7;
+    int n = argc>1 ? std::stoi(argv[1]) : 12;
     std::vector<int> perm(n), cnt(n, 0), work(n);
     for(int i=0;i<n;i++) perm[i]=i;
     int maxflips=0, parity=0; long checksum=0;
@@ -1314,7 +1535,7 @@ int main(int argc, char **argv){
     std::cout << checksum << "\\nPfannkuchen(" << n << ") = " << maxflips << "\\n";
 }`;
         var FK_RUST = `fn main() {
-    let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(7);
+    let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(12);
     let mut perm: Vec<usize> = (0..n).collect();
     let mut cnt = vec![0usize; n];
     let mut work = vec![0usize; n];
@@ -1348,7 +1569,7 @@ int main(int argc, char **argv){
 }`;
         var FK_ZIG = `const std = @import("std");
 pub fn main() !void {
-    const n: usize = 7;
+    const n: usize = 12;
     var perm: [32]usize = undefined;
     var cnt: [32]usize = undefined;
     var work: [32]usize = undefined;
@@ -1385,7 +1606,7 @@ pub fn main() !void {
 }`;
         var FK_ADA = `with Ada.Text_IO;
 procedure Fannkuch is
-   N : constant := 7;
+   N : constant := 12;
    type Arr is array (0 .. N - 1) of Integer;
    Perm, Cnt, Work : Arr;
    Maxflips : Integer := 0;
@@ -1438,11 +1659,17 @@ end Fannkuch;`;
               cmd: "formal new hello_world && cd hello_world\ncargo run\ngrep -cE '^    [a-z]' build/main.s",
               count: "46",
               bytes: "1,680",
+              exec: "108",
+              mem: "8 KiB",
+              time: "16 ms",
             },
             rust: {
               name: "Rust",
               count: "4,562",
               bytes: "26,720",
+              exec: "4,372",
+              mem: "116 KiB",
+              time: "14 ms",
               code: 'fn main() {\n    println!("Hello World!");\n}',
               cmd:
                 "cargo new hw && cd hw\necho 'fn main() { println!(\"Hello World!\"); }' > src/main.rs\n" +
@@ -1457,6 +1684,9 @@ end Fannkuch;`;
               name: "C",
               count: "971",
               bytes: "13,552",
+              exec: "1,363",
+              mem: "24 KiB",
+              time: "17 ms",
               code: '#include <stdio.h>\n\nint main(void) {\n    printf("Hello World!\\n");\n}',
               cmd: `cat > h.c <<'EOF'\n#include <stdio.h>\nint main(void) { printf("Hello World!\\n"); return 0; }\nEOF\nmusl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o h h.c\n${OBJDUMP.replace("%s", "h")}`,
             },
@@ -1464,6 +1694,9 @@ end Fannkuch;`;
               name: "C++",
               count: "287,893",
               bytes: "1,448,584",
+              exec: "19,231",
+              mem: "140 KiB",
+              time: "13 ms",
               code: '#include <iostream>\n\nint main() {\n    std::cout << "Hello World!\\n";\n}',
               cmd: `cat > h.cpp <<'EOF'\n#include <iostream>\nint main() { std::cout << "Hello World!\\n"; }\nEOF\ng++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o h h.cpp\n${OBJDUMP.replace("%s", "h")}`,
             },
@@ -1471,6 +1704,9 @@ end Fannkuch;`;
               name: "Zig",
               count: "1,238",
               bytes: "10,016",
+              exec: "750",
+              mem: "28 KiB",
+              time: "11 ms",
               code: 'const std = @import("std");\n\npub fn main() void {\n    std.debug.print("Hello World!\\n", .{});\n}',
               cmd: `cat > h.zig <<'EOF'\nconst std = @import("std");\npub fn main() void { std.debug.print("Hello World!\\n", .{}); }\nEOF\nzig build-exe h.zig -O ReleaseSmall\n${OBJDUMP.replace("%s", "h")}`,
             },
@@ -1485,14 +1721,20 @@ end Fannkuch;`;
           fannkuch: {
             formal: {
               code: FK_FORMAL,
-              cmd: "cargo run\ngrep -cE '^    [a-z]' build/main.s",
-              count: "119",
-              bytes: "1,088",
+              cmd: "cargo nextest run --run-ignored all fannkuch_v2\ngrep -cE '^    [a-z]' tests/fannkuch_v2/emitted.s",
+              count: "347",
+              bytes: "4,680",
+              exec: "267,350,843,102",
+              mem: "8 KiB",
+              time: "36 s",
             },
             rust: {
               name: "Rust",
               count: "6,513",
               bytes: "39,008",
+              exec: "415,808,315,929",
+              mem: "140 KiB",
+              time: "382 s",
               code: FK_RUST,
               cmd:
                 RUST_BUILD +
@@ -1506,6 +1748,9 @@ end Fannkuch;`;
               name: "C",
               count: "3,115",
               bytes: "21,744",
+              exec: "240,092,840,603",
+              mem: "40 KiB",
+              time: "72 s",
               code: FK_C,
               cmd:
                 "musl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o fk fannkuch.c\n" +
@@ -1515,6 +1760,9 @@ end Fannkuch;`;
               name: "C++",
               count: "288,700",
               bytes: "1,452,680",
+              exec: "237,891,703,700",
+              mem: "208 KiB",
+              time: "89 s",
               code: FK_CPP,
               cmd:
                 "g++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o fk fannkuch.cpp\n" +
@@ -1524,6 +1772,9 @@ end Fannkuch;`;
               name: "Zig",
               count: "1,541",
               bytes: "11,200",
+              exec: "191,429,058,614",
+              mem: "36 KiB",
+              time: "38 s",
               code: FK_ZIG,
               cmd:
                 "zig build-exe fannkuch.zig -O ReleaseSmall -femit-bin=fk\n" +
@@ -1547,14 +1798,51 @@ end Fannkuch;`;
         var formalCmd = document.getElementById("formal-cmd");
         var formalCount = document.getElementById("formal-count");
         var formalBytes = document.getElementById("formal-bytes");
+        var formalExec = document.getElementById("formal-exec");
+        var formalMem = document.getElementById("formal-mem");
+        var formalTime = document.getElementById("formal-time");
         var nameEl = document.getElementById("lang-name");
         var codeEl = document.getElementById("lang-code");
         var cmdEl = document.getElementById("lang-cmd");
         var countEl = document.getElementById("lang-count");
         var bytesEl = document.getElementById("lang-bytes");
         var bytesWrapEl = document.getElementById("lang-bytes-wrap");
+        var langRuntimeEl = document.getElementById("lang-runtime");
+        var langExecEl = document.getElementById("lang-exec");
+        var langMemEl = document.getElementById("lang-mem");
+        var langTimeEl = document.getElementById("lang-time");
         var curProg = "hello";
         var curLang = "rust";
+
+        // Tooltip on each "execution time": the host + QEMU setup it was measured
+        // under. The time is QEMU (TCG) wall-clock, i.e. software emulation, not a
+        // native-hardware figure -- the instruction count is the hardware-neutral
+        // comparison. Everything runs under user-mode qemu-riscv64. The heavy
+        // fannkuch is timed plugin-free (the instrumentation plugin's per-access
+        // cost would dominate it); its instructions/memory come from a separate
+        // instrumented run. formal's fannkuch runs its two harts as real OS
+        // threads (clone) in parallel.
+        var TIP_HOST =
+          "Host: AMD Ryzen 9 7900 (12 cores / 24 threads), 31 GB RAM\n" +
+          "OS: Windows 11 + WSL2 (Ubuntu 24.04, Linux 6.6)\n" +
+          "Measured as QEMU TCG (software-emulation) wall-clock, not native hardware.";
+        var TIP_USER = "QEMU 11.0.0 qemu-riscv64 (user-mode), -accel tcg";
+        function timeTip(prog, isFormal) {
+          var s = TIP_HOST + "\n" + TIP_USER;
+          if (prog === "hello") {
+            return s + ", formal_stats TCG plugin";
+          }
+          // fannkuch: timed plugin-free (real run); counts from a separate run.
+          s +=
+            "\nfannkuch is timed without the instrumentation plugin (real run);";
+          s +=
+            " its instructions/memory come from a separate instrumented run.";
+          if (isFormal) {
+            s +=
+              " formal runs its two harts as OS threads (clone), in parallel.";
+          }
+          return s;
+        }
 
         function renderFormal() {
           var f = programs[curProg].formal;
@@ -1562,6 +1850,10 @@ end Fannkuch;`;
           formalCmd.textContent = f.cmd;
           formalCount.textContent = f.count;
           formalBytes.textContent = f.bytes;
+          formalExec.textContent = f.exec;
+          formalMem.textContent = f.mem;
+          formalTime.textContent = f.time;
+          formalTime.title = timeTip(curProg, true);
         }
         function renderLang() {
           var d = programs[curProg][curLang];
@@ -1572,6 +1864,18 @@ end Fannkuch;`;
           countEl.textContent = d.count;
           bytesEl.textContent = d.bytes || "";
           bytesWrapEl.style.display = d.bytes ? "" : "none";
+          // Runtime figures are present for every language except where the
+          // toolchain to build + run it was unavailable (then `exec` is unset
+          // and the runtime block is hidden for that language).
+          if (d.exec) {
+            langExecEl.textContent = d.exec;
+            langMemEl.textContent = d.mem;
+            langTimeEl.textContent = d.time;
+            langTimeEl.title = timeTip(curProg, false);
+            langRuntimeEl.style.display = "";
+          } else {
+            langRuntimeEl.style.display = "none";
+          }
           langTabs.forEach(function (t) {
             t.setAttribute(
               "aria-selected",

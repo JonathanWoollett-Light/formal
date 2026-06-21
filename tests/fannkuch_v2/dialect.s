@@ -236,15 +236,10 @@ _l37:
     addi a2, a2, 1
     j _l37
 _l38:
-    li t3, 0x10000000
-_l39:
-    beqz a2, _l40
-    lb t4, 0(t0)
-    sb t4, 0(t3)
-    addi t0, t0, 1
-    addi a2, a2, -1
-    j _l39
-_l40:
+    addi a1, t0, 0
+    li a0, 1
+    li a7, 64
+    ecall
     #$ __str0 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
     la t0, __str0
     li t1, 10
@@ -276,40 +271,39 @@ _l40:
     li t1, 0
     sb t1, 13(t0)
     la a1, __str0
-    lb t2, 0(a1)
-    li t3, 0x10000000
-_l41:
-    beqz t2, _l42
-    sb t2, 0(t3)
+    li a2, 0
+    lb t0, 0(a1)
+_l39:
+    beqz t0, _l40
+    addi a2, a2, 1
     addi a1, a1, 1
-    lb t2, 0(a1)
-    j _l41
-_l42:
+    lb t0, 0(a1)
+    j _l39
+_l40:
+    li a0, 1
+    la a1, __str0
+    li a7, 64
+    ecall
     addi t5, a3, 0
-    #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local1
+    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local2
     addi t0, t0, 20
     li t1, 10
     li a2, 0
-_l43:
-    beqz t5, _l44
+_l41:
+    beqz t5, _l42
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     sb t2, 0(t0)
     addi a2, a2, 1
-    j _l43
-_l44:
-    li t3, 0x10000000
-_l45:
-    beqz a2, _l46
-    lb t4, 0(t0)
-    sb t4, 0(t3)
-    addi t0, t0, 1
-    addi a2, a2, -1
-    j _l45
-_l46:
+    j _l41
+_l42:
+    addi a1, t0, 0
+    li a0, 1
+    li a7, 64
+    ecall
     #$ __str1 thread [u8 u8 u8 u8 u8]
     la t0, __str1
     li t1, 41
@@ -323,40 +317,39 @@ _l46:
     li t1, 0
     sb t1, 4(t0)
     la a1, __str1
-    lb t2, 0(a1)
-    li t3, 0x10000000
-_l47:
-    beqz t2, _l48
-    sb t2, 0(t3)
+    li a2, 0
+    lb t0, 0(a1)
+_l43:
+    beqz t0, _l44
+    addi a2, a2, 1
     addi a1, a1, 1
-    lb t2, 0(a1)
-    j _l47
-_l48:
+    lb t0, 0(a1)
+    j _l43
+_l44:
+    li a0, 1
+    la a1, __str1
+    li a7, 64
+    ecall
     addi t5, a6, 0
-    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local2
+    #$ __local4 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local4
     addi t0, t0, 20
     li t1, 10
     li a2, 0
-_l49:
-    beqz t5, _l50
+_l45:
+    beqz t5, _l46
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     sb t2, 0(t0)
     addi a2, a2, 1
-    j _l49
-_l50:
-    li t3, 0x10000000
-_l51:
-    beqz a2, _l52
-    lb t4, 0(t0)
-    sb t4, 0(t3)
-    addi t0, t0, 1
-    addi a2, a2, -1
-    j _l51
-_l52:
+    j _l45
+_l46:
+    addi a1, t0, 0
+    li a0, 1
+    li a7, 64
+    ecall
     #$ __str2 thread [u8 u8]
     la t0, __str2
     li t1, 10
@@ -364,18 +357,18 @@ _l52:
     li t1, 0
     sb t1, 1(t0)
     la a1, __str2
-    lb t2, 0(a1)
-    li t3, 0x10000000
-_l53:
-    beqz t2, _l54
-    sb t2, 0(t3)
+    li a2, 0
+    lb t0, 0(a1)
+_l47:
+    beqz t0, _l48
+    addi a2, a2, 1
     addi a1, a1, 1
-    lb t2, 0(a1)
-    j _l53
-_l54:
-    li t0, 0x100000
-    li t1, 0x5555
-    sw t1, 0(t0)
+    lb t0, 0(a1)
+    j _l47
+_l48:
+    li a0, 1
+    la a1, __str2
+    li a7, 64
+    ecall
 _l36:
-    wfi
     #?

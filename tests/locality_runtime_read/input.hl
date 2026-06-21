@@ -5,4 +5,4 @@ x: global u8
 t0 = type(x)
 t5 = 0
 t1 = t0[24:25]
-unreachable
+exit(0)

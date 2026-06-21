@@ -5,6 +5,9 @@ _start:
     li t1, 7
     sw t1, 0(t0)
     lw t2, 0(t0)
+    li a0, 0
+    li a7, 93
+    ecall
 __halt:
     wfi
     j __halt

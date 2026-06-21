@@ -54,6 +54,71 @@ pub fn emit_executable(
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
 ) -> String {
+    emit_with_target(
+        Target::BareMetal,
+        ast,
+        configuration,
+        accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
+    )
+}
+
+/// The execution target codegen lowers for.
+///
+/// Both run the *same verified body* on N harts; only the entry/exit plumbing
+/// differs. **Bare-metal**: the machine boots the body on every hart (`-smp N`),
+/// each hart derives its thread-local base from `mhartid`, and a finished hart
+/// parks in a `wfi` halt loop. **Hosted Linux**: one process whose `_start`
+/// spawns a thread per *extra* hart with `clone` (per-thread `tp` via
+/// `CLONE_SETTLS`), so the harts run as real OS threads under user-mode
+/// `qemu-riscv64` (genuine parallelism, not `-smp` round-robin); a finished hart
+/// ends with the `exit` thread syscall. A single-hart program is identical under
+/// both apart from that halt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    BareMetal,
+    HostedLinux,
+}
+
+/// Like [`emit_executable`] but for the **hosted-Linux** target (user-mode
+/// `qemu-riscv64`): a multi-hart program spawns one OS thread per extra hart, so
+/// it gets real parallelism. See [`Target`].
+pub fn emit_executable_hosted(
+    ast: Option<NonNull<AstNode>>,
+    configuration: &TypeConfiguration,
+    accessed: &AccessedRanges,
+    transitions: &AccessTransitions,
+    uncompactable: &BTreeSet<Label>,
+    pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+) -> String {
+    emit_with_target(
+        Target::HostedLinux,
+        ast,
+        configuration,
+        accessed,
+        transitions,
+        uncompactable,
+        pinned_nodes,
+    )
+}
+
+/// Bytes of stack reserved (in `.bss`) for each spawned worker thread on the
+/// hosted target. The verified programs are register-heavy with shallow call
+/// depth, so this is generous.
+const HOSTED_WORKER_STACK: u64 = 256 * 1024;
+
+#[allow(clippy::too_many_arguments)]
+fn emit_with_target(
+    target: Target,
+    ast: Option<NonNull<AstNode>>,
+    configuration: &TypeConfiguration,
+    accessed: &AccessedRanges,
+    transitions: &AccessTransitions,
+    uncompactable: &BTreeSet<Label>,
+    pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+) -> String {
     // Labels whose runtime *type descriptor* is read (via `#&` / lat).
     let mut lat_labels: BTreeSet<Label> = BTreeSet::new();
     let mut next = ast;
@@ -125,12 +190,39 @@ pub fn emit_executable(
     // instruction, exactly where verification began.
     let mut text = String::from(".global _start\n_start:\n");
     if tls {
-        // Per-hart thread-local base: tp = mhartid * block_size. `t0` is a scratch
-        // here; the verified program writes every register before reading it.
-        text.push_str(&format!(
-            "    csrr tp, mhartid  # per-hart thread-local base\n    \
-             li t0, {tls_block}\n    mul tp, tp, t0\n"
-        ));
+        match target {
+            // Per-hart thread-local base: tp = mhartid * block_size. `t0` is a
+            // scratch here; the verified program writes every register before
+            // reading it.
+            Target::BareMetal => text.push_str(&format!(
+                "    csrr tp, mhartid  # per-hart thread-local base\n    \
+                 li t0, {tls_block}\n    mul tp, tp, t0\n"
+            )),
+            // Hart 0 is this thread (tp = 0); spawn one OS thread per *extra* hart
+            // with `clone`, giving each its own stack and `tp = h*block_size` (via
+            // CLONE_SETTLS). The child resumes after the `ecall` and jumps straight
+            // to the body; the parent spawns the rest, then falls into the body
+            // too. Flags are the glibc thread set (VM|FS|FILES|SIGHAND|THREAD|
+            // SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID) -- the combination
+            // user-mode qemu accepts. Registers are scratch (the verified program
+            // writes every register before reading it).
+            Target::HostedLinux => {
+                text.push_str("    li tp, 0  # hart 0 thread-local base\n");
+                for h in 1..hart_copies {
+                    let off = h as u64 * tls_block;
+                    text.push_str(&format!(
+                        "    la a1, __hart{h}_stack_top\n    \
+                         li a0, 0x7d0f00  # clone flags (glibc thread set)\n    \
+                         la a2, __hart{h}_ptid\n    \
+                         li a3, {off}  # child tp = {h}*block\n    \
+                         la a4, __hart{h}_ctid\n    \
+                         li a7, 220\n    ecall  # clone\n    \
+                         beqz a0, __hart_body  # child -> run the body\n"
+                    ));
+                }
+                text.push_str("__hart_body:\n");
+            }
+        }
     }
 
     // .text: walk the AST, lowering the verification directives to real RISC-V
@@ -184,8 +276,16 @@ pub fn emit_executable(
         }
         next = unsafe { node.as_ref().next };
     }
-    // Halt loop, so execution never runs off the end of `.text`.
-    text.push_str("__halt:\n    wfi\n    j __halt\n");
+    // Program end. Bare metal parks in a `wfi` loop so execution never runs off
+    // the end of `.text`; hosted ends the hart's thread with the `exit` syscall,
+    // so once every hart's thread has exited the process ends -- with whatever the
+    // finishing hart printed already on stdout.
+    match target {
+        Target::BareMetal => text.push_str("__halt:\n    wfi\n    j __halt\n"),
+        Target::HostedLinux => {
+            text.push_str("__halt:\n    li a0, 0\n    li a7, 93\n    ecall  # exit (this thread)\n")
+        }
+    }
 
     // .data: initialized runtime type descriptors, read by the lowered `#&`.
     let mut data = String::new();
@@ -245,6 +345,17 @@ pub fn emit_executable(
                 "    .zero {}  # {} more per-hart copies\n",
                 (hart_copies as u64 - 1) * tls_block,
                 hart_copies - 1
+            ));
+        }
+    }
+    // Per-worker stacks + clone tid slots for the hosted target's spawned harts
+    // (zero-init `.bss`, so they cost nothing in the ELF). The stack top label is
+    // the high end, since the stack grows down.
+    if target == Target::HostedLinux && tls {
+        for h in 1..hart_copies {
+            bss.push_str(&format!(
+                "    .balign 8\n__hart{h}_ptid:\n    .zero 4\n__hart{h}_ctid:\n    .zero 4\n    \
+                 .balign 16\n    .zero {HOSTED_WORKER_STACK}\n__hart{h}_stack_top:\n"
             ));
         }
     }

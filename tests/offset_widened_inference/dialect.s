@@ -3,4 +3,7 @@
     li t1, 7
     sw t1, 2(t0)
     lw t2, 2(t0)
+    li a0, 0
+    li a7, 93
+    ecall
     #?

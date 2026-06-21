@@ -170,6 +170,7 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 | [src/draw.rs](src/draw.rs)                     | `draw_tree`: ASCII rendering of a `VerifierNode` tree (debug/diagnostic).                                                                                                                                                                                                                                                  |
 | [tests/](tests/)                               | Integration tests, one folder per test (named after the behaviour it pins; see [§6](#6-integration-tests-tests)): `tests/<name>/main.rs` plus that test's assets (`input.hl`, `dialect.s`, stage pins). `common/mod.rs` holds the shared helpers. The Valid-outcome tests also lower their output and **boot it in QEMU**. |
 | [scripts/build-run.sh](scripts/build-run.sh)   | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU.                                                                                                                                                                                                                                               |
+| [tools/qemu-plugin/](tools/qemu-plugin/)       | `formal_stats.c`, the TCG plugin the QEMU-booting tests load to measure guest instructions executed + memory working set over time (see [§6](#6-integration-tests-tests)); built/cached in WSL by `ensure_plugin`.                                                                                                          |
 | [assets/](assets/)                             | Scratch inputs for the binary harness (`one.s`, `two.s`); the test programs live in their `tests/<name>/` folders.                                                                                                                                                                                                         |
 | [comparison.md](comparison.md)                 | Positioning against Python/C/C++/Rust/Zig/Lean/Ada-SPARK.                                                                                                                                                                                                                                                                  |
 | [index.html](index.html)                       | The marketing page (static, Pico.css; format with `npx prettier ./index.html --write`).                                                                                                                                                                                                                                    |
@@ -609,6 +610,23 @@ __<label>_type` (load the generated descriptor's address); `#!` (fail) →
   This is what lets a multi-hart program keep private per-hart `thread` arrays
   (e.g. a real parallel work-sharing computation, rather than the leader/worker
   pattern where only one hart touches thread-local memory).
+- **Hosted multi-hart (`emit_executable_hosted`, `Target::HostedLinux`).** The
+  same verified body can instead be lowered to run under **user-mode
+  `qemu-riscv64`** (hosted Linux), where there is no `-smp` to start the other
+  harts and `mhartid` is illegal. Codegen then emits a `_start` that sets hart
+  0's `tp = 0` and spawns one OS thread per *extra* hart with the `clone` syscall
+  (the glibc thread flag set `0x7d0f00`, which is what qemu-user accepts), giving
+  each thread its own `.bss` stack and `tp = h*block_size` via `CLONE_SETTLS`;
+  the child resumes after the `ecall` and jumps to the shared body, the parent
+  spawns the rest then joins it. Program end (`unreachable`) becomes the `exit`
+  thread syscall instead of the `wfi` halt loop, so the process ends once every
+  hart's thread has exited (with whatever the finishing hart printed). Everything
+  else (the TLS block layout, the `la`+`add tp` per thread-local) is identical to
+  bare metal. This gives **real parallelism** (the harts run on separate cores
+  under qemu-user MTTCG, not `-smp` round-robin), which is how `fannkuch_v2` runs
+  far faster hosted than bare-metal; its fences (`fence rw, rw`) already make it
+  correct under that weaker ordering. `emit_executable` (bare metal) is unchanged
+  and byte-identical to before.
 
 **Toolchain gotchas** (see [scripts/build-run.sh](scripts/build-run.sh)):
 
@@ -921,19 +939,55 @@ mod common;`) holds the shared helpers:
   program in QEMU** (so a blessed program is still proven to run); then paste
   the dumped trace / count back into the test source. Re-baseline
   **deliberately** (re-derive from new behaviour), never to mask a regression.
+  The next two runners are the two **execution streams** (§11, _Execution
+  models_):
 - `run_program(name, ast, configuration, accessed, transitions, uncompactable,
-pinned_nodes)` / `run_in_qemu(name, asm)`:
+pinned_nodes)` / `run_in_qemu(name, asm)` (the **bare-metal** stream):
   lower the optimized program with `emit_executable`, assert **no
   compile-time-only data leaked** (no `.byte` locality directives survive in the
   generated `.data`/`.bss`; none of these programs read locality at runtime),
-  then assemble + link + **boot it in QEMU under WSL**, asserting no CPU fault
-  and returning the captured UART output. The toolchain + QEMU are **required**:
-  these panic (fail the test) if WSL / the toolchain / QEMU are missing (see §4.8).
-- `run_linux(name, asm)`: the **hosted** counterpart, for `linux_hello`. Builds
-  a **static ELF** (entry `_start`, no fixed text address) and runs it under the
-  user-mode emulator `qemu-riscv64` (bundled in the toolchain `bin/`, invoked as
-  `$RISCV_BIN/qemu-riscv64`), returning its **stdout**. Same required-not-skipped
-  policy as `run_in_qemu`.
+  then assemble + link + **boot it in QEMU under WSL** (`qemu-system-riscv64
+  -machine virt`), asserting no CPU fault and returning the captured UART output.
+  The toolchain + QEMU are **required**: these panic (fail the test) if WSL / the
+  toolchain / QEMU are missing (see §4.8). This stream is for what genuinely needs
+  bare metal: MMIO devices, raw `#@` regions, multi-hart racy code, machine-mode
+  CSRs (`mhartid`), and per-hart thread-local storage.
+- `run_linux(name, asm)` (the **hosted-Linux** stream): builds a **static ELF**
+  (entry `_start`, no fixed text address) and runs it under the user-mode
+  emulator `qemu-riscv64` (bundled in the toolchain `bin/`, invoked as
+  `$RISCV_BIN/qemu-riscv64`), returning its **stdout**. It **detects a guest
+  crash** (a target signal / exit ≥ 128) and fails the test, so a program that is
+  not actually hostable (e.g. it reads `mhartid` or uses multi-hart TLS, both
+  illegal in user mode) cannot silently pass with empty output and a bogus
+  near-zero instruction count. This is the default for anything hostable: it is
+  far faster than full-system emulation, so the `formal_stats` plugin's runtime
+  numbers (instructions / memory / wall-clock) are cheap and representative. Same
+  required-not-skipped policy as `run_in_qemu`.
+- **Runtime instrumentation (the `formal_stats` QEMU plugin).** Every QEMU boot
+  (system-mode `run_in_qemu` _and_ user-mode `run_linux`) is instrumented by a
+  small TCG plugin, [tools/qemu-plugin/formal_stats.c](tools/qemu-plugin/formal_stats.c),
+  which reports the **exact guest instruction count** (per-hart, summed) and the
+  **guest memory working set over execution time** (each time the set of distinct
+  4 KiB pages the guest touches - instruction fetches + non-IO data accesses -
+  grows, it records `(instructions so far, page count)`, so the host can derive
+  the peak footprint and the **time-weighted percentiles of memory usage**). The
+  host also times the QEMU invocation. These land in [`QemuStats`] on
+  `QemuOutcome`, are echoed via `eprintln!` (visible with nextest `--no-capture`),
+  and are written to `target/tmp/test-logs/<test>/<name>.stats`. The plugin
+  counts inline under normal (fast) TCG, so even the long `fannkuch_v2` boot
+  (hundreds of millions of instructions) gets an exact count - and observes only,
+  so it never perturbs the pinned serial output or fault counts. `ensure_plugin`
+  provisions it once per QEMU flavour in WSL: it downloads the (glib-free v8.2.2)
+  `qemu-plugin.h`, builds a `.so` for each candidate plugin API version, and
+  probes which version the local QEMU accepts (Debian's QEMU 8.2.2 wants **v1**
+  for system emulation but **v2** for user mode), caching the chosen `.so` and
+  its path under `target/qemu-plugin/`. If the plugin cannot be built/loaded (no
+  WSL `gcc`, no network for the header, an unsupported QEMU - or `FORMAL_NO_PLUGIN`
+  is set), the boot still runs and the stats are simply absent (a short run then
+  falls back to `-d exec` line counting for the instruction total). These numbers
+  back the website's "Hello World!"/fannkuch-redux runtime figures (§ the website
+  comparison): harvest them with `cargo nt linux_hello --no-capture` and
+  `cargo nextest run --run-ignored all fannkuch_v2 --no-capture`.
 - `verify_with_model(asset, harts, model) -> ModelOutcome`: verifies a program
   under a chosen [`Model`] - `Sequential` (in-process [`verify_inferred`]) or
   `Hpc { ranks }` (distributed under `mpirun`, via `mpirun_formal`) - and returns
@@ -1211,11 +1265,11 @@ prefix):
   blocks (`if t0 == 0:` / `if t0 != 0:`). 46 steps; boots.
 - `locality_runtime_read` (the inverse of the elision rule): `lb` of the
   locality byte (offset 24) at runtime keeps the `.byte 1`; as the _only_
-  emitted descriptor byte, the read re-pointed to offset 0 (bypasses
-  `run_program`'s no-`.byte` assert). Boots.
+  emitted descriptor byte, the read re-pointed to offset 0. Runs **hosted**
+  (`run_linux`, which has no no-`.byte` assert) and exits 0; 7 steps.
 - `offset_widened_inference`: a 4-byte store at offset 2 forces the type
   search through `u8…i32` to `u64` (the offset participates in inference);
-  `accessed` is exactly `(2, 6)`. 29 steps; boots.
+  `accessed` is exactly `(2, 6)`. 32 steps; runs **hosted** (`run_linux`).
 - `conflicting_defines` / `annotated_store_overflow`: contradictory `#$`
   defines / a `sw` into an annotated `u8`: annotated searches have one
   candidate, so backtracking exhausts → **`Invalid`**.
@@ -1740,6 +1794,49 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
 
 Longer-form design intent, kept beside the precise description above so the
 two stay in one place.
+
+### Execution models: hosted Linux and bare-metal (parallel work streams)
+
+The QEMU-booting tests run in one of two **execution streams**, advanced
+independently over time:
+
+- **Hosted Linux** (the default): the program is an ordinary Linux process,
+  ending in `exit(0)` (a Linux `exit` `ecall`), output via `print` (`write`
+  `ecall`). It builds to a static ELF and runs under **user-mode `qemu-riscv64`**
+  (`run_linux`). This is cheap and representative, so it is where programs are
+  **benchmarked**: the `formal_stats` TCG plugin reports instructions executed,
+  the memory working set over time (percentiles + peak) and wall-clock time (§6).
+  Most tests live here. A **multi-hart** program is hosted too, via
+  `emit_executable_hosted` (§4.8): the harts run as real OS threads (spawned with
+  `clone`), so they execute on separate cores under qemu-user MTTCG -- genuine
+  parallelism. `fannkuch_v2` runs this way; dropping its racy UART MMIO for
+  `print` also collapsed its verification from ~3.5M steps to ~24k (the MMIO
+  stores were the racy interleaving explosion).
+- **Bare-metal**: the program owns the machine, ends in `unreachable` (a `wfi`
+  halt loop), and talks to hardware directly (UART MMIO, the `sifive_test`
+  finisher). It runs under full-system **`qemu-system-riscv64 -machine virt`**
+  (`run_program` / `run_program_smp`). This stream is for what hosted Linux cannot
+  express: **MMIO devices** (`uart_hello`), **raw `#@` regions** (`heap_regions`,
+  `mixed_pointer_raw`), programs that read the machine-mode **`mhartid`** CSR
+  directly (`descriptor_read_union` via `csr(mhartid)`), the multi-hart racy
+  exemplars and the distributed-model demo (`racy_*`, `tls_probe`,
+  `parallel_probe`, `hpc_demo`), and the halt-terminal dead-data rule
+  (`terminal_access`).
+
+These are **separate work streams to advance over time**, not a one-time switch. A
+program may exist in both: `uart_hello` (bare-metal UART) has the hosted
+`linux_hello` as its counterpart. The migration direction is "**host what can be
+hosted**" (so it gets cheap user-mode benchmarks + real parallelism) and "**keep
+the rest bare-metal**". A program is hostable iff it uses no MMIO / raw address
+and never reads `mhartid` directly; **multi-hart thread-local storage is no longer
+a blocker** -- the hosted codegen's `clone` prologue gives each hart its own `tp`
+(this is what moved `fannkuch_v2` to the hosted stream). `run_linux` **enforces**
+hostability by failing on a guest crash (a stray `csrr mhartid` raises SIGILL in
+user mode), so a non-hostable program cannot be migrated by mistake. Open future
+work in the Linux stream: a hosted hart-id primitive so `mhartid`-reading programs
+(`descriptor_read_union`) can move; `partial_variable_access` (multi-hart TLS, no
+`mhartid`/MMIO) is now hostable and could move; and hosted variants of the racy /
+MMIO programs.
 
 ### Scaling modes (designed, not implemented)
 

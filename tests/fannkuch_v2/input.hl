@@ -1,12 +1,14 @@
-# fannkuch-redux V2: REAL parallel work-sharing across 2 harts, bare metal.
+# fannkuch-redux V2: REAL parallel work-sharing across 2 harts, hosted Linux.
 #
-# Every hart computes a disjoint slice of the permutation space into its OWN
-# per-hart `thread` arrays, and the partial results are combined lock-free. This
-# is the optimal shape -- unlike a leader/worker split (one hart works, the rest
-# park), the work is genuinely shared. It relies on per-hart thread-local storage
-# (each hart's perm/work/cnt is a distinct copy); the original single-copy
-# thread-local codegen could not express this (concurrent harts clobbered each
-# other), which is the obstacle the per-hart TLS lowering removed.
+# Runs in **user mode** (qemu-riscv64): the hosted codegen spawns one OS thread
+# per extra hart with `clone`, so the two harts run on two cores in parallel (not
+# -smp round-robin) -- the fastest way to run it. Every hart computes a disjoint
+# slice of the permutation space into its OWN per-hart `thread` arrays, and the
+# partial results are combined lock-free. This is the optimal shape -- unlike a
+# leader/worker split (one hart works, the rest park), the work is genuinely
+# shared. It relies on per-hart thread-local storage (each hart's perm/work/cnt
+# is a distinct copy), which `clone`'s CLONE_SETTLS gives each thread its own `tp`
+# for; the original single-copy thread-local codegen could not express this.
 #
 # Work split (no enumeration of another hart's permutations):
 #   The n! permutations form n contiguous BLOCKS under the fannkuch rotation
@@ -23,7 +25,7 @@
 # Combine (lock-free): each hart writes its partial checksum to a per-rank slot and
 # atomic-maxes (amomax) its partial max-flips into a shared word, then bumps a done
 # counter; the last finisher sums the checksum slots, reads the global max, writes
-# the result to the UART, and halts the machine via the sifive_test finisher. The
+# the result with the std `print` (Linux `write`), then every thread exits. The
 # max uses amomax (not a finisher compare-and-select) because at the small verified
 # n the two partials are equal, so a compare branch would be pruned by
 # remove_branches and the runtime n would lose the larger value.
@@ -31,37 +33,9 @@
 # n is read at runtime (= 12) but the verifier is blind to it (forget) and an
 # assume narrows it to 3 so verification is bounded.
 
-# uart_int(v): write the non-negative integer v to the UART as decimal.
-def uart_int(v):
-    t5 = v
-    buf: thread [u8]*20
-    t0 = &buf
-    t0 = t0 + 20
-    t1 = 10
-    a2 = 0
-    while t5 != 0:
-        t2 = t5 % t1
-        t5 = t5 / t1
-        t2 = t2 + 48
-        t0 = t0 - 1
-        t0[0:1] = t2
-        a2 = a2 + 1
-    t3 = 0x10000000
-    while a2 != 0:
-        t4 = t0[0:1]
-        t3[0:1] = t4
-        t0 = t0 + 1
-        a2 = a2 - 1
-
-# uart_str(s): write the NUL-terminated string s to the UART.
-def uart_str(s):
-    a1 = &s
-    t2 = a1[0:1]
-    t3 = 0x10000000
-    while t2 != 0:
-        t3[0:1] = t2
-        a1 = a1 + 1
-        t2 = a1[0:1]
+# Output uses the std `print` (Linux `write` syscall), so the program is a hosted
+# program with no UART poking; the std `print` is polymorphic over an integer and
+# a string, exactly what the result line needs.
 
 # shared globals (zero-init .bss)
 rank_counter: global u32
@@ -289,20 +263,16 @@ if t2 == a0:
     # combine, no branch -- the verify-small/run-large branch hazard is gone.
     t0 = &max_global
     a6 = t0[0:4]
-    # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" (save n; prints clobber a2)
+    # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" (save n; `print`
+    # clobbers a0-a2/t0-t2/t5 but preserves a3/a5/a6 between calls).
     a3 = a2 + 0
-    uart_int(a5)
-    uart_str("\nPfannkuchen(")
-    uart_int(a3)
-    uart_str(") = ")
-    uart_int(a6)
-    uart_str("\n")
-    # halt the machine cleanly (sifive_test finisher, 0x5555 = PASS).
-    t0 = 0x100000
-    t1 = 0x5555
-    t0[0:4] = t1
+    print(a5)
+    print("\nPfannkuchen(")
+    print(a3)
+    print(") = ")
+    print(a6)
+    print("\n")
 
-# all harts converge here and park.
-asm:
-    wfi
+# every hart converges here; `unreachable` ends its thread (the finisher has
+# already printed), so the process exits once the last thread is done.
 unreachable
