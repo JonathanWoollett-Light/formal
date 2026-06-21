@@ -1,0 +1,15 @@
+# Euclid's algorithm: gcd(48, 36) = 12, proven at compile time. The loop
+# `while b != 0: t = a % b; a = b; b = t` runs over concrete values, so the
+# closing `require` is only reachable-as-satisfied if the result is right.
+# Boots under qemu-riscv64 and exits 0.
+#
+# Registers: a0 = a, a1 = b, t0 = a % b.
+a0 = 48
+a1 = 36
+while a1 != 0:
+    t0 = a0 % a1
+    a0 = a1
+    a1 = t0
+t3 = 12
+require a0 == t3
+exit(0)
