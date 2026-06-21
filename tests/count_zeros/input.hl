@@ -1,0 +1,38 @@
+# Count the zero elements of a u32 array [3 0 5 0 0 2] -> 3, proven at compile
+# time (a sparsity count). Each `if arr[i] == 0` branches on a value loaded from
+# memory, so the count is right only if the verifier resolves those branches
+# correctly. Boots under qemu-riscv64 and exits 0.
+#
+# Registers: a0 = count, a1 = i, a2 = n, a5 = 4 (elem size), t2 = &arr[i],
+#            t3 = arr[i].
+arr: thread [u32]*6
+t0 = &arr
+t1 = 3
+t0[0:4] = t1
+t1 = 0
+t0[4:8] = t1
+t1 = 5
+t0[8:12] = t1
+t1 = 0
+t0[12:16] = t1
+t1 = 0
+t0[16:20] = t1
+t1 = 2
+t0[20:24] = t1
+
+a0 = 0
+a1 = 0
+a2 = 6
+a5 = 4
+while a1 < a2:
+    t1 = a1 * a5
+    t2 = &arr
+    t2 = t2 + t1
+    t3 = t2[0:4]
+    if t3 == 0:
+        a0 = a0 + 1
+    a1 = a1 + 1
+
+t4 = 3
+require a0 == t4
+exit(0)
