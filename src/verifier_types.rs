@@ -849,6 +849,12 @@ impl Add for MemoryValue {
                 .add(&MemoryValueI64::from(b))
                 .unwrap()),
             (I64(a), I8(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
+            // Loaded signed words widen to `I64` in the register file, as `U32`
+            // does (RV64 `lw` sign-extends, arithmetic is 64-bit).
+            (I32(a), I32(b)) => I64(MemoryValueI64::from(a)
+                .add(&MemoryValueI64::from(b))
+                .unwrap()),
+            (I64(a), I32(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
             x => todo!("{x:?}"),
         }
     }
@@ -1130,6 +1136,12 @@ impl MemoryValue {
                                             bytes[0..*len as usize].try_into().unwrap();
                                         *item = I8(MemoryValueI8::from_bytes(&to));
                                     }
+                                    (I64(from), I32(_)) => {
+                                        let bytes = from.to_bytes().unwrap();
+                                        let to: [u8; 4] =
+                                            bytes[0..*len as usize].try_into().unwrap();
+                                        *item = I32(MemoryValueI32::from_bytes(&to));
+                                    }
                                     x => todo!("end-of-list set coercion: {x:?} len={len:?}"),
                                 }
                                 return Ok(());
@@ -1208,6 +1220,18 @@ impl MemoryValue {
                                             let to_bytes =
                                                 from_bytes[0..*len as usize].try_into().unwrap();
                                             *to = MemoryValueI8::from_bytes(&to_bytes);
+                                            return Ok(());
+                                        } else {
+                                            todo!()
+                                        }
+                                    }
+                                    // Storing a register into a signed-word (`i32`)
+                                    // slot: keep its low 4 bytes, as for `U32`.
+                                    (I64(from), I32(to)) => {
+                                        if let Some(from_bytes) = from.to_bytes() {
+                                            let to_bytes =
+                                                from_bytes[0..*len as usize].try_into().unwrap();
+                                            *to = MemoryValueI32::from_bytes(&to_bytes);
                                             return Ok(());
                                         } else {
                                             todo!()
