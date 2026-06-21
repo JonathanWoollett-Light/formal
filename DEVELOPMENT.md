@@ -100,10 +100,12 @@ should come with a test that covers it (e.g. `tests/reg_add` covers the `add`
 instruction's lowering + symbolic semantics).
 
 The aim is high coverage from **sensible programs and inputs**, not contrived
-line-poking. The baseline is ~82% of regions / ~83% of lines (`codegen.rs` ~95%,
+line-poking. The baseline is ~83% of regions / ~84% of lines (`codegen.rs` ~95%,
 `lib.rs` ~97%, `hl.rs` ~93% via `tests/compile_api` exercising `formal::compile`
 and `tests/translate_errors` exercising the front-end's rejection paths;
-`main.rs` ~92% via `tests/cli` running the binary). The little proven-correct algorithm
+`main.rs` ~92% via `tests/cli` running the binary). The signed-arithmetic
+programs (`signed_bytes`/`signed_words`/`signed_max`/`dot_product`/`difference_array`)
+fill the `i8`/`i32` value-model arms with real computations. The little proven-correct algorithm
 programs (`fannkuch_redux`, `sieve`, `bubble_sort`, `collatz`, `sentinel_sum`,
 `inferred_widening`, the `reg_*` and `indexed` arithmetic tests) are what cover
 the verifier's branch resolution, type inference and interval arithmetic from
@@ -1047,6 +1049,26 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   *mid-program* first encounter (`invalid_path`'s re-attach-after-the-predecessor
   arm, which the inference tests that declare their variable first never reach);
   the search lands on `u32` (asserted). Boots and exits 0.
+- `gcd` ([tests/gcd/](tests/gcd/)): Euclid's algorithm, `require gcd(48,36) == 12`
+  -- a `while b != 0` remainder loop whose result feeds back as the next divisor.
+- `binary_search` ([tests/binary_search/](tests/binary_search/)): searches the
+  sorted `[1 3 5 7 9 11]` for 7 and `require`s it is found at index 3, exercising
+  computed indexing, the `(lo+hi)/2` divide, and the three-way comparison of a
+  loaded `u32` against the target.
+- `signed_bytes` / `signed_words` ([tests/signed_bytes/](tests/signed_bytes/),
+  [tests/signed_words/](tests/signed_words/)): signed `i8` / `i32` arithmetic
+  with negative values -- store a few negatives into an `[i8]`/`[i32]` array, read
+  them back and prove the sum. These are the programs that drive the signed
+  value-model arms ([§9](#9-conventions--gotchas) "Mixed-width integer arms").
+- `signed_max` ([tests/signed_max/](tests/signed_max/)): `max([-5 3 -1 -8 2]) == 3`,
+  whose running `if nums[i] > max` exercises signed `i32` comparison of values
+  loaded from memory.
+- `dot_product` ([tests/dot_product/](tests/dot_product/)): `[-1 2 -3] . [4 -5 6] == -32`,
+  exercising signed `i32` multiply.
+- `difference_array` ([tests/difference_array/](tests/difference_array/)):
+  `diff[i] = arr[i+1] - arr[i]` over `[10 7 12 4]`, whose telescoping sum equals
+  `arr[3]-arr[0] = -6` (asserted) -- a standard technique exercising signed `i32`
+  subtract.
 - `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
   digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
@@ -1588,8 +1610,18 @@ Self>, CompilerError>` (continue / terminal-outcome in `Ok`, error in `Err`).
     `lw`-then-`addi` widens, and a negative immediate no longer underflows an
     unsigned slot); and `queue_up`'s `bnez`/`beqz` branch resolution gained
     `U32`/`U64`/`I64` zero-comparison arms (the two-operand branches already used
-    the generic `compare`). The same class of gap will resurface for any new
-    type pairing a future program exercises.
+    the generic `compare`). The **signed-memory** arms were filled the same way
+    for the `signed_bytes`/`signed_words`/`signed_max`/`dot_product`/`difference_array`
+    programs (each mirrors the existing `U8`/`U32` arm with signed semantics, so
+    it only fires on the `i8`/`i32` paths the unsigned programs never reached):
+    `set` gained `(I64,I8)`/`(I64,I32)` (interior + end-of-list, keeping the
+    register's low bytes as `sb`/`sw` do); `Add` gained `(I8,I8)`/`(I64,I8)`/
+    `(I32,I32)`/`(I64,I32)`/`(I32,I64)`; `Sub` and `Mul` gained `(I32,I32)`; and
+    `compare` gained `(I32,I32)` (a plain omission next to `(I8,I8)`/`(I16,I16)`)
+    plus the mixed `(I64,I32)`/`(I32,I64)` orderings. Each widens a loaded
+    signed value to `I64` in the register file, matching RV64's sign-extending
+    `lb`/`lw`. The same class of gap will resurface for any new type pairing a
+    future program exercises (`u16`/`i16` await 2-byte `lh`/`sh`).
 - **Parser fragility.** Operands are sliced at fixed offsets (2-char registers,
   single space after commas); only 8 register names parse; `Span::row`/`column`
   re-read the whole source file from disk on every call and `.unwrap()` the IO.
