@@ -181,6 +181,9 @@ pub unsafe fn step(
         Instruction::Sb(Sb { to, offset, .. }) => {
             check_store_at(&cont.state, hart, active, sinks, to, offset, 1)?
         }
+        Instruction::Sh(Sh { to, offset, .. }) => {
+            check_store_at(&cont.state, hart, active, sinks, to, offset, 2)?
+        }
         Instruction::Ld(Ld { from, offset, .. }) => {
             check_load_at(&cont.state, hart, active, sinks, from, offset, 8)?
         }
@@ -189,6 +192,9 @@ pub unsafe fn step(
         }
         Instruction::Lb(Lb { from, offset, .. }) => {
             check_load_at(&cont.state, hart, active, sinks, from, offset, 1)?
+        }
+        Instruction::Lh(Lh { from, offset, .. }) => {
+            check_load_at(&cont.state, hart, active, sinks, from, offset, 2)?
         }
         // An atomic accesses `(rs1)` (zero offset): validate it like a 4-byte
         // store (read and write hit the same address, so the store check covers
@@ -744,6 +750,16 @@ impl Explorerer {
                     ControlFlow::Break(outcome) => return Ok(outcome),
                 };
             }
+            Instruction::Sh(Sh {
+                to,
+                from: _,
+                offset,
+            }) => {
+                self = match self.check_store(leaf_ptr, branch, to, offset, 2)? {
+                    ControlFlow::Continue(x) => x,
+                    ControlFlow::Break(outcome) => return Ok(outcome),
+                };
+            }
             // TODO A lot of the checking loads code is duplicated, reduce this duplication.
             // For any load we need to validate the destination is valid.
             Instruction::Ld(Ld {
@@ -772,6 +788,16 @@ impl Explorerer {
                 offset,
             }) => {
                 self = match self.check_load(leaf_ptr, branch, from, offset, 1)? {
+                    ControlFlow::Continue(x) => x,
+                    ControlFlow::Break(outcome) => return Ok(outcome),
+                };
+            }
+            Instruction::Lh(Lh {
+                to: _,
+                from,
+                offset,
+            }) => {
+                self = match self.check_load(leaf_ptr, branch, from, offset, 2)? {
                     ControlFlow::Continue(x) => x,
                     ControlFlow::Break(outcome) => return Ok(outcome),
                 };
@@ -2042,9 +2068,11 @@ unsafe fn compute_next(
                 // If the label is thread local its not racy.
                 Instruction::Sb(Sb { to: register, .. })
                 | Instruction::Sw(Sw { to: register, .. })
+                | Instruction::Sh(Sh { to: register, .. })
                 | Instruction::Ld(Ld { from: register, .. })
                 | Instruction::Lw(Lw { from: register, .. })
                 | Instruction::Lb(Lb { from: register, .. })
+                | Instruction::Lh(Lh { from: register, .. })
                 // An atomic RMW is the racy primitive: it accesses `(rs1)`, racy
                 // exactly when that points at a global (the shared counter).
                 | Instruction::Amoadd(Amoadd { rs1: register, .. }) => {
@@ -2478,9 +2506,11 @@ unsafe fn compute_next(
                 | Instruction::Define(_)
                 | Instruction::Sw(_)
                 | Instruction::Sb(_)
+                | Instruction::Sh(_)
                 | Instruction::Ld(_)
                 | Instruction::Lw(_)
                 | Instruction::Lb(_)
+                | Instruction::Lh(_)
                 | Instruction::Fail(_)
                 | Instruction::Ecall(_)
                 | Instruction::Assume(_)
@@ -2637,6 +2667,9 @@ unsafe fn apply_node(
         Instruction::Sb(Sb { to, from, offset }) => {
             find_state_store(state, sinks, node, hartu, to, from, offset, 1)?;
         }
+        Instruction::Sh(Sh { to, from, offset }) => {
+            find_state_store(state, sinks, node, hartu, to, from, offset, 2)?;
+        }
         Instruction::Ld(Ld { to, from, offset }) => {
             find_state_load(state, sinks, node, hartu, to, from, offset, 8)?;
         }
@@ -2645,6 +2678,9 @@ unsafe fn apply_node(
         }
         Instruction::Lb(Lb { to, from, offset }) => {
             find_state_load(state, sinks, node, hartu, to, from, offset, 1)?;
+        }
+        Instruction::Lh(Lh { to, from, offset }) => {
+            find_state_load(state, sinks, node, hartu, to, from, offset, 2)?;
         }
         Instruction::Amoadd(Amoadd { rd, rs2, rs1, op }) => {
             // Atomic word read-modify-write: `rd = mem[rs1]; mem[rs1] = op(rd, rs2)`,
@@ -3203,6 +3239,7 @@ fn find_state_load(
             sinks.pinned_nodes.insert(node);
             let value = match len {
                 1 => MemoryValue::from(Type::I8),
+                2 => MemoryValue::from(Type::I16),
                 4 => MemoryValue::from(Type::I32),
                 8 => MemoryValue::from(Type::I64),
                 _ => {

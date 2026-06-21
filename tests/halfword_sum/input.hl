@@ -1,0 +1,20 @@
+# 16-bit (u16) values via 2-byte halfword load/store (`sh`/`lh`): store 1000,
+# 2000, 3000 into a [u16] array, read them back and prove the sum is 6000 at
+# compile time. Exercises the 2-byte access width and the u16 value-model paths.
+# Boots under qemu-riscv64 and exits 0.
+vals: global [u16]*3
+t0 = &vals
+t1 = 1000
+t0[0:2] = t1
+t1 = 2000
+t0[2:4] = t1
+t1 = 3000
+t0[4:6] = t1
+a0 = t0[0:2]
+a1 = t0[2:4]
+a2 = t0[4:6]
+a0 = a0 + a1
+a0 = a0 + a2
+a3 = 6000
+require a0 == a3
+exit(0)

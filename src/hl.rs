@@ -826,8 +826,9 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
         let (offset, len) = slice;
         let mnemonic = match len {
             1 => "sb",
+            2 => "sh",
             4 => "sw",
-            _ => return Err(format!("unsupported store width {len} (1 or 4)")),
+            _ => return Err(format!("unsupported store width {len} (1, 2 or 4)")),
         };
         return Ok(format!("    {mnemonic} {rhs}, {offset}({register})"));
     }
@@ -840,9 +841,10 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
     if let Some((register, (offset, len))) = split_slice(rhs)? {
         let mnemonic = match len {
             1 => "lb",
+            2 => "lh",
             4 => "lw",
             8 => "ld",
-            _ => return Err(format!("unsupported load width {len} (1, 4 or 8)")),
+            _ => return Err(format!("unsupported load width {len} (1, 2, 4 or 8)")),
         };
         return Ok(format!("    {mnemonic} {lhs}, {offset}({register})"));
     }

@@ -273,6 +273,8 @@ pub enum Instruction {
     Li(Li),
     Sw(Sw),
     Lw(Lw),
+    Sh(Sh),
+    Lh(Lh),
     Addi(Addi),
     Add(Add),
     Sub(Sub),
@@ -326,6 +328,8 @@ fn new_instruction(src: &[char]) -> Instruction {
         ['l', 'i', ' ', rem @ ..] => Instruction::Li(new_li(rem)),
         ['s', 'w', ' ', rem @ ..] => Instruction::Sw(new_sw(rem)),
         ['l', 'w', ' ', rem @ ..] => Instruction::Lw(new_lw(rem)),
+        ['s', 'h', ' ', rem @ ..] => Instruction::Sh(new_sh(rem)),
+        ['l', 'h', ' ', rem @ ..] => Instruction::Lh(new_lh(rem)),
         ['a', 'd', 'd', 'i', ' ', rem @ ..] => Instruction::Addi(new_addi(rem)),
         ['a', 'd', 'd', ' ', rem @ ..] => Instruction::Add(new_add(rem)),
         ['s', 'u', 'b', ' ', rem @ ..] => Instruction::Sub(new_sub(rem)),
@@ -377,6 +381,8 @@ impl fmt::Display for Instruction {
             Li(li) => write!(f, "{li}"),
             Sw(sw) => write!(f, "{sw}"),
             Lw(lw) => write!(f, "{lw}"),
+            Sh(sh) => write!(f, "{sh}"),
+            Lh(lh) => write!(f, "{lh}"),
             Addi(addi) => write!(f, "{addi}"),
             Add(add) => write!(f, "{add}"),
             Sub(sub) => write!(f, "{sub}"),
@@ -1397,6 +1403,64 @@ fn new_sw(src: &[char]) -> Sw {
     let from = new_register(&src[..2]).unwrap();
     let (i, j) = parse_store(src);
     Sw {
+        from,
+        to: new_register(&src[i + 1..j]).unwrap(),
+        offset: new_offset(&src[4..i]).unwrap(),
+    }
+}
+
+/// 2-byte halfword load/store, mirroring [`Lw`]/[`Sw`] (the only difference is
+/// the access width, which the verifier and codegen carry as a `len`/mnemonic).
+#[derive(Debug, Clone)]
+pub struct Lh {
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
+}
+
+impl fmt::Display for Lh {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "lh {}, {}({})", self.to, self.offset, self.from)
+    }
+}
+
+fn new_lh(src: &[char]) -> Lh {
+    let to = new_register(&src[..2]).unwrap();
+    for i in 4..src.len() {
+        if src[i] == '(' {
+            let from = src
+                .iter()
+                .skip(i + 1)
+                .take_while(|&&c| c != ')')
+                .copied()
+                .collect::<Vec<_>>();
+            return Lh {
+                to,
+                from: new_register(&from).unwrap(),
+                offset: new_offset(&src[4..i]).unwrap(),
+            };
+        }
+    }
+    unreachable!()
+}
+
+#[derive(Debug, Clone)]
+pub struct Sh {
+    pub to: Register,
+    pub from: Register,
+    pub offset: Offset,
+}
+
+impl fmt::Display for Sh {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "sh {}, {}({})", self.from, self.offset, self.to)
+    }
+}
+
+fn new_sh(src: &[char]) -> Sh {
+    let from = new_register(&src[..2]).unwrap();
+    let (i, j) = parse_store(src);
+    Sh {
         from,
         to: new_register(&src[i + 1..j]).unwrap(),
         offset: new_offset(&src[4..i]).unwrap(),

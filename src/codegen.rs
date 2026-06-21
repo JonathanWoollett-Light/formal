@@ -517,8 +517,10 @@ fn patchable(node: NonNull<AstNode>) -> bool {
             | Instruction::Ld(_)
             | Instruction::Lw(_)
             | Instruction::Lb(_)
+            | Instruction::Lh(_)
             | Instruction::Sw(_)
             | Instruction::Sb(_)
+            | Instruction::Sh(_)
     )
 }
 
@@ -536,8 +538,10 @@ fn patch_immediate(instruction: &Instruction, immediate: i64) -> Option<Instruct
         Instruction::Ld(ld) => ld.offset = Offset { value },
         Instruction::Lw(lw) => lw.offset = Offset { value },
         Instruction::Lb(lb) => lb.offset = Offset { value },
+        Instruction::Lh(lh) => lh.offset = Offset { value },
         Instruction::Sw(sw) => sw.offset = Offset { value },
         Instruction::Sb(sb) => sb.offset = Offset { value },
+        Instruction::Sh(sh) => sh.offset = Offset { value },
         _ => return None,
     }
     Some(patched)

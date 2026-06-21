@@ -58,8 +58,14 @@ const MALFORMED: &[(&str, &str)] = &[
     ),
     // Stores, loads and arithmetic operands.
     ("t0[0:4] = 5\nexit(0)\n", "store from a non-register"),
-    ("t0[0:2] = t1\nexit(0)\n", "unsupported store width"),
-    ("t0 = t1[0:2]\nexit(0)\n", "unsupported load width"),
+    (
+        "t0[0:3] = t1\nexit(0)\n",
+        "unsupported store width (only 1/2/4)",
+    ),
+    (
+        "t0 = t1[0:5]\nexit(0)\n",
+        "unsupported load width (only 1/2/4/8)",
+    ),
     ("t0 = type(9bad)\nexit(0)\n", "type() of an invalid label"),
     (
         "t0 = 5 + t1\nexit(0)\n",

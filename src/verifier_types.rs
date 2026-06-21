@@ -621,6 +621,24 @@ impl From<MemoryValueI32> for MemoryValueI64 {
     }
 }
 
+impl From<MemoryValueU16> for MemoryValueI64 {
+    fn from(MemoryValueU16 { start, stop }: MemoryValueU16) -> Self {
+        Self {
+            start: i64::from(start),
+            stop: i64::from(stop),
+        }
+    }
+}
+
+impl From<MemoryValueI16> for MemoryValueI64 {
+    fn from(MemoryValueI16 { start, stop }: MemoryValueI16) -> Self {
+        Self {
+            start: i64::from(start),
+            stop: i64::from(stop),
+        }
+    }
+}
+
 impl TryFrom<MemoryValueU64> for MemoryValueI64 {
     type Error = <i64 as TryFrom<u64>>::Error;
     fn try_from(MemoryValueU64 { start, stop }: MemoryValueU64) -> Result<Self, Self::Error> {
@@ -736,6 +754,7 @@ impl From<&MemoryValue> for Type {
             MemoryValue::I32(_) => Type::I32,
             MemoryValue::I8(_) => Type::I8,
             MemoryValue::I16(_) => Type::I16,
+            MemoryValue::U16(_) => Type::U16,
             x @ _ => todo!("{x:?}"),
         }
     }
@@ -858,6 +877,12 @@ impl Add for MemoryValue {
             // A loaded `I32` plus a register immediate (`addi`, e.g. the `a = b`
             // move) widens to `I64`, as the `(U32, I64)` arm does.
             (I32(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
+            // Loaded 2-byte halfwords likewise widen to `I64` in the register.
+            (U16(a), U16(b)) => I64(MemoryValueI64::from(a)
+                .add(&MemoryValueI64::from(b))
+                .unwrap()),
+            (I64(a), U16(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
+            (U16(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
             x => todo!("{x:?}"),
         }
     }
@@ -1153,6 +1178,18 @@ impl MemoryValue {
                                             bytes[0..*len as usize].try_into().unwrap();
                                         *item = I32(MemoryValueI32::from_bytes(&to));
                                     }
+                                    (I64(from), U16(_)) => {
+                                        let bytes = from.to_bytes().unwrap();
+                                        let to: [u8; 2] =
+                                            bytes[0..*len as usize].try_into().unwrap();
+                                        *item = U16(MemoryValueU16::from_bytes(&to));
+                                    }
+                                    (I64(from), I16(_)) => {
+                                        let bytes = from.to_bytes().unwrap();
+                                        let to: [u8; 2] =
+                                            bytes[0..*len as usize].try_into().unwrap();
+                                        *item = I16(MemoryValueI16::from_bytes(&to));
+                                    }
                                     x => todo!("end-of-list set coercion: {x:?} len={len:?}"),
                                 }
                                 return Ok(());
@@ -1243,6 +1280,29 @@ impl MemoryValue {
                                             let to_bytes =
                                                 from_bytes[0..*len as usize].try_into().unwrap();
                                             *to = MemoryValueI32::from_bytes(&to_bytes);
+                                            return Ok(());
+                                        } else {
+                                            todo!()
+                                        }
+                                    }
+                                    // Storing a register into a 2-byte halfword
+                                    // (`u16`/`i16`) slot: keep its low 2 bytes
+                                    // (`sh`), as the wider arms do.
+                                    (I64(from), U16(to)) => {
+                                        if let Some(from_bytes) = from.to_bytes() {
+                                            let to_bytes =
+                                                from_bytes[0..*len as usize].try_into().unwrap();
+                                            *to = MemoryValueU16::from_bytes(&to_bytes);
+                                            return Ok(());
+                                        } else {
+                                            todo!()
+                                        }
+                                    }
+                                    (I64(from), I16(to)) => {
+                                        if let Some(from_bytes) = from.to_bytes() {
+                                            let to_bytes =
+                                                from_bytes[0..*len as usize].try_into().unwrap();
+                                            *to = MemoryValueI16::from_bytes(&to_bytes);
                                             return Ok(());
                                         } else {
                                             todo!()
