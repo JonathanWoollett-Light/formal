@@ -105,7 +105,8 @@ line-poking. The baseline is ~83% of regions / ~84% of lines (`codegen.rs` ~95%,
 and `tests/translate_errors` exercising the front-end's rejection paths;
 `main.rs` ~92% via `tests/cli` running the binary). The signed-arithmetic
 programs (`signed_bytes`/`signed_words`/`signed_max`/`dot_product`/`difference_array`)
-fill the `i8`/`i32` value-model arms with real computations. The little proven-correct algorithm
+fill the `i8`/`i32` value-model arms with real computations, and
+`halfword_sum`/`signed_halfwords` the `u16`/`i16` ones (via 2-byte `lh`/`sh`). The little proven-correct algorithm
 programs (`fannkuch_redux`, `sieve`, `bubble_sort`, `collatz`, `sentinel_sum`,
 `inferred_widening`, the `reg_*` and `indexed` arithmetic tests) are what cover
 the verifier's branch resolution, type inference and interval arithmetic from
@@ -699,8 +700,8 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 | `t1 = t1 + 1` / `t1 = t1 - 8`            | `addi t1, t1, 1` / `addi t1, t1, -8` (immediate `+`/`-` only)                                                                                               |
 | `t3 = t1 + t2` / `t3 = t1 - t2`          | `add t3, t1, t2` / `sub t3, t1, t2` (register-register)                                                                                                     |
 | `t3 = t1 * t2` / `t3 = t1 / t2` / `t3 = t1 % t2` | `mul` / `div` / `rem t3, t1, t2` (register-register; `*`/`/`/`%` have no immediate form, so the operand must be a register)                          |
-| `t0[0:4] = t1`                           | `sw t1, 0(t0)` (store; width 1 = `sb`, 4 = `sw`)                                                                                                           |
-| `t1 = t0[8:16]`                          | `ld t1, 8(t0)` (load; width 1 = `lb`, 4 = `lw`, 8 = `ld`)                                                                                                  |
+| `t0[0:4] = t1`                           | `sw t1, 0(t0)` (store; width 1 = `sb`, 2 = `sh`, 4 = `sw`)                                                                                                 |
+| `t1 = t0[8:16]`                          | `ld t1, 8(t0)` (load; width 1 = `lb`, 2 = `lh`, 4 = `lw`, 8 = `ld`)                                                                                        |
 | `forget t0`                              | `#~ t0` (havoc: set `t0` to *any* value for the verifier; emits nothing)                                                                                    |
 | `section 0x100 0x200 rw`                 | `#@ 0x100 0x200 rw`                                                                                                                                        |
 | `fail` / `unreachable`                   | `#!` / `#?`                                                                                                                                                |
@@ -837,9 +838,10 @@ and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly)
   `#(` / `#)` `Assume` (bracket a block the verifier executes to narrow state and
   codegen drops; the `assume:` escape hatch). Plain `#…` comments and inline
   `# …` comments are stripped.
-- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 34
+- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 36
   variants): `csrr`, `bnez`, `j`, `wfi`, `ecall`, labels (`foo:`), `.global`,
-  `.data`, `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `addi`,
+  `.data`, `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `sh`, `lh`
+  (2-byte halfword store/load, for `u16`/`i16`), `addi`,
   `add`, `sub`, `mul`, `div`, `rem` (register-register RV64M arithmetic),
   `amoadd.w rd, rs2, (rs1)` (RV64A atomic fetch-add, the lock-free
   work-claiming primitive: `rd = mem[rs1]; mem[rs1] += rs2` in one racy step),
@@ -1069,6 +1071,16 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   `diff[i] = arr[i+1] - arr[i]` over `[10 7 12 4]`, whose telescoping sum equals
   `arr[3]-arr[0] = -6` (asserted) -- a standard technique exercising signed `i32`
   subtract.
+- `count_zeros` ([tests/count_zeros/](tests/count_zeros/)): counts the zero
+  elements of `[3 0 5 0 0 2]` (= 3); each `if arr[i] == 0` branches (`bnez`) on a
+  loaded `u32`, the branch-on-loaded-value path the `while != 0` sentinel
+  (`beqz`) loop does not reach.
+- `halfword_sum` / `signed_halfwords`
+  ([tests/halfword_sum/](tests/halfword_sum/),
+  [tests/signed_halfwords/](tests/signed_halfwords/)): 16-bit (`u16`/`i16`)
+  arithmetic via the 2-byte `sh`/`lh` instructions -- store a few values into a
+  `[u16]`/`[i16]` array and prove the sum. The programs that exercise the 2-byte
+  access width and the `u16`/`i16` value-model paths.
 - `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
   digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
@@ -1620,8 +1632,11 @@ Self>, CompilerError>` (continue / terminal-outcome in `Ok`, error in `Err`).
     `compare` gained `(I32,I32)` (a plain omission next to `(I8,I8)`/`(I16,I16)`)
     plus the mixed `(I64,I32)`/`(I32,I64)` orderings. Each widens a loaded
     signed value to `I64` in the register file, matching RV64's sign-extending
-    `lb`/`lw`. The same class of gap will resurface for any new type pairing a
-    future program exercises (`u16`/`i16` await 2-byte `lh`/`sh`).
+    `lb`/`lw`. The 2-byte `lh`/`sh` later landed (`halfword_sum`/`signed_halfwords`),
+    filling the matching `u16`/`i16` arms the same mirror way (`set`
+    `(I64,U16)`/`(I64,I16)`, `Add` for the `U16`/`I16` pairs, and the
+    `From<MemoryValueU16/I16> for MemoryValueI64` widenings). The same class of
+    gap will resurface for any new type pairing a future program exercises.
 - **Parser fragility.** Operands are sliced at fixed offsets (2-char registers,
   single space after commas); only 8 register names parse; `Span::row`/`column`
   re-read the whole source file from disk on every call and `.unwrap()` the IO.
