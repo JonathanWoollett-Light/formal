@@ -899,6 +899,10 @@ impl Sub for MemoryValue {
                 .unwrap()),
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a).sub(&b).unwrap()),
             (I64(a), U32(b)) => I64(a.sub(&MemoryValueI64::from(b)).unwrap()),
+            // Two loaded signed words subtract in 64-bit registers, as `U32` does.
+            (I32(a), I32(b)) => I64(MemoryValueI64::from(a)
+                .sub(&MemoryValueI64::from(b))
+                .unwrap()),
             // A pointer minus an integer offset walks the offset backwards.
             (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
                 let signed = MemoryValueI64::try_from(a.offset).unwrap();
