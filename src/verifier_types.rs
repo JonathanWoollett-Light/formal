@@ -877,6 +877,10 @@ impl Mul for MemoryValue {
                 .unwrap()),
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a).mul(&b).unwrap()),
             (I64(a), U32(b)) => I64(a.mul(&MemoryValueI64::from(b)).unwrap()),
+            // Two loaded signed words multiply in 64-bit registers, as `U32` does.
+            (I32(a), I32(b)) => I64(MemoryValueI64::from(a)
+                .mul(&MemoryValueI64::from(b))
+                .unwrap()),
             x => todo!("{x:?}"),
         }
     }
