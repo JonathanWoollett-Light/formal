@@ -883,6 +883,11 @@ impl Add for MemoryValue {
                 .unwrap()),
             (I64(a), U16(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
             (U16(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
+            (I16(a), I16(b)) => I64(MemoryValueI64::from(a)
+                .add(&MemoryValueI64::from(b))
+                .unwrap()),
+            (I64(a), I16(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
+            (I16(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
             x => todo!("{x:?}"),
         }
     }
