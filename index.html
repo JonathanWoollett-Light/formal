@@ -588,7 +588,7 @@ grep -cE '^    [a-z]' build/main.s</code></pre>
                 id="formal-mem"
                 >8 KiB</b
               >
-              peak memory<br /><b id="formal-time" class="tip">9 ms</b>
+              peak memory<br /><b id="formal-time" class="tip">10 ms</b>
               execution time
             </p>
           </div>
@@ -606,7 +606,7 @@ objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+
                 id="lang-bytes-wrap"
                 ><br /><b id="lang-bytes">25,080</b> bytes</span
               ><span id="lang-compile-wrap"
-                ><br /><b id="lang-compile">40 s</b> compile time</span
+                ><br /><b id="lang-compile">47 s</b> compile time</span
               >
             </p>
             <p class="runtime-stats" id="lang-runtime">
@@ -1248,20 +1248,20 @@ while t5 != t2:             # top-tested loop
         // prettier-ignore
         var METRICS = {
           hello: {
-            formal: { compile: "15 ms", count: "46", bytes: "944", exec: "108", mem: "8 KiB", time: "9 ms" },
-            rust: { compile: "40 s", count: "5,888", bytes: "25,080", exec: "3,063", mem: "48 KiB", time: "13 ms" },
+            formal: { compile: "15 ms", count: "46", bytes: "944", exec: "108", mem: "8 KiB", time: "10 ms" },
+            rust: { compile: "47 s", count: "5,888", bytes: "25,080", exec: "3,063", mem: "48 KiB", time: "13 ms" },
             c: { count: "971", bytes: "13,552", exec: "1,363", mem: "24 KiB", time: "17 ms" },
             cpp: { count: "287,893", bytes: "1,448,584", exec: "19,231", mem: "140 KiB", time: "13 ms" },
             zig: { count: "1,238", bytes: "10,016", exec: "750", mem: "28 KiB", time: "11 ms" },
-            ada: { compile: "300 ms", count: "219,193", bytes: "1,143,848" },
+            ada: { compile: "1.7 s", count: "219,193", bytes: "1,143,848" },
           },
           fannkuch: {
-            formal: { compile: "728 ms", count: "347", bytes: "1,976", exec: "267,350,843,102", mem: "8 KiB", time: "36 s" },
-            rust: { compile: "25 s", count: "7,388", bytes: "30,672", exec: "415,808,315,929", mem: "140 KiB", time: "382 s" },
+            formal: { compile: "728 ms", count: "347", bytes: "1,976", exec: "267,350,843,102", mem: "8 KiB", time: "60 s" },
+            rust: { compile: "26 s", count: "7,388", bytes: "30,672", exec: "214,153,456,662", mem: "60 KiB", time: "124 s" },
             c: { count: "3,115", bytes: "21,744", exec: "240,092,840,603", mem: "40 KiB", time: "72 s" },
             cpp: { count: "288,700", bytes: "1,452,680", exec: "237,891,703,700", mem: "208 KiB", time: "89 s" },
             zig: { count: "1,541", bytes: "11,200", exec: "191,429,058,614", mem: "36 KiB", time: "38 s" },
-            ada: { compile: "339 ms", count: "218,577", bytes: "1,135,552" },
+            ada: { compile: "482 ms", count: "218,577", bytes: "1,135,552" },
           },
         };
         // prettier-ignore
