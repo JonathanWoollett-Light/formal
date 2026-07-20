@@ -769,7 +769,7 @@ require t1 &lt; t2
 # `wfi` at the end.
 t0 = csr(mhartid)
 if t0 == 0:
-    welcome: _ [u8]*13
+    welcome: _ [u8*13]
     # H  e  l  l  o     W  o  r  l  d  !  0
     # Type exploration doesn't explore list types since they are infinite, so
     # to define a list a user must define it manually.
@@ -1015,7 +1015,7 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
         <pre
           class="asm"
         ><code>value: global _              -&gt;  #$ value global _        define (locality/type; _ = infer)
-welcome: _ [u8]*13           -&gt;  #$ welcome _ [u8 ... u8]  list types: [u8, u8] or [u8]*n
+welcome: _ [u8*13]           -&gt;  #$ welcome _ [u8 ... u8]  list types: runs, [u8*13] or [u8*2, u16*2]
 t0 = &amp;value                  -&gt;  la t0, value              address of a variable
 t0 = type(welcome)           -&gt;  #&amp; t0, welcome            address of the runtime type descriptor
 t0 = csr(mhartid)            -&gt;  csrr t0, mhartid          which hart am I?

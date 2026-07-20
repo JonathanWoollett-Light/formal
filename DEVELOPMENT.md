@@ -717,7 +717,7 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 
 | `hl` statement                           | Dialect line                                                                                                                                               |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `value: global _` / `welcome: _ [u8]*13` | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a `name:` with an annotation is a define; `[t, t]` and `[t]*n` expand to the space-separated list type) |
+| `value: global _` / `welcome: _ [u8*13]` | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a `name:` with an annotation is a define; list types are comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g. `[u8*13]` or `[u8*2, u16*2, u8*3]`, plain elements being runs of 1; the legacy outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`; every form expands to the space-separated flat dialect list) |
 | `t0 = &value`                            | `la t0, value`                                                                                                                                             |
 | `t0 = type(welcome)`                     | `#& t0, welcome`                                                                                                                                           |
 | `t0 = csr(mhartid)`                      | `csrr t0, mhartid`                                                                                                                                         |
@@ -1261,6 +1261,14 @@ Behaviour-focused tests (each pins one specific rule or error case; the Valid
 ones also pin the exact emitted program, and all Invalid ones pin their trace
 prefix):
 
+- `hl_types` ([tests/hl_types/](tests/hl_types/)): the run-length list-type
+  grammar -- comma-separated runs (`[u8*3]`, `[u8*2, u16*2, u8*3]`, runs mixed
+  with plain elements), the legacy outer `*n` cycling suffix, and the
+  `[u8]*13` == `[u8*13]` equivalence -- pinned as exact `#$` dialect lines
+  (every form expands to the same flat space-separated list, which is why no
+  other test's pins move). The rejection paths (spaced `u8 * 3`, zero and
+  non-numeric counts, missing or unknown run element) live in
+  `translate_errors`.
 - `vague_access`: `record_access` with a _range_ offset fills the maximal span
   (a 4-byte store at offset `0..=6` records `(0, 10)`), and a recorded range
   that only partially overlaps a descriptor field emits the **whole** field

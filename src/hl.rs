@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! value: global _              ->  #$ value global _
-//! welcome: _ [u8]*13           ->  #$ welcome _ [u8 u8 ... u8]
+//! welcome: _ [u8*13]           ->  #$ welcome _ [u8 u8 ... u8]
 //! t0 = &value                  ->  la t0, value
 //! t0 = type(welcome)           ->  #& t0, welcome
 //! t0 = csr(mhartid)            ->  csrr t0, mhartid
@@ -755,8 +755,9 @@ fn parse_condition(text: &str) -> Result<Condition, String> {
 }
 
 /// `name: <locality> <type>` to `#$ name <locality> <type>`, expanding the
-/// Pythonic `[t, t]` and `[t]*n` list forms to the dialect's space-separated
-/// list type.
+/// Pythonic list forms (comma-separated runs `[u8*13]` / `[u8*2, u16*2]`, and
+/// the legacy outer `[t, t]*n` cycling suffix) to the dialect's
+/// space-separated list type.
 fn translate_define(name: &str, annotation: &str) -> Result<String, String> {
     let (locality, type_text) = annotation
         .split_once(' ')
@@ -776,17 +777,47 @@ fn translate_type(text: &str) -> Result<String, String> {
     if SCALARS.contains(&text) {
         return Ok(text.to_string());
     }
-    // `[t, t, ...]` optionally suffixed `*n` (Python list repetition).
+    // `[run, run, ...]` optionally suffixed `*n` (Python list repetition).
+    // A run is `<scalar>` or `<scalar>*<count>` with `*` binding tightly, so
+    // `[u8*13]` is thirteen bytes and `[u8*2, u16*2, u8*3]` is a heterogeneous
+    // layout. The legacy outer suffix cycles the whole element list
+    // (`[u8, u16]*2` = `[u8 u16 u8 u16]`), making `[u8]*13` == `[u8*13]`.
     if let Some(rest) = text.strip_prefix('[') {
         let (inner, suffix) = rest
             .split_once(']')
             .ok_or_else(|| format!("unterminated list type `{text}`"))?;
-        let elements: Vec<&str> = inner
-            .split(',')
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .collect();
-        if elements.is_empty() || !elements.iter().all(|e| SCALARS.contains(e)) {
+        let mut elements: Vec<&str> = Vec::new();
+        for run in inner.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            match run.split_once('*') {
+                None => {
+                    if !SCALARS.contains(&run) {
+                        return Err(format!("invalid list element types in `{text}`"));
+                    }
+                    elements.push(run);
+                }
+                Some((scalar, count)) => {
+                    if scalar.trim() != scalar || count.trim() != count {
+                        return Err(format!(
+                            "list repetition binds tightly: write `{}*{}`",
+                            scalar.trim(),
+                            count.trim()
+                        ));
+                    }
+                    if !SCALARS.contains(&scalar) {
+                        return Err(format!("invalid list element types in `{text}`"));
+                    }
+                    let n = count
+                        .parse::<usize>()
+                        .ok()
+                        .ok_or_else(|| format!("invalid list repetition `{run}`"))?;
+                    if n == 0 {
+                        return Err("list repetition must be at least 1".to_string());
+                    }
+                    elements.extend(std::iter::repeat(scalar).take(n));
+                }
+            }
+        }
+        if elements.is_empty() {
             return Err(format!("invalid list element types in `{text}`"));
         }
         let repeats = match suffix.trim() {

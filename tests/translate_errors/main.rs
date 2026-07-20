@@ -15,6 +15,14 @@ const MALFORMED: &[(&str, &str)] = &[
     ("while t0:\n    t0 = 0\n", "condition with no comparison"),
     ("v: global zzz\nexit(0)\n", "unknown scalar type"),
     ("v: global [zzz]\nexit(0)\n", "unknown list element type"),
+    (
+        "v: global [u8 * 3]\nexit(0)\n",
+        "run repetition must bind tightly (`u8*3`, not `u8 * 3`)",
+    ),
+    ("v: global [u8*0]\nexit(0)\n", "zero run repetition"),
+    ("v: global [u8*x]\nexit(0)\n", "non-numeric run repetition"),
+    ("v: global [*3]\nexit(0)\n", "a run with no element type"),
+    ("v: global [zzz*3]\nexit(0)\n", "unknown run element type"),
     ("t0 = &\nexit(0)\n", "`&` with no label"),
     ("t0 = &9bad\nexit(0)\n", "`&` with an invalid label"),
     (
