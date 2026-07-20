@@ -1162,6 +1162,14 @@ impl MemoryValue {
                     // We can also reach this case where we are setting an empty list to an empty list,
                     // both have equal sizes, but both are 0 and contain no elements.
                     MemoryValue::List(list) => {
+                        // A ranged offset means the store may land anywhere in
+                        // its maximal span (`Within` here only says the
+                        // *farthest* position reaches the type's end).
+                        // Updating one element would leave stale "known"
+                        // values in the others; apply the weak update instead.
+                        if offset.exact().is_none() {
+                            return ranged_weak_update(list, offset, *len);
+                        }
                         let Some(item) = list.last_mut() else {
                             // In the case of empty list setting we don't need to do anything.
                             return Ok(());
@@ -1233,6 +1241,14 @@ impl MemoryValue {
             // Setting bytes from the offset not reaching the end of the type.
             RangeScalarOrdering::Less => match self {
                 MemoryValue::List(list) => {
+                    // A ranged interior store gets the same flank-preserving
+                    // weak update as the end-reaching case above: elements the
+                    // span may touch havoc, elements outside it keep their
+                    // values. (Exact offsets continue below: they land on one
+                    // element and update it strongly.)
+                    if offset.exact().is_none() {
+                        return ranged_weak_update(list, offset, *len);
+                    }
                     let memrange = memory_range(offset, &len);
                     let mut previous = 0;
                     let mut covers = Vec::new();
@@ -2142,6 +2158,57 @@ pub fn memory_range(offset: &MemoryValueU64, len: &u64) -> MemoryValueU64 {
     }
 }
 
+/// Applies a store whose offset is a **range** to a list: the store may land
+/// anywhere in the maximal span `offset.start .. offset.stop + len`, so every
+/// element the span may touch weakens to the sound union of "old value or new
+/// value" (its type's full range, via [`havoc_scalar`]), and elements outside
+/// the span keep their values. The same rule raw-section stores apply by
+/// erasing their backings. A covered non-scalar is unsupported
+/// (`ListMultiple`), never mis-modeled; the list is only mutated on `Ok`.
+fn ranged_weak_update(
+    list: &mut [MemoryValue],
+    offset: &MemoryValueU64,
+    len: u64,
+) -> Result<(), MemoryValueSetError> {
+    let span_start = offset.start;
+    let span_end = offset.stop.saturating_add(len);
+    let mut previous = 0u64;
+    let mut covered = Vec::new();
+    for (i, item) in list.iter().enumerate() {
+        let next = previous + size(&Type::from(item.clone()));
+        if span_start < next && previous < span_end {
+            if havoc_scalar(item).is_none() {
+                return Err(MemoryValueSetError::ListMultiple);
+            }
+            covered.push(i);
+        }
+        previous = next;
+    }
+    for i in covered {
+        list[i] = havoc_scalar(&list[i]).expect("havoc: covered elements are scalars");
+    }
+    Ok(())
+}
+
+/// The sound union of "old value or new value" for a scalar a ranged store may
+/// or may not have overwritten: the scalar's full type range. `None` for
+/// non-scalars (a possibly-overwritten pointer or nested list has no sound
+/// havoc short of path-splitting; callers treat it as unsupported).
+fn havoc_scalar(value: &MemoryValue) -> Option<MemoryValue> {
+    use MemoryValue::*;
+    Some(match value {
+        U8(_) => U8(MemoryValueU8::any()),
+        I8(_) => I8(MemoryValueI8::any()),
+        U16(_) => U16(MemoryValueU16::any()),
+        I16(_) => I16(MemoryValueI16::any()),
+        U32(_) => U32(MemoryValueU32::any()),
+        I32(_) => I32(MemoryValueI32::any()),
+        U64(_) => U64(MemoryValueU64::any()),
+        I64(_) => I64(MemoryValueI64::any()),
+        _ => return None,
+    })
+}
+
 /// Compile time size
 pub fn size(t: &Type) -> u64 {
     use Type::*;
@@ -2209,5 +2276,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A ranged store that may reach the type's end must weaken every element
+    /// it may touch to the full type range (old-or-new union), while an exact
+    /// tail store keeps the strong update.
+    #[test]
+    fn ranged_store_reaching_end_havocs_covered_elements() {
+        use MemoryValue::*;
+        let exact_u32 = |v: u32| U32(MemoryValueU32::new(v, v).expect("valid u32"));
+        let stored = || I64(MemoryValueI64::new(7, 7).expect("valid i64"));
+
+        // Offset [0, 12], len 4 over [u32; 4]: the span covers all 16 bytes, so
+        // all four elements havoc.
+        let mut list =
+            MemoryValue::List(vec![exact_u32(1), exact_u32(2), exact_u32(3), exact_u32(4)]);
+        let offset = MemoryValueU64 { start: 0, stop: 12 };
+        list.set(&offset, &4, stored())
+            .expect("ranged store applies");
+        let List(items) = list else {
+            panic!("expected a list")
+        };
+        for item in &items {
+            let U32(r) = item else {
+                panic!("expected u32 elements")
+            };
+            assert_eq!((r.start(), r.stop()), (u32::MIN, u32::MAX));
+        }
+
+        // Offset [4, 8], len 4: the span covers bytes 4..12 (elements 1 and 2)
+        // and must not touch elements 0 and 3.
+        let mut list =
+            MemoryValue::List(vec![exact_u32(1), exact_u32(2), exact_u32(3), exact_u32(4)]);
+        let offset = MemoryValueU64 { start: 4, stop: 8 };
+        list.set(&offset, &4, stored())
+            .expect("ranged store applies");
+        let List(items) = list else {
+            panic!("expected a list")
+        };
+        let ranges: Vec<_> = items
+            .iter()
+            .map(|item| {
+                let U32(r) = item else {
+                    panic!("expected u32 elements")
+                };
+                (r.start(), r.stop())
+            })
+            .collect();
+        assert_eq!(
+            ranges,
+            vec![(1, 1), (u32::MIN, u32::MAX), (u32::MIN, u32::MAX), (4, 4)]
+        );
+
+        // An exact offset landing on the tail keeps the strong update.
+        let mut list = MemoryValue::List(vec![exact_u32(1), exact_u32(2)]);
+        let offset = MemoryValueU64 { start: 4, stop: 4 };
+        list.set(&offset, &4, stored())
+            .expect("exact tail store applies");
+        let List(items) = list else {
+            panic!("expected a list")
+        };
+        let U32(first) = &items[0] else {
+            panic!("expected u32")
+        };
+        let U32(last) = &items[1] else {
+            panic!("expected u32")
+        };
+        assert_eq!((first.start(), first.stop()), (1, 1));
+        assert_eq!((last.start(), last.stop()), (7, 7));
     }
 }

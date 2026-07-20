@@ -472,7 +472,14 @@ node keys in `AccessTransitions`/`pinned_nodes`, which are never dereferenced.
   Reads/writes are byte-granular, addressed by `Slice { base, offset, len }`. A
   partial overwrite of a wide scalar **splits** it into a `List` of `U8` ranges
   with the written value spliced in (`MemoryValue::set`,
-  [src/verifier_types.rs:870](src/verifier_types.rs#L870)). Raw `I64`-addressed
+  [src/verifier_types.rs:870](src/verifier_types.rs#L870)). A typed-list store
+  whose **offset is a range** (a computed, runtime-dependent address such as
+  `runtime_input`'s) applies the flank-preserving weak update
+  (`ranged_weak_update`): every scalar element the maximal span
+  `offset.start .. offset.stop + len` may touch havocs to its full type range
+  (the sound union of "old value or new value"), elements outside the span
+  keep their values, and a covered non-scalar stays unsupported
+  (`ListMultiple`). Raw `I64`-addressed
   stores resolve a `Section`, honour `volatile` (the store is dropped) and
   `permissions`. Non-volatile raw stores maintain a **backing** of
   `MemorySection`s serving two purposes: tracking stored _values_ (for future
@@ -1853,8 +1860,15 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
   codegen's `leaf_record_fields` emits `.dword 0` for a nested record's
   subtypes pointer: a verified program that follows it would dereference 0 at
   runtime. Emitting nested descriptors (or rejecting them in codegen) is open.
-- Multi-element list slice get/set returns `ListMultiple` (unimplemented;
-  `covers` is collected but never applied).
+- Multi-element list slice **get** returns `ListMultiple` (unimplemented;
+  `covers` is collected but never applied). **Set** now distinguishes: a
+  **ranged** offset applies the sound flank-preserving weak update
+  (`ranged_weak_update`, [src/verifier_types.rs](src/verifier_types.rs)):
+  every scalar element the maximal span may touch havocs to its full type
+  range ("old value or new value", the raw-section rule), elements outside
+  the span keep their values, and a covered non-scalar is still
+  `ListMultiple`. An **exact** offset that would cross element boundaries
+  remains `ListMultiple`.
 - `.ascii` parsing (`new_ascii`) is entirely `todo!()`.
 - `wfi` is modeled as racy (over-approximation → some valid programs rejected,
   slower exploration); interrupt state is unmodeled.
