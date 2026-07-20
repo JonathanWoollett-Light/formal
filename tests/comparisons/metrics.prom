@@ -1,0 +1,85 @@
+# Language-comparison metrics backing the index.html comparison panels.
+# GENERATED, like Cargo.lock: committed, but written by the test suite, not
+# by hand. `BLESS=1 cargo nextest run --run-ignored all comparisons`
+# re-measures every language whose pinned toolchain is installed and
+# rewrites this file plus the page (FORMAL_COMPARISONS_FULL=1 adds the
+# heavy fannkuch-redux runtime runs); the normal run re-measures and
+# asserts this file still matches (see tests/comparisons/main.rs for the
+# per-metric comparison policy). origin="legacy" marks values inherited
+# from the pre-pipeline experiment (a different environment than recorded
+# below); the first BLESS run with the language's toolchain replaces them.
+# HELP formal_comparison_environment_info The controlled environment the measured samples were taken under (in the labels; the value is always 1).
+# TYPE formal_comparison_environment_info gauge
+formal_comparison_environment_info{binutils="2.42",gnat="13.3.0",host="Intel(R) Xeon(R) Processor @ 2.80GHz (4 cores)",os="Ubuntu 24.04.4 LTS, Linux 6.18.5",qemu="8.2.2",rustc="1.99.0-nightly (9f36de775 2026-07-19)"} 1
+# HELP formal_comparison_compile_seconds Wall-clock seconds to compile the program with the language's pinned toolchain (cold output directory, warm toolchain caches).
+# TYPE formal_comparison_compile_seconds gauge
+formal_comparison_compile_seconds{program="hello",language="formal",origin="measured"} 0.015
+formal_comparison_compile_seconds{program="hello",language="rust",origin="measured"} 40.030
+formal_comparison_compile_seconds{program="hello",language="ada",origin="measured"} 0.300
+formal_comparison_compile_seconds{program="fannkuch",language="formal",origin="measured"} 0.728
+formal_comparison_compile_seconds{program="fannkuch",language="rust",origin="measured"} 25.378
+formal_comparison_compile_seconds{program="fannkuch",language="ada",origin="measured"} 0.339
+# HELP formal_comparison_static_instructions Machine instructions in the compiled program (formal: lines of emitted assembly; others: riscv64-unknown-elf-objdump of the stripped static binary; Ada: host objdump).
+# TYPE formal_comparison_static_instructions gauge
+formal_comparison_static_instructions{program="hello",language="formal",origin="measured"} 46
+formal_comparison_static_instructions{program="hello",language="rust",origin="measured"} 5888
+formal_comparison_static_instructions{program="hello",language="c",origin="legacy"} 971
+formal_comparison_static_instructions{program="hello",language="cpp",origin="legacy"} 287893
+formal_comparison_static_instructions{program="hello",language="zig",origin="legacy"} 1238
+formal_comparison_static_instructions{program="hello",language="ada",origin="measured"} 219193
+formal_comparison_static_instructions{program="fannkuch",language="formal",origin="measured"} 347
+formal_comparison_static_instructions{program="fannkuch",language="rust",origin="measured"} 7388
+formal_comparison_static_instructions{program="fannkuch",language="c",origin="legacy"} 3115
+formal_comparison_static_instructions{program="fannkuch",language="cpp",origin="legacy"} 288700
+formal_comparison_static_instructions{program="fannkuch",language="zig",origin="legacy"} 1541
+formal_comparison_static_instructions{program="fannkuch",language="ada",origin="measured"} 218577
+# HELP formal_comparison_binary_bytes Size in bytes of the stripped static executable.
+# TYPE formal_comparison_binary_bytes gauge
+formal_comparison_binary_bytes{program="hello",language="formal",origin="measured"} 944
+formal_comparison_binary_bytes{program="hello",language="rust",origin="measured"} 25080
+formal_comparison_binary_bytes{program="hello",language="c",origin="legacy"} 13552
+formal_comparison_binary_bytes{program="hello",language="cpp",origin="legacy"} 1448584
+formal_comparison_binary_bytes{program="hello",language="zig",origin="legacy"} 10016
+formal_comparison_binary_bytes{program="hello",language="ada",origin="measured"} 1143848
+formal_comparison_binary_bytes{program="fannkuch",language="formal",origin="measured"} 1976
+formal_comparison_binary_bytes{program="fannkuch",language="rust",origin="measured"} 30672
+formal_comparison_binary_bytes{program="fannkuch",language="c",origin="legacy"} 21744
+formal_comparison_binary_bytes{program="fannkuch",language="cpp",origin="legacy"} 1452680
+formal_comparison_binary_bytes{program="fannkuch",language="zig",origin="legacy"} 11200
+formal_comparison_binary_bytes{program="fannkuch",language="ada",origin="measured"} 1135552
+# HELP formal_comparison_executed_instructions Guest instructions executed under user-mode qemu-riscv64, counted by the formal_stats TCG plugin.
+# TYPE formal_comparison_executed_instructions gauge
+formal_comparison_executed_instructions{program="hello",language="formal",origin="measured"} 108
+formal_comparison_executed_instructions{program="hello",language="rust",origin="measured"} 3063
+formal_comparison_executed_instructions{program="hello",language="c",origin="legacy"} 1363
+formal_comparison_executed_instructions{program="hello",language="cpp",origin="legacy"} 19231
+formal_comparison_executed_instructions{program="hello",language="zig",origin="legacy"} 750
+formal_comparison_executed_instructions{program="fannkuch",language="formal",origin="legacy"} 267350843102
+formal_comparison_executed_instructions{program="fannkuch",language="rust",origin="legacy"} 415808315929
+formal_comparison_executed_instructions{program="fannkuch",language="c",origin="legacy"} 240092840603
+formal_comparison_executed_instructions{program="fannkuch",language="cpp",origin="legacy"} 237891703700
+formal_comparison_executed_instructions{program="fannkuch",language="zig",origin="legacy"} 191429058614
+# HELP formal_comparison_peak_memory_kib Peak guest memory working set in KiB (distinct 4 KiB pages touched: instruction fetches + data), from the formal_stats TCG plugin.
+# TYPE formal_comparison_peak_memory_kib gauge
+formal_comparison_peak_memory_kib{program="hello",language="formal",origin="measured"} 8
+formal_comparison_peak_memory_kib{program="hello",language="rust",origin="measured"} 48
+formal_comparison_peak_memory_kib{program="hello",language="c",origin="legacy"} 24
+formal_comparison_peak_memory_kib{program="hello",language="cpp",origin="legacy"} 140
+formal_comparison_peak_memory_kib{program="hello",language="zig",origin="legacy"} 28
+formal_comparison_peak_memory_kib{program="fannkuch",language="formal",origin="legacy"} 8
+formal_comparison_peak_memory_kib{program="fannkuch",language="rust",origin="legacy"} 140
+formal_comparison_peak_memory_kib{program="fannkuch",language="c",origin="legacy"} 40
+formal_comparison_peak_memory_kib{program="fannkuch",language="cpp",origin="legacy"} 208
+formal_comparison_peak_memory_kib{program="fannkuch",language="zig",origin="legacy"} 36
+# HELP formal_comparison_run_seconds Wall-clock seconds of the uninstrumented (plugin-free) run under user-mode qemu-riscv64.
+# TYPE formal_comparison_run_seconds gauge
+formal_comparison_run_seconds{program="hello",language="formal",origin="measured"} 0.009
+formal_comparison_run_seconds{program="hello",language="rust",origin="measured"} 0.013
+formal_comparison_run_seconds{program="hello",language="c",origin="legacy"} 0.017
+formal_comparison_run_seconds{program="hello",language="cpp",origin="legacy"} 0.013
+formal_comparison_run_seconds{program="hello",language="zig",origin="legacy"} 0.011
+formal_comparison_run_seconds{program="fannkuch",language="formal",origin="legacy"} 36.000
+formal_comparison_run_seconds{program="fannkuch",language="rust",origin="legacy"} 382.000
+formal_comparison_run_seconds{program="fannkuch",language="c",origin="legacy"} 72.000
+formal_comparison_run_seconds{program="fannkuch",language="cpp",origin="legacy"} 89.000
+formal_comparison_run_seconds{program="fannkuch",language="zig",origin="legacy"} 38.000

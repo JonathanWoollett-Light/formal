@@ -27,6 +27,12 @@ For usage (installing the CLI, compiling and running a program) see
   DEVELOPMENT.md §4.9).
 - `cargo run --example translate -- <in.hl> <out.s>`: regenerate a test's
   stored `dialect.s`.
+- `cargo nextest run --run-ignored all comparisons`: the website's
+  language-comparison metrics pipeline (DEVELOPMENT.md §6.1). Check mode
+  asserts `tests/comparisons/metrics.prom` (committed-but-generated, like
+  `Cargo.lock`) still reproduces; `BLESS=1` re-measures and rewrites it plus
+  `index.html`'s generated `COMPARISON-DATA` block
+  (`cargo run --example update_website` re-injects without re-measuring).
 
 ## Working notes
 

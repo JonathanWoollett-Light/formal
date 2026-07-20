@@ -1,0 +1,134 @@
+# The language-comparison metrics pipeline (tests/comparisons/): re-measures
+# the website's comparison figures under pinned toolchains and either checks
+# they reproduce tests/comparisons/metrics.prom (the Cargo.lock-style committed
+# results file) or, on demand, re-baselines the file + index.html and commits.
+#
+# Everything is pinned so the numbers are reproducible run to run:
+#   - qemu-riscv64 is built from source at QEMU_VERSION with --enable-plugins
+#     (Ubuntu's qemu-user package is built without plugin support, and the
+#     instruction/memory figures come from the formal_stats TCG plugin);
+#   - Rust is the dated RUST_NIGHTLY (build-std needs nightly);
+#   - C/C++/Zig use the pinned ZIG_VERSION (`zig cc` is the pinned
+#     clang+musl cross-compiler);
+#   - Ada is Ubuntu 24.04's gnat (static-only: no RISC-V Ada toolchain).
+name: comparisons
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "std/**"
+      - "build.rs"
+      - "tests/comparisons/**"
+      - "tests/linux_hello/**"
+      - "tests/fannkuch_v2/**"
+      - "tools/qemu-plugin/**"
+      - "index.html"
+      - ".github/workflows/comparisons.yml"
+  workflow_dispatch:
+    inputs:
+      measure:
+        description: "Re-measure and commit metrics.prom + index.html (BLESS)"
+        type: boolean
+        default: false
+      full:
+        description: "Include the heavy fannkuch-redux runtime runs (hours)"
+        type: boolean
+        default: false
+
+env:
+  QEMU_VERSION: v8.2.2
+  RUST_NIGHTLY: nightly-2026-07-19
+  ZIG_VERSION: 0.14.1
+
+jobs:
+  comparisons:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the RISC-V binutils, gnat, and the QEMU build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-riscv64-unknown-elf gnat \
+            ninja-build meson libglib2.0-dev
+
+      - name: Cache the plugin-enabled qemu-riscv64
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/qemu-bin
+          key: qemu-riscv64-${{ env.QEMU_VERSION }}-plugins
+
+      - name: Build qemu-riscv64 (user mode, --enable-plugins)
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o qemu.tar.bz2 \
+            "https://gitlab.com/qemu-project/qemu/-/archive/${QEMU_VERSION}/qemu-${QEMU_VERSION}.tar.bz2"
+          tar xf qemu.tar.bz2
+          cd "qemu-${QEMU_VERSION}"
+          ./configure --target-list=riscv64-linux-user --enable-plugins \
+            --disable-system --disable-tools --disable-docs
+          make -j"$(nproc)"
+          mkdir -p ~/qemu-bin
+          cp build/qemu-riscv64 ~/qemu-bin/
+
+      - name: Install qemu-riscv64
+        run: |
+          sudo cp ~/qemu-bin/qemu-riscv64 /usr/local/bin/qemu-riscv64
+          qemu-riscv64 --version
+
+      - name: Install the pinned Rust nightly (riscv64gc musl + rust-src)
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal -c rust-src
+          rustup target add riscv64gc-unknown-linux-musl --toolchain "$RUST_NIGHTLY"
+          echo "FORMAL_RUST_TOOLCHAIN=$RUST_NIGHTLY" >> "$GITHUB_ENV"
+
+      - name: Install the pinned Zig
+        run: |
+          mkdir -p ~/zig
+          curl -fsSL -o zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" ||
+          curl -fsSL -o zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          tar xf zig.tar.xz -C ~/zig --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+          ~/zig/zig version
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Measure and re-baseline (BLESS)
+        if: github.event_name == 'workflow_dispatch' && inputs.measure
+        env:
+          BLESS: "1"
+          FORMAL_COMPARISONS_FULL: ${{ inputs.full && '1' || '' }}
+        run: cargo nextest run --run-ignored all -E 'binary(comparisons)' --no-capture
+
+      - name: Commit the re-measured metrics
+        if: github.event_name == 'workflow_dispatch' && inputs.measure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/comparisons/metrics.prom index.html
+          if git diff --cached --quiet; then
+            echo "metrics unchanged"
+          else
+            git commit -m "chore: re-measure the language-comparison metrics"
+            git push
+          fi
+
+      - name: Check the metrics reproduce
+        if: github.event_name != 'workflow_dispatch' || !inputs.measure
+        env:
+          FORMAL_COMPARISONS_STRICT: "1"
+        run: cargo nextest run --run-ignored all -E 'binary(comparisons)' --no-capture
+
+      - name: The committed file and page must be untouched by a check run
+        if: github.event_name != 'workflow_dispatch' || !inputs.measure
+        run: git diff --exit-code tests/comparisons/metrics.prom index.html

@@ -576,9 +576,11 @@ cargo run
 grep -cE '^    [a-z]' build/main.s</code></pre>
             <p class="instr-count">
               <b id="formal-count">46</b> instructions<br /><b id="formal-bytes"
-                >1,680</b
+                >944</b
               >
-              bytes
+              bytes<span id="formal-compile-wrap"
+                ><br /><b id="formal-compile">15 ms</b> compile time</span
+              >
             </p>
             <p class="runtime-stats">
               <span class="head">measured at runtime (under QEMU)</span>
@@ -586,7 +588,7 @@ grep -cE '^    [a-z]' build/main.s</code></pre>
                 id="formal-mem"
                 >8 KiB</b
               >
-              peak memory<br /><b id="formal-time" class="tip">16 ms</b>
+              peak memory<br /><b id="formal-time" class="tip">9 ms</b>
               execution time
             </p>
           </div>
@@ -600,46 +602,63 @@ echo 'fn main() { println!("Hello World!"); }' &gt; src/main.rs
 CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=
 objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+[0-9a-f]+:'</code></pre>
             <p class="instr-count">
-              <b id="lang-count">4,562</b> instructions<span
+              <b id="lang-count">5,888</b> instructions<span
                 id="lang-bytes-wrap"
-                ><br /><b id="lang-bytes">26,720</b> bytes</span
+                ><br /><b id="lang-bytes">25,080</b> bytes</span
+              ><span id="lang-compile-wrap"
+                ><br /><b id="lang-compile">40 s</b> compile time</span
               >
             </p>
             <p class="runtime-stats" id="lang-runtime">
               <span class="head">measured at runtime (under QEMU)</span>
-              <b id="lang-exec">1,365</b> instructions executed<br /><b
+              <b id="lang-exec">3,063</b> instructions executed<br /><b
                 id="lang-mem"
-                >24 KiB</b
+                >48 KiB</b
               >
-              peak memory<br /><b id="lang-time" class="tip">20 ms</b>
+              peak memory<br /><b id="lang-time" class="tip">13 ms</b>
               execution time
             </p>
           </div>
         </div>
         <p class="compare-note">
-          <b>How it's measured.</b> <b>Instructions</b> and <b>bytes</b> are the
-          static binary: machine instructions in the compiled program (formal
-          counts its emitted assembly; the others
-          <span class="code">objdump</span> their stripped static binary) and
-          the binary's size. The <b>runtime</b> figures are measured by running
-          each program under <span class="code">qemu</span> for RISC-V with a
-          small
+          <b>How it's measured.</b> Every figure is produced (not typed) by the
+          repository's
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tests/comparisons/main.rs"
+            >comparison test suite</a
+          >, which builds each program with a pinned toolchain and stores the
+          results in
+          <a
+            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tests/comparisons/metrics.prom"
+            ><span class="code">tests/comparisons/metrics.prom</span></a
+          >
+          (committed like <span class="code">Cargo.lock</span>: CI re-runs the
+          measurements and checks they reproduce; this page is regenerated from
+          the file). <b>Instructions</b> and <b>bytes</b> are the static binary:
+          machine instructions in the compiled program (formal counts its
+          emitted assembly; the others <span class="code">objdump</span> their
+          stripped static binary) and the binary's size. <b>Compile time</b> is
+          the wall-clock build with a cold output directory and warm toolchain
+          caches (for formal that includes verification: the proof is part of
+          the compile). Every program is built as a
+          <b>static RISC-V Linux (musl) binary</b> - Rust via nightly
+          <span class="code">-Zbuild-std</span> and
+          <span class="code">rust-lld</span>, C and C++ via clang (<span
+            class="code"
+            >zig cc</span
+          >, the one pinned toolchain carrying musl for riscv64) - and run under
+          the same <b>user-mode</b> <span class="code">qemu-riscv64</span> with
+          an <i>empty guest environment</i>, so the numbers are directly
+          comparable. The <b>runtime</b> figures come from a
           <a
             href="https://github.com/JonathanWoollett-Light/formal/blob/master/tools/qemu-plugin/formal_stats.c"
             >TCG plugin</a
           >
           that reports the exact guest instructions executed and the peak memory
           <i>working set</i> (distinct 4&nbsp;KiB pages touched: instruction
-          fetches and data). Every program is built for RISC-V Linux (musl,
-          static) and run under the same <b>user-mode</b>
-          <span class="code">qemu-riscv64</span> (formal as it compiles, the
-          others from the source shown), so the numbers are directly comparable.
-          Instructions and memory come from instrumented (plugin) runs; the
-          heavy fannkuch is <i>timed</i> plugin-free, because the plugin's
-          per-access cost would otherwise dwarf the compute (Hello World is
-          tiny, so its plugin run's time stands in). The plugin records the
-          working set <i>over time</i>; the harness reports p50/p90/p99
-          percentiles and the panel shows the peak.
+          fetches and data); <b>execution time</b> is a separate plugin-free run
+          (best of three for the sub-second Hello World), because the plugin's
+          per-access cost would otherwise dwarf a heavy compute.
           <b>fannkuch-redux runs n = 12</b> everywhere (the value formal proves
           and computes); Hello World is the hosted
           <span class="code">tests/linux_hello</span> and each language's
@@ -1217,13 +1236,50 @@ while t5 != t2:             # top-tested loop
       // Comparison: two programs (Hello World, fannkuch-redux) x six
       // implementations. The program tabs swap the whole row (both the formal
       // panel on the left and the language panel on the right); the language
-      // tabs swap only the right panel. Every count/byte figure is real and
-      // measured (see the methodology note below the panels). `textContent`
-      // keeps the embedded source safe to inject.
+      // tabs swap only the right panel. Every figure is measured by
+      // tests/comparisons/main.rs and injected here from
+      // tests/comparisons/metrics.prom (the COMPARISON-DATA block below);
+      // the code/cmd strings are the sources and reproduction commands.
+      // `textContent` keeps the embedded source safe to inject.
       (function () {
+        // COMPARISON-DATA-BEGIN -- generated from tests/comparisons/metrics.prom
+        // by the comparisons test (BLESS mode) / `cargo run --example
+        // update_website`; do NOT edit by hand.
+        // prettier-ignore
+        var METRICS = {
+          hello: {
+            formal: { compile: "15 ms", count: "46", bytes: "944", exec: "108", mem: "8 KiB", time: "9 ms" },
+            rust: { compile: "40 s", count: "5,888", bytes: "25,080", exec: "3,063", mem: "48 KiB", time: "13 ms" },
+            c: { count: "971", bytes: "13,552", exec: "1,363", mem: "24 KiB", time: "17 ms" },
+            cpp: { count: "287,893", bytes: "1,448,584", exec: "19,231", mem: "140 KiB", time: "13 ms" },
+            zig: { count: "1,238", bytes: "10,016", exec: "750", mem: "28 KiB", time: "11 ms" },
+            ada: { compile: "300 ms", count: "219,193", bytes: "1,143,848" },
+          },
+          fannkuch: {
+            formal: { compile: "728 ms", count: "347", bytes: "1,976", exec: "267,350,843,102", mem: "8 KiB", time: "36 s" },
+            rust: { compile: "25 s", count: "7,388", bytes: "30,672", exec: "415,808,315,929", mem: "140 KiB", time: "382 s" },
+            c: { count: "3,115", bytes: "21,744", exec: "240,092,840,603", mem: "40 KiB", time: "72 s" },
+            cpp: { count: "288,700", bytes: "1,452,680", exec: "237,891,703,700", mem: "208 KiB", time: "89 s" },
+            zig: { count: "1,541", bytes: "11,200", exec: "191,429,058,614", mem: "36 KiB", time: "38 s" },
+            ada: { compile: "339 ms", count: "218,577", bytes: "1,135,552" },
+          },
+        };
+        // prettier-ignore
+        var TIP_HOST =
+          "Host: Intel(R) Xeon(R) Processor @ 2.80GHz (4 cores)\n" +
+          "OS: Ubuntu 24.04.4 LTS, Linux 6.18.5\n" +
+          "Measured as QEMU TCG (software-emulation) wall-clock, not native hardware.";
+        // prettier-ignore
+        var TIP_USER = "QEMU 8.2.2 qemu-riscv64 (user-mode), -accel tcg\nFigures marked origin=legacy in tests/comparisons/metrics.prom predate this environment.";
+        // COMPARISON-DATA-END
         var RUST_BUILD =
-          "CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=";
-        var OBJDUMP = "objdump -d %s | grep -cE '^[[:space:]]+[0-9a-f]+:'";
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort -Ctarget-feature=+crt-static -Clinker=rust-lld -Clink-self-contained=yes' cargo +nightly build --release --target riscv64gc-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=";
+        // C/C++ cross-compile to static riscv64 musl with clang via `zig cc`
+        // (the one pinned toolchain that carries musl for riscv64).
+        var CC_FLAGS =
+          "-target riscv64-linux-musl -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections";
+        var OBJDUMP =
+          "riscv64-unknown-elf-strip %s\nriscv64-unknown-elf-objdump -d %s | grep -cE '^[[:space:]]+[0-9a-f]+:'";
         var FK_FORMAL = `# fannkuch-redux: REAL 2-hart parallel work-sharing, hosted Linux (tests/fannkuch_v2).
 # Runs in user mode: the hosted codegen spawns the second hart as an OS thread
 # (clone + CLONE_SETTLS per-hart tp), so the two harts run on two cores in parallel.
@@ -1652,143 +1708,90 @@ begin
    Ada.Text_IO.Put_Line ("Pfannkuchen(" & Integer'Image (N) & " ) =" & Integer'Image (Maxflips));
 end Fannkuch;`;
 
+        // The riscv64 strip + count commands for a built binary.
+        function countCmd(bin) {
+          return OBJDUMP.split("%s").join(bin);
+        }
+        // Overlays the measured figures (the generated METRICS block, i.e.
+        // tests/comparisons/metrics.prom) on a panel's code/cmd strings.
+        function measured(prog, lang, panel) {
+          var m = (METRICS[prog] || {})[lang] || {};
+          for (var k in m) {
+            panel[k] = m[k];
+          }
+          return panel;
+        }
         var programs = {
           hello: {
-            formal: {
+            formal: measured("hello", "formal", {
               code: 'print("Hello World!\\n")\nexit(0)',
               cmd: "formal new hello_world && cd hello_world\ncargo run\ngrep -cE '^    [a-z]' build/main.s",
-              count: "46",
-              bytes: "1,680",
-              exec: "108",
-              mem: "8 KiB",
-              time: "16 ms",
-            },
-            rust: {
+            }),
+            rust: measured("hello", "rust", {
               name: "Rust",
-              count: "4,562",
-              bytes: "26,720",
-              exec: "4,372",
-              mem: "116 KiB",
-              time: "14 ms",
               code: 'fn main() {\n    println!("Hello World!");\n}',
               cmd:
                 "cargo new hw && cd hw\necho 'fn main() { println!(\"Hello World!\"); }' > src/main.rs\n" +
                 RUST_BUILD +
                 "\n" +
-                OBJDUMP.replace(
-                  "%s",
-                  "target/x86_64-unknown-linux-musl/release/hw",
-                ),
-            },
-            c: {
+                countCmd("target/riscv64gc-unknown-linux-musl/release/hw"),
+            }),
+            c: measured("hello", "c", {
               name: "C",
-              count: "971",
-              bytes: "13,552",
-              exec: "1,363",
-              mem: "24 KiB",
-              time: "17 ms",
               code: '#include <stdio.h>\n\nint main(void) {\n    printf("Hello World!\\n");\n}',
-              cmd: `cat > h.c <<'EOF'\n#include <stdio.h>\nint main(void) { printf("Hello World!\\n"); return 0; }\nEOF\nmusl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o h h.c\n${OBJDUMP.replace("%s", "h")}`,
-            },
-            cpp: {
+              cmd: `cat > h.c <<'EOF'\n#include <stdio.h>\nint main(void) { printf("Hello World!\\n"); return 0; }\nEOF\nzig cc ${CC_FLAGS} -o h h.c\n${countCmd("h")}`,
+            }),
+            cpp: measured("hello", "cpp", {
               name: "C++",
-              count: "287,893",
-              bytes: "1,448,584",
-              exec: "19,231",
-              mem: "140 KiB",
-              time: "13 ms",
               code: '#include <iostream>\n\nint main() {\n    std::cout << "Hello World!\\n";\n}',
-              cmd: `cat > h.cpp <<'EOF'\n#include <iostream>\nint main() { std::cout << "Hello World!\\n"; }\nEOF\ng++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o h h.cpp\n${OBJDUMP.replace("%s", "h")}`,
-            },
-            zig: {
+              cmd: `cat > h.cpp <<'EOF'\n#include <iostream>\nint main() { std::cout << "Hello World!\\n"; }\nEOF\nzig c++ ${CC_FLAGS} -o h h.cpp\n${countCmd("h")}`,
+            }),
+            zig: measured("hello", "zig", {
               name: "Zig",
-              count: "1,238",
-              bytes: "10,016",
-              exec: "750",
-              mem: "28 KiB",
-              time: "11 ms",
               code: 'const std = @import("std");\n\npub fn main() void {\n    std.debug.print("Hello World!\\n", .{});\n}',
-              cmd: `cat > h.zig <<'EOF'\nconst std = @import("std");\npub fn main() void { std.debug.print("Hello World!\\n", .{}); }\nEOF\nzig build-exe h.zig -O ReleaseSmall\n${OBJDUMP.replace("%s", "h")}`,
-            },
-            ada: {
+              cmd: `cat > h.zig <<'EOF'\nconst std = @import("std");\npub fn main() void { std.debug.print("Hello World!\\n", .{}); }\nEOF\nzig build-exe h.zig -O ReleaseSmall -target riscv64-linux-musl\n${countCmd("h")}`,
+            }),
+            ada: measured("hello", "ada", {
               name: "Ada",
-              count: "223,978",
-              bytes: "1,164,576",
               code: 'with Ada.Text_IO;\n\nprocedure Hello is\nbegin\n   Ada.Text_IO.Put_Line ("Hello World!");\nend Hello;',
-              cmd: `cat > hello.adb <<'EOF'\nwith Ada.Text_IO;\nprocedure Hello is\nbegin\n   Ada.Text_IO.Put_Line ("Hello World!");\nend Hello;\nEOF\ngnatmake -O2 hello.adb -largs -static\n${OBJDUMP.replace("%s", "hello")}`,
-            },
+              cmd: `cat > hello.adb <<'EOF'\nwith Ada.Text_IO;\nprocedure Hello is\nbegin\n   Ada.Text_IO.Put_Line ("Hello World!");\nend Hello;\nEOF\ngnatmake -O2 hello.adb -bargs -static -largs -static\nstrip hello\nobjdump -d hello | grep -cE '^[[:space:]]+[0-9a-f]+:'`,
+            }),
           },
           fannkuch: {
-            formal: {
+            formal: measured("fannkuch", "formal", {
               code: FK_FORMAL,
               cmd: "cargo nextest run --run-ignored all fannkuch_v2\ngrep -cE '^    [a-z]' tests/fannkuch_v2/emitted.s",
-              count: "347",
-              bytes: "4,680",
-              exec: "267,350,843,102",
-              mem: "8 KiB",
-              time: "36 s",
-            },
-            rust: {
+            }),
+            rust: measured("fannkuch", "rust", {
               name: "Rust",
-              count: "6,513",
-              bytes: "39,008",
-              exec: "415,808,315,929",
-              mem: "140 KiB",
-              time: "382 s",
               code: FK_RUST,
               cmd:
                 RUST_BUILD +
                 "\n" +
-                OBJDUMP.replace(
-                  "%s",
-                  "target/x86_64-unknown-linux-musl/release/fk",
-                ),
-            },
-            c: {
+                countCmd("target/riscv64gc-unknown-linux-musl/release/fk"),
+            }),
+            c: measured("fannkuch", "c", {
               name: "C",
-              count: "3,115",
-              bytes: "21,744",
-              exec: "240,092,840,603",
-              mem: "40 KiB",
-              time: "72 s",
               code: FK_C,
-              cmd:
-                "musl-gcc -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -s -o fk fannkuch.c\n" +
-                OBJDUMP.replace("%s", "fk"),
-            },
-            cpp: {
+              cmd: `zig cc ${CC_FLAGS} -o fk fannkuch.c\n${countCmd("fk")}`,
+            }),
+            cpp: measured("fannkuch", "cpp", {
               name: "C++",
-              count: "288,700",
-              bytes: "1,452,680",
-              exec: "237,891,703,700",
-              mem: "208 KiB",
-              time: "89 s",
               code: FK_CPP,
-              cmd:
-                "g++ -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections -flto -s -o fk fannkuch.cpp\n" +
-                OBJDUMP.replace("%s", "fk"),
-            },
-            zig: {
+              cmd: `zig c++ ${CC_FLAGS} -o fk fannkuch.cpp\n${countCmd("fk")}`,
+            }),
+            zig: measured("fannkuch", "zig", {
               name: "Zig",
-              count: "1,541",
-              bytes: "11,200",
-              exec: "191,429,058,614",
-              mem: "36 KiB",
-              time: "38 s",
               code: FK_ZIG,
               cmd:
-                "zig build-exe fannkuch.zig -O ReleaseSmall -femit-bin=fk\n" +
-                OBJDUMP.replace("%s", "fk"),
-            },
-            ada: {
+                "zig build-exe fannkuch.zig -O ReleaseSmall -target riscv64-linux-musl -femit-bin=fk\n" +
+                countCmd("fk"),
+            }),
+            ada: measured("fannkuch", "ada", {
               name: "Ada",
-              count: "223,824",
-              bytes: "1,160,368",
               code: FK_ADA,
-              cmd:
-                "gnatmake -Os fannkuch.adb -largs -static -Wl,--gc-sections\nstrip fannkuch\n" +
-                OBJDUMP.replace("%s", "fannkuch"),
-            },
+              cmd: "gnatmake -Os fannkuch.adb -bargs -static -largs -static -Wl,--gc-sections\nstrip fannkuch\nobjdump -d fannkuch | grep -cE '^[[:space:]]+[0-9a-f]+:'",
+            }),
           },
         };
 
@@ -1798,6 +1801,8 @@ end Fannkuch;`;
         var formalCmd = document.getElementById("formal-cmd");
         var formalCount = document.getElementById("formal-count");
         var formalBytes = document.getElementById("formal-bytes");
+        var formalCompile = document.getElementById("formal-compile");
+        var formalCompileWrap = document.getElementById("formal-compile-wrap");
         var formalExec = document.getElementById("formal-exec");
         var formalMem = document.getElementById("formal-mem");
         var formalTime = document.getElementById("formal-time");
@@ -1807,6 +1812,8 @@ end Fannkuch;`;
         var countEl = document.getElementById("lang-count");
         var bytesEl = document.getElementById("lang-bytes");
         var bytesWrapEl = document.getElementById("lang-bytes-wrap");
+        var langCompileEl = document.getElementById("lang-compile");
+        var langCompileWrapEl = document.getElementById("lang-compile-wrap");
         var langRuntimeEl = document.getElementById("lang-runtime");
         var langExecEl = document.getElementById("lang-exec");
         var langMemEl = document.getElementById("lang-mem");
@@ -1815,18 +1822,15 @@ end Fannkuch;`;
         var curLang = "rust";
 
         // Tooltip on each "execution time": the host + QEMU setup it was measured
-        // under. The time is QEMU (TCG) wall-clock, i.e. software emulation, not a
+        // under (TIP_HOST/TIP_USER live in the generated COMPARISON-DATA block:
+        // they record the environment from tests/comparisons/metrics.prom). The
+        // time is QEMU (TCG) wall-clock, i.e. software emulation, not a
         // native-hardware figure -- the instruction count is the hardware-neutral
         // comparison. Everything runs under user-mode qemu-riscv64. The heavy
         // fannkuch is timed plugin-free (the instrumentation plugin's per-access
         // cost would dominate it); its instructions/memory come from a separate
         // instrumented run. formal's fannkuch runs its two harts as real OS
         // threads (clone) in parallel.
-        var TIP_HOST =
-          "Host: AMD Ryzen 9 7900 (12 cores / 24 threads), 31 GB RAM\n" +
-          "OS: Windows 11 + WSL2 (Ubuntu 24.04, Linux 6.6)\n" +
-          "Measured as QEMU TCG (software-emulation) wall-clock, not native hardware.";
-        var TIP_USER = "QEMU 11.0.0 qemu-riscv64 (user-mode), -accel tcg";
         function timeTip(prog, isFormal) {
           var s = TIP_HOST + "\n" + TIP_USER;
           if (prog === "hello") {
@@ -1854,6 +1858,12 @@ end Fannkuch;`;
           formalMem.textContent = f.mem;
           formalTime.textContent = f.time;
           formalTime.title = timeTip(curProg, true);
+          if (f.compile) {
+            formalCompile.textContent = f.compile;
+            formalCompileWrap.style.display = "";
+          } else {
+            formalCompileWrap.style.display = "none";
+          }
         }
         function renderLang() {
           var d = programs[curProg][curLang];
@@ -1864,6 +1874,12 @@ end Fannkuch;`;
           countEl.textContent = d.count;
           bytesEl.textContent = d.bytes || "";
           bytesWrapEl.style.display = d.bytes ? "" : "none";
+          if (d.compile) {
+            langCompileEl.textContent = d.compile;
+            langCompileWrapEl.style.display = "";
+          } else {
+            langCompileWrapEl.style.display = "none";
+          }
           // Runtime figures are present for every language except where the
           // toolchain to build + run it was unavailable (then `exec` is unset
           // and the runtime block is hidden for that language).

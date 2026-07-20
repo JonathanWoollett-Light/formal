@@ -460,7 +460,7 @@ impl QemuStats {
 
 /// Parses the plugin's stats file (see [tools/qemu-plugin/formal_stats.c]) into a
 /// [`QemuStats`] (leaving `wall` for the caller to fill from host timing).
-fn parse_plugin_stats(text: &str) -> QemuStats {
+pub fn parse_plugin_stats(text: &str) -> QemuStats {
     let mut stats = QemuStats {
         page_size: 4096,
         ..Default::default()
@@ -526,7 +526,7 @@ fn report_stats(name: &str, stats: &QemuStats) {
     let _ = std::fs::write(format!("{}/{name}.stats", test_log_dir()), body);
 }
 
-fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
+pub fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
     s.split_once(begin)
         .and_then(|(_, rest)| rest.split_once(end))
         .map(|(mid, _)| mid)
@@ -541,7 +541,7 @@ fn between<'a>(s: &'a str, begin: &str, end: &str) -> &'a str {
 /// `PATH`, so the prefix is empty and the scripts resolve the tools through
 /// `PATH` (the `${BIN:+$BIN/}` expansion below drops the slash when `BIN` is
 /// empty). `RISCV_BIN` overrides either default.
-fn riscv_bin() -> String {
+pub fn riscv_bin() -> String {
     std::env::var("RISCV_BIN").unwrap_or_else(|_| {
         if cfg!(windows) {
             "$HOME/riscv-toolchain/riscv/bin".to_string()
@@ -554,7 +554,7 @@ fn riscv_bin() -> String {
 /// The shell expression a generated script uses to name host path `p`. Through
 /// WSL a Windows path has to be translated with `wslpath`; running the script
 /// natively under `bash` the path is already in the shell's namespace.
-fn script_path(p: &str) -> String {
+pub fn script_path(p: &str) -> String {
     if cfg!(windows) {
         format!("$(wslpath '{p}')")
     } else {
@@ -571,7 +571,7 @@ fn script_path(p: &str) -> String {
 /// native unix host it runs the script directly under `bash -c` against the
 /// natively-installed toolchain, so the same QEMU-booting tests run here with
 /// no WSL involved.
-fn toolchain_shell(script: &str) -> std::process::Command {
+pub fn toolchain_shell(script: &str) -> std::process::Command {
     #[cfg(windows)]
     {
         let mut command = std::process::Command::new("wsl");
@@ -601,7 +601,7 @@ fn toolchain_shell(script: &str) -> std::process::Command {
 /// (download the header, compile per-version `.so`s, probe which version the
 /// target QEMU accepts) runs once in WSL and is cached both on disk (under
 /// `target/qemu-plugin/`) and in-process.
-fn ensure_plugin(user_mode: bool) -> Option<String> {
+pub fn ensure_plugin(user_mode: bool) -> Option<String> {
     static SYSTEM: OnceLock<Option<String>> = OnceLock::new();
     static USER: OnceLock<Option<String>> = OnceLock::new();
     let cell = if user_mode { &USER } else { &SYSTEM };
@@ -656,7 +656,10 @@ probe() {{ # $1 = so
   else
     err=$(timeout 8 "$QUSR" -plugin "$1,out=/dev/null" /bin/true 2>&1 || true)
   fi
-  echo "$err" | grep -q "Could not load plugin" && return 1 || return 0
+  # A QEMU built without --enable-plugins rejects the option itself (Ubuntu's
+  # qemu-user packages do); that must fail the probe just like an API-version
+  # mismatch, or the harness caches a plugin no run will ever load.
+  echo "$err" | grep -qE "Could not load plugin|unknown option" && return 1 || return 0
 }}
 for v in 1 2 3 4; do
   SO="$CACHE/formal_stats_v$v.so"

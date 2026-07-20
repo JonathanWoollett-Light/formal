@@ -173,7 +173,8 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 | [tools/qemu-plugin/](tools/qemu-plugin/)       | `formal_stats.c`, the TCG plugin the QEMU-booting tests load to measure guest instructions executed + memory working set over time (see [§6](#6-integration-tests-tests)); built/cached in WSL by `ensure_plugin`.                                                                                                          |
 | [assets/](assets/)                             | Scratch inputs for the binary harness (`one.s`, `two.s`); the test programs live in their `tests/<name>/` folders.                                                                                                                                                                                                         |
 | [comparison.md](comparison.md)                 | Positioning against Python/C/C++/Rust/Zig/Lean/Ada-SPARK.                                                                                                                                                                                                                                                                  |
-| [index.html](index.html)                       | The marketing page (static, Pico.css; format with `npx prettier ./index.html --write`).                                                                                                                                                                                                                                    |
+| [index.html](index.html)                       | The marketing page (static, Pico.css; format with `npx prettier ./index.html --write`). Its comparison figures are **generated** from `tests/comparisons/metrics.prom` (the `COMPARISON-DATA` block; see [§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons)).                                            |
+| [tests/comparisons/](tests/comparisons/)       | The language-comparison metrics pipeline: the other languages' program sources, the measuring `comparisons` test, and `metrics.prom` (committed-but-generated results, `Cargo.lock`-style); [§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons).                                                          |
 
 ## 4. The compilation & verification pipeline (precise description)
 
@@ -984,10 +985,11 @@ pinned_nodes)` / `run_in_qemu(name, asm)` (the **bare-metal** stream):
   its path under `target/qemu-plugin/`. If the plugin cannot be built/loaded (no
   WSL `gcc`, no network for the header, an unsupported QEMU - or `FORMAL_NO_PLUGIN`
   is set), the boot still runs and the stats are simply absent (a short run then
-  falls back to `-d exec` line counting for the instruction total). These numbers
-  back the website's "Hello World!"/fannkuch-redux runtime figures (§ the website
-  comparison): harvest them with `cargo nt linux_hello --no-capture` and
-  `cargo nextest run --run-ignored all fannkuch_v2 --no-capture`.
+  falls back to `-d exec` line counting for the instruction total). The website's
+  "Hello World!"/fannkuch-redux figures are produced by the dedicated
+  comparison pipeline ([§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons)),
+  which measures with the same plugin under controlled conditions and commits
+  the results to `tests/comparisons/metrics.prom`.
 - `verify_with_model(asset, harts, model) -> ModelOutcome`: verifies a program
   under a chosen [`Model`] - `Sequential` (in-process [`verify_inferred`]) or
   `Hpc { ranks }` (distributed under `mpirun`, via `mpirun_formal`) - and returns
@@ -1285,6 +1287,72 @@ them to absorb a regression.
 
 `two.rs` (obsolete API, ended in `todo!()`) and the old `src/tests/` unit-test
 module have been **deleted**.
+
+### 6.1 The language-comparison metrics pipeline ([tests/comparisons/](tests/comparisons/))
+
+The website's "same program, side by side" panels (index.html) are backed by
+**measured, committed data**, not hand-typed numbers. The pieces:
+
+- [tests/comparisons/programs/](tests/comparisons/programs/): the Rust/C/C++/
+  Zig/Ada `hello` and `fannkuch` sources, verbatim the code the page displays
+  (formal's programs are `tests/linux_hello` and `tests/fannkuch_v2`).
+- [tests/comparisons/main.rs](tests/comparisons/main.rs): the `comparisons`
+  test (**`#[ignore]`d**; run it with
+  `cargo nextest run --run-ignored all comparisons`). For each program x
+  language it builds a **static RISC-V Linux (musl) binary** with a pinned
+  toolchain - formal via the in-process pipeline + `as`/`ld`; Rust via the
+  pinned nightly (`FORMAL_RUST_TOOLCHAIN`, default `nightly`) with
+  `-Zbuild-std` and self-contained `rust-lld`; C/C++ via clang (`zig cc` /
+  `zig c++`, path override `FORMAL_ZIG`); Zig via `zig build-exe`; Ada via
+  host `gnatmake` (static-only: no RISC-V Ada toolchain) - and measures:
+  **compile time** (cold output dir, warm toolchain caches; formal's includes
+  verification), **static instructions** (formal: emitted-assembly lines, the
+  page's `grep -cE '^    [a-z]'`; others: RISC-V `objdump` of the stripped
+  binary), **binary bytes** (stripped), and, running under user-mode
+  `qemu-riscv64` with an **empty guest environment** (`env -i`, fixed
+  `./prog.elf` argv, so counts are reproducible): **instructions executed** and
+  **peak memory working set** from an instrumented (`formal_stats` plugin) run
+  plus **execution time** from a plugin-free run (best of 3 for `hello`).
+  Requires a **plugin-enabled** `qemu-riscv64` (Ubuntu's `qemu-user` package
+  is built without `--enable-plugins`; the workflow builds QEMU from source).
+- [tests/comparisons/metrics.prom](tests/comparisons/metrics.prom): the
+  results, Prometheus text format, one gauge per metric labelled
+  `{program,language,origin}` plus a `formal_comparison_environment_info`
+  metric whose labels record the exact environment (qemu/binutils/rustc/zig/
+  gnat versions, host, OS). **Committed but generated**, like `Cargo.lock`.
+- The page: index.html's `COMPARISON-DATA` block (the `METRICS` object and the
+  execution-time tooltip's environment strings) is **generated from the
+  metrics file**; `cargo run --example update_website` re-injects it without
+  re-measuring, and the static (no-JS) numbers in the panel bodies are synced
+  too. The shared parse/render/inject code is
+  [tests/comparisons/support.rs](tests/comparisons/support.rs).
+
+Modes (mirroring the suite's `BLESS` convention):
+
+- **Check** (default): re-measures every language whose pinned toolchain is
+  installed *at the recorded version* (a differing version skips with a
+  warning - measuring under a different compiler is drift, not regression -
+  or fails under `FORMAL_COMPARISONS_STRICT=1`, which CI sets) and asserts
+  the deterministic metrics (static instructions, bytes, executed
+  instructions, peak memory) **exactly reproduce** the committed file.
+  Timings are informational (never compared); formal's 2-thread fannkuch
+  runtime figures get a 10% tolerance (real scheduling nondeterminism);
+  `origin="legacy"` values (imported from the pre-pipeline experiment) only
+  warn until first blessed. Also asserts index.html is in sync with the file.
+- **`BLESS=1`**: rewrites the measured entries (flipping them to
+  `origin="measured"`), records the environment, and regenerates both the
+  file and index.html.
+- `FORMAL_COMPARISONS_FULL=1` adds the heavy **fannkuch runtime runs**
+  (n = 12: minutes plugin-free, hours instrumented); otherwise fannkuch is
+  built and measured statically and its committed runtime figures are left
+  untouched.
+
+CI ([.github/workflows/comparisons.yml](.github/workflows/comparisons.yml))
+installs the pinned toolchains (building a plugin-enabled `qemu-riscv64` from
+source, cached), runs the check on pushes touching the pipeline, and offers a
+`workflow_dispatch` **measure** mode (optionally **full**) that re-blesses and
+commits `metrics.prom` + `index.html` - so the "re-measure" loop can run
+entirely in the controlled CI environment.
 
 ## 7. Verification complexity
 
