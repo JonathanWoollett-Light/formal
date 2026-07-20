@@ -694,8 +694,9 @@ impl Explorerer {
             | Instruction::Vmvvi(_)
             | Instruction::Vaddvv(_)
             | Instruction::Vmvxs(_)
-            // `ecall` is the boundary to the host/OS; the verifier does not
-            // model the call's effect, so it cannot itself be invalid.
+            // `ecall` is the boundary to the host/OS; its only modeled effect
+            // is havocing `a0` (hart-local, always representable), so it
+            // cannot itself be invalid.
             | Instruction::Ecall(_)
             | Instruction::Beq(_)
             | Instruction::J(_)
@@ -2047,8 +2048,10 @@ unsafe fn compute_next(
                 | Instruction::Bge(_)
                 | Instruction::Fail(_)
                 | Instruction::Beq(_)
-                // `ecall` has no verifier-modeled effect, so its ordering
-                // against other harts is unobservable here: non-racy.
+                // `ecall`'s only modeled effect is havocing `a0`, a hart-local
+                // register no other hart can observe: non-racy. (If ecall ever
+                // models a memory effect, e.g. `read(2)` havocing a shared
+                // buffer, this classification must be revisited.)
                 | Instruction::Ecall(_)
                 // A fence accesses no memory; it is a no-op for the SC verifier
                 // and only orders the emitted program, so it is non-racy here.

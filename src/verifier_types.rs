@@ -971,6 +971,10 @@ impl Rem for MemoryValue {
             (I64(a), I64(b)) => I64(rem_by_constant(&a, &b)),
             // A raw-region (runtime-input) load yields `I32`; widen to `I64`.
             (I32(a), I64(b)) => I64(rem_by_constant(&MemoryValueI64::from(a), &b)),
+            // A typed `lw` of a `u32` element yields `U32` (mirrors `Div`,
+            // which has carried this arm all along); nonnegative, so the
+            // envelope is already the tight `[0, d-1]` with no double-rem.
+            (U32(a), I64(b)) => I64(rem_by_constant(&MemoryValueI64::from(a), &b)),
             x => todo!("{x:?}"),
         }
     }
@@ -981,8 +985,11 @@ impl Rem for MemoryValue {
 /// identity when every value of `a` already lies strictly within `(-d, d)`
 /// (`rem` cannot change such a value); otherwise the sound envelope clamped to
 /// `[-(d-1), d-1]` and to `a`'s own range, with each side collapsing to `0`
-/// when `a` cannot take that sign. Panics if `d` is not a positive constant
-/// (the front-end only emits `%` with such divisors).
+/// when `a` cannot take that sign. Panics if `d` is not a positive constant:
+/// a range divisor is unmodeled today (the front-end lowers any register
+/// divisor to `rem`, but in every verified program the divisor is a `li`
+/// constant or an `assume:`-pinned value by the time `%` applies; an interval
+/// divisor transfer is future work).
 fn rem_by_constant(a: &MemoryValueI64, d: &MemoryValueI64) -> MemoryValueI64 {
     assert!(
         d.start() == d.stop() && d.start() > 0,
@@ -1104,6 +1111,25 @@ impl MemoryValue {
         // Register value.
         value: MemoryValue,
     ) -> Result<(), MemoryValueSetError> {
+        // A ranged offset means the store may land anywhere in its maximal
+        // span, so the end-reaching/interior classification below carries no
+        // information for it: dispatch once, before the classification, to
+        // the sound weak update. A list havocs every element the span may
+        // touch (flank-preserving); a scalar target havocs wholesale (the
+        // store lands somewhere inside it; bounds were already checked); a
+        // possibly-overwritten pointer is unsupported, never mis-modeled.
+        if offset.exact().is_none() {
+            return match self {
+                MemoryValue::List(list) => ranged_weak_update(list, offset, *len),
+                other => match havoc_scalar(other) {
+                    Some(havoc) => {
+                        *other = havoc;
+                        Ok(())
+                    }
+                    None => Err(MemoryValueSetError::ListMultiple),
+                },
+            };
+        }
         let size_of_existing = size(&Type::from(self.clone()));
         let diff = MemoryValueU64::from(size_of_existing).sub(offset).unwrap();
 
@@ -1162,14 +1188,6 @@ impl MemoryValue {
                     // We can also reach this case where we are setting an empty list to an empty list,
                     // both have equal sizes, but both are 0 and contain no elements.
                     MemoryValue::List(list) => {
-                        // A ranged offset means the store may land anywhere in
-                        // its maximal span (`Within` here only says the
-                        // *farthest* position reaches the type's end).
-                        // Updating one element would leave stale "known"
-                        // values in the others; apply the weak update instead.
-                        if offset.exact().is_none() {
-                            return ranged_weak_update(list, offset, *len);
-                        }
                         let Some(item) = list.last_mut() else {
                             // In the case of empty list setting we don't need to do anything.
                             return Ok(());
@@ -1227,12 +1245,14 @@ impl MemoryValue {
                                 }
                                 return Ok(());
                             }
-                            // if the size of the value is larger it will leak into earlier
-                            // items in the list.
-                            Ordering::Greater => todo!(),
-                            // if the size of the value is smaller it will only cover the
-                            // later bytes of the last item in the list.
-                            Ordering::Less => todo!(),
+                            // The store leaks into earlier items (an exact
+                            // end-reaching store crossing element boundaries):
+                            // unsupported, reported rather than mis-modeled.
+                            Ordering::Greater => Err(MemoryValueSetError::ListMultiple),
+                            // The store covers only the later bytes of the
+                            // last item (a partial interior overwrite of one
+                            // element): unsupported likewise.
+                            Ordering::Less => Err(MemoryValueSetError::ListMultiple),
                         }
                     }
                     x => todo!("{x:?}"),
@@ -1241,14 +1261,6 @@ impl MemoryValue {
             // Setting bytes from the offset not reaching the end of the type.
             RangeScalarOrdering::Less => match self {
                 MemoryValue::List(list) => {
-                    // A ranged interior store gets the same flank-preserving
-                    // weak update as the end-reaching case above: elements the
-                    // span may touch havoc, elements outside it keep their
-                    // values. (Exact offsets continue below: they land on one
-                    // element and update it strongly.)
-                    if offset.exact().is_none() {
-                        return ranged_weak_update(list, offset, *len);
-                    }
                     let memrange = memory_range(offset, &len);
                     let mut previous = 0;
                     let mut covers = Vec::new();
@@ -2160,11 +2172,12 @@ pub fn memory_range(offset: &MemoryValueU64, len: &u64) -> MemoryValueU64 {
 
 /// Applies a store whose offset is a **range** to a list: the store may land
 /// anywhere in the maximal span `offset.start .. offset.stop + len`, so every
-/// element the span may touch weakens to the sound union of "old value or new
-/// value" (its type's full range, via [`havoc_scalar`]), and elements outside
-/// the span keep their values. The same rule raw-section stores apply by
-/// erasing their backings. A covered non-scalar is unsupported
-/// (`ListMultiple`), never mis-modeled; the list is only mutated on `Ok`.
+/// element the span may touch weakens via [`havoc_scalar`] (the sound
+/// over-approximation of "old value or new value"), and elements outside the
+/// span keep their values. The same rule raw-section stores apply by erasing
+/// their backings. A covered non-scalar is unsupported (`ListMultiple`);
+/// elements already havoced before the error surface stay havoced, which is
+/// harmless (havoc is sound, and the error aborts compilation).
 fn ranged_weak_update(
     list: &mut [MemoryValue],
     offset: &MemoryValueU64,
@@ -2173,40 +2186,34 @@ fn ranged_weak_update(
     let span_start = offset.start;
     let span_end = offset.stop.saturating_add(len);
     let mut previous = 0u64;
-    let mut covered = Vec::new();
-    for (i, item) in list.iter().enumerate() {
-        let next = previous + size(&Type::from(item.clone()));
-        if span_start < next && previous < span_end {
-            if havoc_scalar(item).is_none() {
-                return Err(MemoryValueSetError::ListMultiple);
-            }
-            covered.push(i);
+    for item in list.iter_mut() {
+        // Element sizes are positive, so nothing past the span end is covered.
+        if previous >= span_end {
+            break;
+        }
+        let next = previous + size(&Type::from(&*item));
+        if span_start < next {
+            *item = havoc_scalar(item).ok_or(MemoryValueSetError::ListMultiple)?;
         }
         previous = next;
-    }
-    for i in covered {
-        list[i] = havoc_scalar(&list[i]).expect("havoc: covered elements are scalars");
     }
     Ok(())
 }
 
-/// The sound union of "old value or new value" for a scalar a ranged store may
-/// or may not have overwritten: the scalar's full type range. `None` for
+/// The sound over-approximation of "old value or new value" for a scalar a
+/// ranged store may or may not have overwritten: the scalar's full type range
+/// (via the same `From<Type>` conversion that seeds unknown memory, so a new
+/// scalar type added there is automatically covered here). `None` for
 /// non-scalars (a possibly-overwritten pointer or nested list has no sound
 /// havoc short of path-splitting; callers treat it as unsupported).
 fn havoc_scalar(value: &MemoryValue) -> Option<MemoryValue> {
     use MemoryValue::*;
-    Some(match value {
-        U8(_) => U8(MemoryValueU8::any()),
-        I8(_) => I8(MemoryValueI8::any()),
-        U16(_) => U16(MemoryValueU16::any()),
-        I16(_) => I16(MemoryValueI16::any()),
-        U32(_) => U32(MemoryValueU32::any()),
-        I32(_) => I32(MemoryValueI32::any()),
-        U64(_) => U64(MemoryValueU64::any()),
-        I64(_) => I64(MemoryValueI64::any()),
-        _ => return None,
-    })
+    match value {
+        U8(_) | I8(_) | U16(_) | I16(_) | U32(_) | I32(_) | U64(_) | I64(_) => {
+            Some(MemoryValue::from(Type::from(value)))
+        }
+        _ => None,
+    }
 }
 
 /// Compile time size
@@ -2344,5 +2351,47 @@ mod tests {
         };
         assert_eq!((first.start(), first.stop()), (1, 1));
         assert_eq!((last.start(), last.stop()), (7, 7));
+    }
+
+    /// A `u32` typed load remming by a constant takes the tight nonnegative
+    /// envelope (mirroring `Div`'s `(U32, I64)` arm), and a ranged store into
+    /// a scalar-typed destination havocs the whole scalar instead of
+    /// panicking in the exact-offset arms.
+    #[test]
+    fn rem_u32_arm_and_scalar_ranged_store() {
+        use MemoryValue::*;
+
+        // U32 dividend: full range % 4 narrows to [0, 3], no double-rem needed.
+        let dividend = U32(MemoryValueU32::any());
+        let divisor = I64(MemoryValueI64::new(4, 4).expect("valid divisor"));
+        let I64(r) = dividend % divisor else {
+            panic!("expected an I64 remainder")
+        };
+        assert_eq!((r.start(), r.stop()), (0, 3));
+
+        // Ranged store into a scalar u64: the whole scalar havocs.
+        let mut value = U64(MemoryValueU64::new(7, 7).expect("valid u64"));
+        let offset = MemoryValueU64 { start: 0, stop: 4 };
+        value
+            .set(
+                &offset,
+                &4,
+                I64(MemoryValueI64::new(1, 1).expect("valid i64")),
+            )
+            .expect("scalar ranged store applies");
+        let U64(r) = value else {
+            panic!("expected u64")
+        };
+        assert_eq!((r.start(), r.stop()), (u64::MIN, u64::MAX));
+
+        // Ranged store landing on a pointer stays unsupported (clean error).
+        let mut ptr = MemoryValue::Ptr(MemoryPtr(None));
+        assert!(ptr
+            .set(
+                &offset,
+                &4,
+                I64(MemoryValueI64::new(1, 1).expect("valid i64"))
+            )
+            .is_err());
     }
 }
