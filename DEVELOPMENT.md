@@ -1145,8 +1145,12 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   dispatch (and two integer prints exercising body-local-label hygiene). Asserts
   no directive leaks into the binary.
 - `runtime_input` ([tests/runtime_input/](tests/runtime_input/)): a value the
-  verifier cannot see, via `forget` -- it proves `arr[a0 % 4]` in bounds for
-  *every* `a0` while the runtime keeps `a0 = 12`.
+  verifier cannot see, via `forget` -- it proves `arr[((a0 % 4) + 4) % 4]` in
+  bounds for *every* `a0` while the runtime keeps `a0 = 12`. The double-rem is
+  load-bearing: RISC-V `rem` takes the dividend's sign, so a single `% 4` on a
+  havoced value spans `-3..3` (the interval transfer in `rem_by_constant`,
+  [src/verifier_types.rs](src/verifier_types.rs), models exactly this), and
+  only the `((i % d) + d) % d` canonical form narrows to `0..3`.
 - `assume` ([tests/assume/](tests/assume/)): the `forget` + `assume:` idiom --
   `forget a0` havocs the value, `assume: a0 = 5` narrows it for a bounded proof;
   neither directive appears in the binary.

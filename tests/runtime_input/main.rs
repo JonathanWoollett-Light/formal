@@ -5,9 +5,11 @@ use common::*;
 use formal::*;
 
 /// **A value the verifier cannot see, via `forget`.** `a0` holds `12` at runtime,
-/// but `forget a0` havocs it to *any* value for the verifier. The verifier then
-/// proves `arr[a0 % 4]` is in bounds for *every* `a0` -- safety proven without the
-/// value -- while the runtime keeps `a0 = 12`. `forget` replaces the old
+/// but `forget a0` havocs it to *any* value for the verifier. RISC-V `rem` takes
+/// the dividend's sign, so the index is canonicalized nonnegative with the
+/// double-rem `((a0 % 4) + 4) % 4`; the verifier then proves the store is in
+/// bounds for *every* `a0` -- safety proven without the value -- while the
+/// runtime keeps `a0 = 12`. `forget` replaces the old
 /// write-a-constant-through-a-region trick (no region, no raw address), and it is
 /// *sound*: the proof covers all values, of which the runtime value is one.
 ///

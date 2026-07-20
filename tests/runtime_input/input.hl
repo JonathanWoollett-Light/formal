@@ -1,16 +1,20 @@
 # A value the verifier cannot see, the clean way. `a0` holds 12 at runtime, but
-# `forget a0` havocs it to *any* value for the verifier. The verifier then proves
-# `arr[a0 % 4]` is in bounds for *every* a0 (sound), while the runtime keeps
-# a0 = 12. This replaces the old write-a-constant-through-a-region trick: no
-# region, no raw address, and it is sound (the proof covers all values).
+# `forget a0` havocs it to *any* value for the verifier. RISC-V `rem` takes the
+# dividend's sign, so `a0 % 4` alone spans -3..3; the canonical nonnegative
+# index is the double-rem `((a0 % 4) + 4) % 4`, which the verifier narrows to
+# 0..3. The verifier then proves the store is in bounds for *every* a0 (sound),
+# while the runtime keeps a0 = 12. This replaces the old
+# write-a-constant-through-a-region trick: no region, no raw address.
 arr: thread [u32]*4
 a0 = 12
 forget a0           # verifier: a0 = any; runtime: a0 = 12 (emits nothing)
 t2 = 4
-a1 = a0 % t2        # a0 % 4 -> 0..3
+a1 = a0 % t2        # -3..3 (rem takes the dividend's sign)
+a1 = a1 + t2        # 1..7
+a1 = a1 % t2        # 0..3, the canonical nonnegative remainder
 t3 = &arr
 t4 = a1 * t2        # byte offset 0..12
-t5 = t3 + t4        # &arr[a0 % 4]
+t5 = t3 + t4        # &arr[((a0 % 4) + 4) % 4]
 a2 = 7
-t5[0:4] = a2        # arr[a0 % 4] = 7  (in bounds for any a0)
+t5[0:4] = a2        # arr[((a0 % 4) + 4) % 4] = 7  (in bounds for any a0)
 exit(0)

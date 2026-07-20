@@ -963,9 +963,11 @@ impl Rem for MemoryValue {
         use MemoryValue::*;
         match (self, rhs) {
             // Remainder by a **positive constant** divisor `d`. This is the
-            // narrowing primitive `assume:` relies on: any value `% d` lies in
-            // `0..d`, so a wholly-unknown dividend narrows to `[0, d-1]`, while a
-            // concrete dividend gives the exact remainder. `li` yields `I64`.
+            // narrowing primitive the runtime-input idiom relies on. RISC-V
+            // `rem` takes the **dividend's sign**, so a wholly-unknown dividend
+            // narrows to `[-(d-1), d-1]`, not `[0, d-1]`; the canonical
+            // nonnegative index is `((i % d) + d) % d`. A concrete dividend
+            // gives the exact remainder. `li` yields `I64`.
             (I64(a), I64(b)) => I64(rem_by_constant(&a, &b)),
             // A raw-region (runtime-input) load yields `I32`; widen to `I64`.
             (I32(a), I64(b)) => I64(rem_by_constant(&MemoryValueI64::from(a), &b)),
@@ -973,9 +975,14 @@ impl Rem for MemoryValue {
         }
     }
 }
-/// `a % d` for a positive-constant divisor `d`: exact when `a` is concrete,
-/// otherwise the full remainder range `[0, d-1]`. Panics if `d` is not a positive
-/// constant (the front-end only emits `%` with such divisors via `assume:`).
+/// `a % d` for a positive-constant divisor `d`, with RISC-V `rem` semantics:
+/// the result takes the **dividend's sign**, so a possibly-negative dividend
+/// yields a possibly-negative remainder. Exact when `a` is concrete; the
+/// identity when every value of `a` already lies strictly within `(-d, d)`
+/// (`rem` cannot change such a value); otherwise the sound envelope clamped to
+/// `[-(d-1), d-1]` and to `a`'s own range, with each side collapsing to `0`
+/// when `a` cannot take that sign. Panics if `d` is not a positive constant
+/// (the front-end only emits `%` with such divisors).
 fn rem_by_constant(a: &MemoryValueI64, d: &MemoryValueI64) -> MemoryValueI64 {
     assert!(
         d.start() == d.stop() && d.start() > 0,
@@ -985,10 +992,23 @@ fn rem_by_constant(a: &MemoryValueI64, d: &MemoryValueI64) -> MemoryValueI64 {
     let value = if a.start() == a.stop() {
         let r = a.start() % divisor;
         MemoryValueI64::new(r, r)
+    } else if a.start() > -divisor && a.stop() < divisor {
+        // Every value is already a valid remainder; `rem` is the identity.
+        MemoryValueI64::new(a.start(), a.stop())
     } else {
-        MemoryValueI64::new(0, divisor - 1)
+        let lo = if a.start() < 0 {
+            a.start().max(-(divisor - 1))
+        } else {
+            0
+        };
+        let hi = if a.stop() > 0 {
+            a.stop().min(divisor - 1)
+        } else {
+            0
+        };
+        MemoryValueI64::new(lo, hi)
     };
-    value.expect("rem: 0..d-1 is a valid range")
+    value.expect("rem: the remainder envelope is a valid range")
 }
 impl MemoryValue {
     fn get(&self, subslice: &SubSlice) -> Result<MemoryValue, MemoryValueGetError> {
@@ -2141,4 +2161,53 @@ pub fn size(t: &Type) -> u64 {
 
 pub fn memory_value_type_of() -> Type {
     Type::List(vec![Type::U64, Type::U64, Type::U64, Type::U8])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rem_range(lo: i64, hi: i64, d: i64) -> (i64, i64) {
+        let a = MemoryValueI64::new(lo, hi).expect("valid dividend range");
+        let d = MemoryValueI64::new(d, d).expect("valid divisor");
+        let r = rem_by_constant(&a, &d);
+        (r.start(), r.stop())
+    }
+
+    /// RISC-V `rem` takes the dividend's sign; the envelope must cover the
+    /// remainder of every dividend in the range.
+    #[test]
+    fn rem_by_constant_is_sound() {
+        // Exact dividends, both signs.
+        assert_eq!(rem_range(12, 12, 4), (0, 0));
+        assert_eq!(rem_range(-5, -5, 4), (-1, -1));
+        // Identity: every value already lies in (-d, d).
+        assert_eq!(rem_range(1, 2, 4), (1, 2));
+        assert_eq!(rem_range(-2, 3, 4), (-2, 3));
+        // A possibly-negative dividend must produce a possibly-negative
+        // remainder (the old `[0, d-1]` here was unsound: -5 % 4 == -1).
+        assert_eq!(rem_range(i64::MIN, i64::MAX, 4), (-3, 3));
+        // Nonnegative dividends stay nonnegative.
+        assert_eq!(rem_range(0, i64::MAX, 4), (0, 3));
+        assert_eq!(rem_range(5, 20, 4), (0, 3));
+        // Nonpositive dividends stay nonpositive.
+        assert_eq!(rem_range(-20, 0, 4), (-3, 0));
+        // Envelope also clamps to the dividend's own range.
+        assert_eq!(rem_range(-2, 100, 4), (-2, 3));
+        // Exhaustive cross-check against the machine semantics.
+        for d in 1..=6i64 {
+            for lo in -9..=9i64 {
+                for hi in lo..=9i64 {
+                    let (rlo, rhi) = rem_range(lo, hi, d);
+                    for a in lo..=hi {
+                        let r = a % d;
+                        assert!(
+                            rlo <= r && r <= rhi,
+                            "{a} % {d} = {r} outside envelope [{rlo}, {rhi}] for dividend [{lo}, {hi}]"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

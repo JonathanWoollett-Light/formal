@@ -3,6 +3,8 @@
     #~ a0
     li t2, 4
     rem a1, a0, t2
+    add a1, a1, t2
+    rem a1, a1, t2
     la t3, arr
     mul t4, a1, t2
     add t5, t3, t4
