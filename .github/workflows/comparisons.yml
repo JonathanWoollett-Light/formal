@@ -36,6 +36,10 @@ on:
         description: "Include the heavy fannkuch-redux runtime runs (hours)"
         type: boolean
         default: false
+      languages:
+        description: "Comma-separated language subset (empty = all)"
+        type: string
+        default: ""
 
 env:
   QEMU_VERSION: v8.2.2
@@ -108,6 +112,7 @@ jobs:
         env:
           BLESS: "1"
           FORMAL_COMPARISONS_FULL: ${{ inputs.full && '1' || '' }}
+          FORMAL_COMPARISONS_LANGUAGES: ${{ inputs.languages }}
         run: cargo nextest run --run-ignored all -E 'binary(comparisons)' --no-capture
 
       - name: Commit the re-measured metrics

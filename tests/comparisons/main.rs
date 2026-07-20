@@ -45,7 +45,10 @@ use support::*;
 /// `FORMAL_COMPARISONS_FULL=1` adds the heavy fannkuch-redux *runtime* runs
 /// (n = 12: minutes uninstrumented, potentially hours instrumented); without
 /// it fannkuch is built and measured statically only, and its committed
-/// runtime figures are left untouched.
+/// runtime figures are left untouched. `FORMAL_COMPARISONS_LANGUAGES` (a
+/// comma-separated subset of formal,rust,c,cpp,zig,ada) restricts the run to
+/// those languages - e.g. re-blessing a single language after a toolchain
+/// bump without re-measuring the rest.
 ///
 /// Run it explicitly (it is `#[ignore]`d out of the default suite):
 /// `cargo nextest run --run-ignored all comparisons`.
@@ -97,8 +100,24 @@ fn comparisons() {
             })
     };
 
+    // An explicit language subset (deliberate, so not a `skipped` warning and
+    // exempt from the strict check).
+    let only: Option<Vec<String>> = std::env::var("FORMAL_COMPARISONS_LANGUAGES").ok().map(|v| {
+        v.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+
     let mut measured = Metrics::default();
     for language in LANGUAGES {
+        if only
+            .as_ref()
+            .is_some_and(|list| !list.iter().any(|l| l == language))
+        {
+            eprintln!("comparisons: {language} filtered out by FORMAL_COMPARISONS_LANGUAGES");
+            continue;
+        }
         if !available(language, &tooling) {
             skipped.push(format!("{language}: pinned toolchain not installed"));
             continue;
@@ -193,10 +212,19 @@ fn comparisons() {
         "comparisons: languages skipped under FORMAL_COMPARISONS_STRICT:\n  {}",
         skipped.join("\n  ")
     );
-    assert!(
-        measured.samples.keys().any(|(_, _, l)| l == "formal"),
-        "comparisons: formal itself was not measured"
-    );
+    // Unfiltered runs must always cover formal itself; a deliberate
+    // FORMAL_COMPARISONS_LANGUAGES subset just has to measure something.
+    if only.is_none() {
+        assert!(
+            measured.samples.keys().any(|(_, _, l)| l == "formal"),
+            "comparisons: formal itself was not measured"
+        );
+    } else {
+        assert!(
+            !measured.samples.is_empty(),
+            "comparisons: nothing was measured (check FORMAL_COMPARISONS_LANGUAGES)"
+        );
+    }
 
     if bless {
         let mut merged = committed;

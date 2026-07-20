@@ -1345,7 +1345,9 @@ Modes (mirroring the suite's `BLESS` convention):
 - `FORMAL_COMPARISONS_FULL=1` adds the heavy **fannkuch runtime runs**
   (n = 12: minutes plugin-free, hours instrumented); otherwise fannkuch is
   built and measured statically and its committed runtime figures are left
-  untouched.
+  untouched. `FORMAL_COMPARISONS_LANGUAGES=<subset>` (comma-separated)
+  restricts a run to those languages, e.g. re-blessing one language after a
+  toolchain bump.
 
 CI ([.github/workflows/comparisons.yml](.github/workflows/comparisons.yml))
 installs the pinned toolchains (building a plugin-enabled `qemu-riscv64` from
