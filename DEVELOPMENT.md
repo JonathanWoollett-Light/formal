@@ -2014,6 +2014,95 @@ program remain legible from the source. Inline assembly stays available via
 the `asm:` block (spelled like `if:`), so nothing expressible in the dialect
 is ever out of reach. The language's name is still undecided.
 
+### Typed indexing, ergonomics, and the cost contract (designed July 2026)
+
+The goal sourcing all of this: simplify how users write code and bring the
+surface closer to a **systems-programming dialect of Python**. Decisions made
+(the run-length type syntax below has landed; the rest is the agreed
+direction):
+
+- **The cost contract is a guiding principle, not a strict rule.**
+  One-simple-statement-one-instruction stays the documented default, but a
+  multi-instruction lowering is acceptable when its expansion is *fixed,
+  documented, and visible in emitted output* (the string-literal `def`
+  argument expansion set the precedent). Corollary worth writing into law: a
+  register's **verifier-exactness must never become an emitted immediate**
+  (only syntactic constants may); otherwise the `forget`+`assume`
+  verify-small/run-large idiom bakes the small-`n` value into the binary,
+  the same hazard `remove_branches` has for branches. The same hazard also
+  permanently excludes comparison-tree lowerings for anything data-dependent:
+  **all sugar lowerings must be branch-free**.
+- **Run-length list types** (landed): `[u8*13]`, `[u8*2, u16*2, u8*3]`;
+  comma-separated runs, `*` binding tightly, legacy `[t, t]*n` retained as
+  cycling sugar ([§5.1](#51-the-hl-front-end)).
+- **Indexing is a function on the list type, not pointer arithmetic.** A
+  constant index `x[k]` resolves at translate time through a compile-time
+  dictionary to `(byte offset, width, element type)` and lowers to one sized
+  load/store (the LLVM-GEP-struct / Wasm-`struct.get` model). A runtime index
+  `x[i]` carries the implicit obligation `0 <= i < len(x)` **verified at
+  compile time** (never a runtime check): interval containment at the access
+  site, `check_load_at`'s byte-bounds check lifted to element granularity.
+  Because types are static, `len` is a per-state constant, so intervals
+  suffice; no relational domain is needed until symbolic-size allocation.
+- **Architecture: a verifier-resolved index directive.** The stateless
+  front-end desugars `x[i]` to a typed-index dialect directive; the verifier
+  (the only component that knows every pointer's pointee type, per state)
+  resolves it against the run, checks bounds, records the lowering per node
+  (which must agree across all explored paths); codegen expands it after
+  verification -- constant index to one access, runtime index within one
+  homogeneous run to the affine `mul`/`add`/access sequence. This is the
+  extraction architecture (F*/Low*, Dafny, SPARK `-gnatp`): the verifier
+  checks a model and codegen's fixed expansion is trusted, like the existing
+  TLS `la` expansion. A contiguous index interval with uniform element type
+  cannot cross a run boundary, so flat `x[i]` needs only {constant, affine,
+  refuse}; runtime indexing of *mixed* shapes is refused with a shape-naming
+  error (no surveyed language does otherwise), and per-type **offset tables**
+  in `.data` are the deferred extension for scattered same-type projections.
+  Ranged loads return the **join** of covered element values; ranged stores
+  use the flank-preserving weak update (landed in `ranged_weak_update`).
+- **Reflection ergonomics**: one-instruction accessor builtins over the
+  descriptor record (`typenum`/`typelen`/`subtypes`/`nextrecord`, the Ada
+  `'Length` model) replace hand-walked `+16`/`+25` arithmetic; later,
+  run-length descriptor records (one record per homogeneous run, the
+  DWARF/Go/CLR shape) shrink the blob and make the walk loop-free -- a
+  deliberate, separately-measured ABI break.
+- **Dynamic memory doctrine: static capacity, runtime length.** Safety
+  obligations prove against the capacity (interval-vs-constant, sound today);
+  the runtime length lives in a register narrowed by `%`/masks/`require`.
+  A symbolic-size `alloc` is the one feature that genuinely needs relational
+  facts; deferred.
+- **Operators as functions** (direction): a closed operator vocabulary where
+  each spelling has a fixed statement-level gathering rule mapping to a
+  predefined def header (`d = a + b` gathers as `(dest, lhs, rhs)`; `+=` is
+  the `dest == lhs` case of the *same* definition, never a second one);
+  scalar cases stay single-instruction primitives; future non-scalar cases
+  dispatch through the existing `if typeof` monomorphization. Dereference is
+  deliberately **not** an operator: bracketed places already factor `*x = a`
+  correctly (the place gathers `x`; the statement side of `=` picks load vs
+  store), and `&` stays a builtin.
+
+**Sequencing.** Phase 0 (soundness, landed on this branch): signed-`rem`
+interval transfer, flank-preserving weak update for ranged list stores,
+`ecall` havocs `a0`. Phase 0.5 (instruction batch, next): `lbu`/`lhu` (u8/u16
+field loads are currently sign-extending), `sd` (8-byte stores), `andi` plus
+register `and` (the one-instruction mask idiom `x[i & 15]`; note 12-bit
+immediates cap `andi` at 2047), optionally `slli`/`remu`, plus
+`forget <label>` (region havoc, required for hosted input through typed
+buffers). Phase 1: the index directive with constant + affine + refusal, and
+run-length representation inside `Type`/`MemoryValue`/descriptors. Phase 2:
+fork-on-indeterminate (item 3 below), which turns `if i < n:` guards into the
+primary narrowing idiom and can make `require` a trap-backed check. Phase 3:
+relational facts, widening for beyond-threshold loops, arena `alloc`.
+Era-1 honesty: a runtime-indexed load's value can be stored and computed
+with, but not branched on, until Phase 2.
+
+**Still open (author decisions):** whether the verified artifact is the exact
+instruction stream or the directive model (this note assumes the latter);
+`require`'s Phase-2 semantics (silent upgrade vs a new keyword); scratch
+ownership for indexed stores (user-named `via` vs a reserved register); the
+signedness doctrine for narrow loads (`lbu`/`lhu` emission vs modeling `lb`
+sign-extension).
+
 ### Parallelism & SIMD (landed, and the next steps)
 
 **Landed** (see [§6](#6-integration-tests-tests) tests `fannkuch_v2`, `tls_probe`,
