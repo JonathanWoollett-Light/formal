@@ -2921,9 +2921,21 @@ unsafe fn apply_node(
         Instruction::Wfi(_) => {}
         // A fence orders memory at runtime; it has no effect on the verifier state.
         Instruction::Fence(_) => {}
-        // `ecall`: the verifier does not model the system call's effect (the
-        // write/exit happens in the host), so applying it leaves state unchanged.
-        Instruction::Ecall(_) => {}
+        // `ecall`: the verifier does not model the system call's semantics (the
+        // write/exit happens in the host), but it must not pretend the call
+        // returned nothing: the RISC-V Linux ABI clobbers `a0` (x10) with the
+        // syscall's result, so `a0` havocs to the full range exactly like
+        // `forget a0`. Anything the caller proves about the result must come
+        // from its own narrowing (`%`, masks, `assume:`). Memory a syscall may
+        // write (e.g. `read(2)` into a buffer) is NOT yet modeled; a program
+        // consuming such input must havoc the buffer's values itself (the
+        // planned `forget <label>`), or read via a raw `#@` section, whose
+        // loads already return full-range values.
+        Instruction::Ecall(_) => {
+            state.registers[hartu]
+                .insert(Register::X10, MemoryValue::from(Type::I64))
+                .internal("apply: ecall a0 havoc failed")?;
+        }
         Instruction::Unreachable(_) => {}
         // `assume:` markers (`#(`/`#)`) have no state effect; the body between
         // them applies normally, narrowing state. Codegen drops the whole block.

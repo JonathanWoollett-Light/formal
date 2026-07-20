@@ -875,9 +875,14 @@ and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly)
   above. There is no `amoadd.w` surface form; it is written in an `asm:` block
   and parsed back from the emitted dialect (so the verifier models it, rather
   than treating the `asm:` block as opaque). `ecall` is the boundary to the host/OS: the verifier does not model
-  its effect (it is a no-op for checking, non-racy, no state change) and
-  codegen emits it verbatim, so the syscall ABI lives entirely in the registers
-  the surrounding code sets (the std `print`'s `write`, and a program's `exit`).
+  its semantics (it is a no-op for checking and non-racy), but applying it
+  **havocs `a0`** to the full range: the Linux ABI clobbers `a0` with the
+  syscall's result, and pretending the old value survived would be unsound.
+  Codegen emits it verbatim, so the syscall ABI otherwise lives entirely in
+  the registers the surrounding code sets (the std `print`'s `write`, and a
+  program's `exit`). Memory a syscall may write (`read(2)` into a buffer) is
+  not modeled: consume such input through a raw `#@` section (whose loads
+  return full-range values) until a `forget <label>` region havoc exists.
 - **Registers** (`new_register`, [src/ast.rs:1182](src/ast.rs#L1182)): **only**
   `t0`–`t5` and `a0`–`a7` are parseable (the `a2`–`a7` added for the system-call
   ABI), despite the full `X0`–`X31` enum existing for `Display`. Other register
