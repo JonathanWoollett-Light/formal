@@ -770,6 +770,27 @@ fn translate_define(name: &str, annotation: &str) -> Result<String, String> {
     Ok(format!("    #$ {name} {locality} {lowered}"))
 }
 
+/// The translator's cap on expanded list-type elements. Every element is
+/// materialized in the flat dialect text today, so a runaway count must fail
+/// loudly instead of attempting a multi-gigabyte expansion (the run-length
+/// `Type` representation planned in DEVELOPMENT.md §11 lifts this).
+const MAX_LIST_ELEMENTS: usize = 1 << 24;
+
+/// A repetition count (`u8*13`, `[t, t]*n`): plain ASCII digits (no sign, no
+/// whitespace), at least 1. `context` is the source text named in errors.
+fn parse_repetition(count: &str, context: &str) -> Result<usize, String> {
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("invalid list repetition `{context}`"));
+    }
+    let n = count
+        .parse::<usize>()
+        .map_err(|_| format!("invalid list repetition `{context}`"))?;
+    if n == 0 {
+        return Err("list repetition must be at least 1".to_string());
+    }
+    Ok(n)
+}
+
 fn translate_type(text: &str) -> Result<String, String> {
     if text == "_" {
         return Ok("_".to_string());
@@ -796,22 +817,18 @@ fn translate_type(text: &str) -> Result<String, String> {
                     elements.push(run);
                 }
                 Some((scalar, count)) => {
-                    if scalar.trim() != scalar || count.trim() != count {
-                        return Err(format!(
-                            "list repetition binds tightly: write `{}*{}`",
-                            scalar.trim(),
-                            count.trim()
-                        ));
+                    let (s, c) = (scalar.trim(), count.trim());
+                    if (s, c) != (scalar, count) {
+                        return Err(format!("list repetition binds tightly: write `{s}*{c}`"));
                     }
                     if !SCALARS.contains(&scalar) {
                         return Err(format!("invalid list element types in `{text}`"));
                     }
-                    let n = count
-                        .parse::<usize>()
-                        .ok()
-                        .ok_or_else(|| format!("invalid list repetition `{run}`"))?;
-                    if n == 0 {
-                        return Err("list repetition must be at least 1".to_string());
+                    let n = parse_repetition(count, run)?;
+                    if elements.len().saturating_add(n) > MAX_LIST_ELEMENTS {
+                        return Err(format!(
+                            "list type too large (over {MAX_LIST_ELEMENTS} elements)"
+                        ));
                     }
                     elements.extend(std::iter::repeat(scalar).take(n));
                 }
@@ -823,24 +840,25 @@ fn translate_type(text: &str) -> Result<String, String> {
         let repeats = match suffix.trim() {
             "" => 1usize,
             s => {
-                let n = s
+                let digits = s
                     .strip_prefix('*')
                     .map(str::trim)
-                    .and_then(|n| n.parse::<usize>().ok())
                     .ok_or_else(|| format!("invalid list repetition `{s}`"))?;
-                if n == 0 {
-                    return Err("list repetition must be at least 1".to_string());
-                }
-                n
+                parse_repetition(digits, s)?
             }
         };
-        let expanded: Vec<&str> = elements
-            .iter()
-            .cycle()
-            .take(elements.len() * repeats)
-            .copied()
-            .collect();
-        return Ok(format!("[{}]", expanded.join(" ")));
+        let total = elements
+            .len()
+            .checked_mul(repeats)
+            .filter(|t| *t <= MAX_LIST_ELEMENTS)
+            .ok_or_else(|| format!("list type too large (over {MAX_LIST_ELEMENTS} elements)"))?;
+        let expanded = if repeats == 1 {
+            elements.join(" ")
+        } else {
+            let cycled: Vec<&str> = elements.iter().cycle().take(total).copied().collect();
+            cycled.join(" ")
+        };
+        return Ok(format!("[{expanded}]"));
     }
     Err(format!("unrecognized type `{text}`"))
 }

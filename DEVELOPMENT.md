@@ -717,7 +717,7 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 
 | `hl` statement                           | Dialect line                                                                                                                                               |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `value: global _` / `welcome: _ [u8*13]` | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a `name:` with an annotation is a define; list types are comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g. `[u8*13]` or `[u8*2, u16*2, u8*3]`, plain elements being runs of 1; the legacy outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`; every form expands to the space-separated flat dialect list) |
+| `value: global _` / `welcome: _ [u8*13]` | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a `name:` with an annotation is a define; list types are comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g. `[u8*13]` or `[u8*2, u16*2, u8*3]`, plain elements being runs of 1; the legacy outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`; counts are plain digits and the expansion is capped at 2^24 elements; every form expands to the space-separated flat dialect list) |
 | `t0 = &value`                            | `la t0, value`                                                                                                                                             |
 | `t0 = type(welcome)`                     | `#& t0, welcome`                                                                                                                                           |
 | `t0 = csr(mhartid)`                      | `csrr t0, mhartid`                                                                                                                                         |
@@ -897,7 +897,11 @@ and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly)
 The tests are **integration tests** (one binary per test, in
 `tests/<name>/main.rs`), so they can only use the crate's public API: this is
 why the pipeline lives in the library and everything the tests need is `pub` /
-re-exported at the crate root.
+re-exported at the crate root. The one exception: a small `#[cfg(test)]` unit
+module inside [src/verifier_types.rs](src/verifier_types.rs) pins the interval
+transfer functions that private helpers implement (`rem_by_constant`'s
+signed-rem envelope, exhaustively cross-checked against `i64` `%`, and the
+ranged-store weak update), which no integration test can reach directly.
 
 **Each test owns a folder** holding its sources and expectations side by side:
 
@@ -1873,6 +1877,12 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
   codegen's `leaf_record_fields` emits `.dword 0` for a nested record's
   subtypes pointer: a verified program that follows it would dereference 0 at
   runtime. Emitting nested descriptors (or rejecting them in codegen) is open.
+- A pointer plus a **possibly-negative** offset range panics
+  (`MemoryValueU64::try_from(...).unwrap()` in the `Ptr + I64` `Add` arm)
+  instead of rejecting with a diagnostic: the old single-rem spelling
+  (`forget a0; a1 = a0 % 4; t4 = a1 * 4; p = &arr + t4`) hits this since the
+  signed-rem fix made `a1` span `[-3, 3]`. The double-rem idiom avoids it;
+  the clean fix is a fallible pointer-add that rejects the path.
 - Multi-element list slice **get** returns `ListMultiple` (unimplemented;
   `covers` is collected but never applied). **Set** now distinguishes: a
   **ranged** offset applies the sound flank-preserving weak update
@@ -2058,7 +2068,8 @@ direction):
   refuse}; runtime indexing of *mixed* shapes is refused with a shape-naming
   error (no surveyed language does otherwise), and per-type **offset tables**
   in `.data` are the deferred extension for scattered same-type projections.
-  Ranged loads return the **join** of covered element values; ranged stores
+  Ranged loads will return the **join** of covered element values (today a
+  ranged typed-list `get` is still `ListMultiple`, [§10](#10-known-limitations--todo-map)); ranged stores
   use the flank-preserving weak update (landed in `ranged_weak_update`).
 - **Reflection ergonomics**: one-instruction accessor builtins over the
   descriptor record (`typenum`/`typelen`/`subtypes`/`nextrecord`, the Ada

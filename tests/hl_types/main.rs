@@ -43,7 +43,7 @@ fn run_length_types_expand_flat() {
     // Legacy and run forms agree: `[u8]*13` == `[u8*13]`.
     assert_eq!(
         define_line("a: _ [u8]*13\nexit(0)\n"),
-        define_line("b: _ [u8*13]\nexit(0)\n").replace("#$ b", "#$ a")
+        define_line("a: _ [u8*13]\nexit(0)\n")
     );
     // The outer suffix composes with runs (cycling the expanded elements).
     assert_eq!(

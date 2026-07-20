@@ -21,6 +21,22 @@ const MALFORMED: &[(&str, &str)] = &[
     ),
     ("v: global [u8*0]\nexit(0)\n", "zero run repetition"),
     ("v: global [u8*x]\nexit(0)\n", "non-numeric run repetition"),
+    (
+        "v: global [u8*+3]\nexit(0)\n",
+        "signed run count (digits only)",
+    ),
+    (
+        "v: global [u8]*+13\nexit(0)\n",
+        "signed legacy count (digits only)",
+    ),
+    (
+        "v: global [u8*16777217]\nexit(0)\n",
+        "run count over the expansion cap",
+    ),
+    (
+        "v: global [u8, u8]*9223372036854775807\nexit(0)\n",
+        "outer repetition overflowing the expansion cap",
+    ),
     ("v: global [*3]\nexit(0)\n", "a run with no element type"),
     ("v: global [zzz*3]\nexit(0)\n", "unknown run element type"),
     ("t0 = &\nexit(0)\n", "`&` with no label"),
