@@ -372,12 +372,6 @@
         cursor: help;
         border-bottom: 1px dotted var(--md-sys-color-outline-variant);
       }
-      .compare-note {
-        margin: 1.25rem 0 0;
-        font-size: 0.85rem;
-        line-height: 1.55;
-        color: var(--md-sys-color-on-surface-variant);
-      }
 
       /* ---- Directives table ---- */
       table.directives {
@@ -462,16 +456,15 @@
       </nav>
       <p>
         <b
-          >A verifying compiler for bare-metal RISC-V: every hart interleaving,
-          every admissible type, proven at compile time.</b
+          >A verifiable Python-like language, and a compiler to verify RISC-V.</b
         >
-        You write Python-like statements that map nearly one-to-one onto RISC-V
+        A Python-like language that map nearly one-to-one onto RISC-V
         instructions, with the memory layout left implicit; the compiler accepts
         the program only if it can <i>prove</i>, by symbolically executing the
         machine code itself, that no assertion fails and no memory access is
         unsafe on <i>any</i> hardware-thread interleaving, for <i>any</i> input,
         under the types it infers for you. The proof's by-products then build
-        the binary.
+        the binary able to apply optimizations based on verified conditions.
       </p>
       <h4>
         🚧 Experimental: anything and everything might not work and much isn't
@@ -483,23 +476,9 @@
       <section>
         <h3>The same program, every language</h3>
         <p>
-          The same program, on the left in <span class="code">formal</span> and
-          on the right in each language: switch between <b>Hello World!</b> and
-          the <b>fannkuch-redux</b> benchmark with the program tabs, and between
-          languages with the row above. The point is underneath the source.
-          Counting the actual machine instructions and bytes,
-          <span class="code">formal</span> compiles to far less than the others,
+          <span class="code">formal</span> usualy compiles to fewer instructions
           because it ships no runtime, no libc, and no garbage collector beneath
-          it; the versions opposite carry a runtime, and that runtime still
-          ships. fannkuch goes one further: its result is
-          <i>proven correct at compile time</i> (the verifier checks the max
-          flip count and checksum against the known answer), so the program need
-          only compute and exit. Each column also reports what the program does
-          <i>when it runs</i>: the exact number of guest instructions it
-          executes, its peak memory working set, and its execution time. Every
-          program is built for RISC-V and run under QEMU with a small
-          instrumentation plugin, so the figures compare like for like (details
-          below the panels).
+          it.
         </p>
         <div
           class="tabs lang-tabs"
@@ -620,55 +599,6 @@ objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+
             </p>
           </div>
         </div>
-        <p class="compare-note">
-          <b>How it's measured.</b> Every figure is produced (not typed) by the
-          repository's
-          <a
-            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tests/comparisons/main.rs"
-            >comparison test suite</a
-          >, which builds each program with a pinned toolchain and stores the
-          results in
-          <a
-            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tests/comparisons/metrics.prom"
-            ><span class="code">tests/comparisons/metrics.prom</span></a
-          >
-          (committed like <span class="code">Cargo.lock</span>: CI re-runs the
-          measurements and checks they reproduce; this page is regenerated from
-          the file). <b>Instructions</b> and <b>bytes</b> are the static binary:
-          machine instructions in the compiled program (formal counts its
-          emitted assembly; the others <span class="code">objdump</span> their
-          stripped static binary) and the binary's size. <b>Compile time</b> is
-          the wall-clock build with a cold output directory and warm toolchain
-          caches (for formal that includes verification: the proof is part of
-          the compile). Every program is built as a
-          <b>static RISC-V Linux (musl) binary</b> - Rust via nightly
-          <span class="code">-Zbuild-std</span> and
-          <span class="code">rust-lld</span>, C and C++ via clang (<span
-            class="code"
-            >zig cc</span
-          >, the one pinned toolchain carrying musl for riscv64) - and run under
-          the same <b>user-mode</b> <span class="code">qemu-riscv64</span> with
-          an <i>empty guest environment</i>, so the numbers are directly
-          comparable. The <b>runtime</b> figures come from a
-          <a
-            href="https://github.com/JonathanWoollett-Light/formal/blob/master/tools/qemu-plugin/formal_stats.c"
-            >TCG plugin</a
-          >
-          that reports the exact guest instructions executed and the peak memory
-          <i>working set</i> (distinct 4&nbsp;KiB pages touched: instruction
-          fetches and data); <b>execution time</b> is a separate plugin-free run
-          (best of three for the sub-second Hello World), because the plugin's
-          per-access cost would otherwise dwarf a heavy compute.
-          <b>fannkuch-redux runs n = 12</b> everywhere (the value formal proves
-          and computes); Hello World is the hosted
-          <span class="code">tests/linux_hello</span> and each language's
-          equivalent. Ada is shown static-only (no RISC-V Ada toolchain was
-          available to run it here). Note formal's fannkuch (<span class="code"
-            >tests/fannkuch_v2</span
-          >) runs its two harts as real OS threads in parallel (spawned with
-          <span class="code">clone</span>), while the language versions are
-          single-threaded.
-        </p>
       </section>
 
       <section>
@@ -706,10 +636,6 @@ objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+
             <span class="code">section</span>. An allocator declares each
             allocation as it hands it out; an access nothing describes makes the
             program invalid.
-          </li>
-          <li>
-            <b>It verifies the machine code, not your source</b>: there is no
-            compiler-trust gap between what was proven and what runs.
           </li>
           <li>
             <b>The proof shrinks the binary.</b> Dead-<i>data</i> elimination:
@@ -1090,68 +1016,6 @@ while t5 != t2:             # top-tested loop
             </tr>
           </tbody>
         </table>
-      </section>
-
-      <section>
-        <h3>How it compares</h3>
-        <p>
-          The long version, with the hard cases argued honestly, is in
-          <a
-            href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
-            ><span class="code">comparison.md</span></a
-          >. The short version:
-        </p>
-        <ul>
-          <li>
-            <b>vs Zig's <span class="code">comptime</span>:</b> concrete
-            execution is the special case of symbolic execution where every
-            value is exactly known. <span class="code">comptime</span> evaluates
-            the <i>known</i> at compile time;
-            <span class="code">formal</span> evaluates the <i>unknown</i>:
-            ranges, all interleavings, all type assignments.
-          </li>
-          <li>
-            <b>vs Rust's borrow checker:</b> the borrow checker is a fast,
-            conservative approximation of the race-freedom question;
-            <span class="code">formal</span> answers the question itself,
-            exactly. And you can still opt into borrow-checker economics by
-            building a verified <span class="code">Rc</span> whose invariant is
-            a <span class="code">fail</span> the proof discharges.
-          </li>
-          <li>
-            <b>vs Lean:</b> Lean proves anything, manually, about a model;
-            <span class="code">formal</span> proves a fixed property class,
-            automatically, about the actual machine code.
-          </li>
-          <li>
-            <b>vs Ada/SPARK</b> (the closest peer): SPARK is deductive, modular,
-            contract-driven and industrial; <span class="code">formal</span> is
-            operational, whole-program, contract-free and exhaustive: it
-            verifies the racy code SPARK's model rejects, at exponential cost.
-          </li>
-        </ul>
-        <p>
-          That cost is explicit:
-          <span class="code"
-            >O(n · h<sup>r</sup> · 2<sup>b</sup> · 8<sup>v</sup>)</span
-          >
-          (instructions × racy-interleavings × indeterminate branches ×
-          unspecified variables). The design lever is reducing the exponents
-          (keep shared mutation rare, annotate what you know); planned compiler
-          modes trade them away explicitly.
-        </p>
-      </section>
-
-      <section>
-        <h3>Where this is going</h3>
-        <p>
-          A bare-metal OS running DOOM. A bare-metal Tor node. A bare-metal web
-          server. A bare-metal hypervisor under a serverless platform. All
-          proven, all the way down: because the verifier works on the machine
-          code, there is nothing underneath it to trust. Nearer term: growing
-          the Python-like surface (it doesn't have a name yet) while keeping its
-          near-one-to-one translation, so the cost model never goes opaque.
-        </p>
       </section>
     </main>
 
