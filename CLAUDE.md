@@ -70,12 +70,25 @@ documents, update the others to match and remain consistent.
   tests stream tail-able reports into `target/tmp/test-logs/`). The console
   shows progress; historical detail (e.g. per-task timings after each task)
   goes to a log file.
+- Avoid Object-Oriented-Programming-style design: trait/interface indirection,
+  dependency injection, and type hierarchies introduced for their own sake or
+  for testability. Prefer plain functions over concrete data; introduce an
+  abstraction only once a second real implementation exists.
 - Comments are either short and inline (`let x = 2; // short comment`) or full
   lines preceding the code; never multi-line inline comments.
 - Prefer TOML to YAML.
 
 ## Testing and measurement
 
+- **One real end-to-end approach; no shims or mocks.** There is one canonical
+  way to test: run the real entry points unmodified (here `cargo build`, which
+  is also setup, then the test suite), and move that same sequence wherever
+  coverage is needed, e.g. executing it inside an empty factory-default VM to
+  test setup itself. Never fake the environment (stubbed `wsl`/`sudo`/PATH
+  binaries, mocked commands) and never restructure code to create mockable
+  seams: shims and mock-heavy unit testing add confounds and complexity that
+  make a project worse. The only test-specific flag such a run may need is a
+  recursion guard, so the suite running inside a VM does not spawn another VM.
 - Tests that pin exact behaviour (golden outputs, step counts, per-step
   traces) will legitimately break on a behavioural change: **re-derive the
   expected values from the new behaviour, never loosen the assertions to hide
