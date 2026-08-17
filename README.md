@@ -21,9 +21,9 @@ is handled by the build script.
 
 The repo's [`build.rs`](build.rs) is the one place that provisions the **system**
 dependencies the test suite and the distributed backend need, which Cargo cannot
-install itself: a WSL Linux environment on Windows, `qemu-system-riscv64` and a
-RISC-V GNU toolchain for the bare-metal boot tests, and a system MPI library for
-the (planned) `--features hpc` distributed backend. So:
+install itself: a WSL Linux environment on Windows, QEMU (system and user
+mode) and a RISC-V GNU toolchain for the test suite's emulated runs, and a
+system MPI library for the (planned) `--features hpc` distributed backend. So:
 
 ```sh
 cargo build      # builds the compiler AND sets up the environment

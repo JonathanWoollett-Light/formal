@@ -2,11 +2,11 @@
 //!
 //! Cargo runs this before every (clean) build. It ensures the **system**
 //! dependencies the test suite and the (planned) distributed backend need are
-//! present: a WSL Linux environment on Windows, `qemu-system-riscv64` and a
-//! RISC-V GNU toolchain for the QEMU boot tests, and a system MPI library for
-//! the `--features hpc` distributed backend. The Rust crate dependencies
-//! themselves are handled by Cargo as usual; this script only covers the things
-//! Cargo cannot install.
+//! present: a WSL Linux environment on Windows, `qemu-system-riscv64`, the
+//! user-mode `qemu-riscv64` and a RISC-V GNU toolchain for the QEMU tests, and
+//! a system MPI library for the `--features hpc` distributed backend. The Rust
+//! crate dependencies themselves are handled by Cargo as usual; this script
+//! only covers the things Cargo cannot install.
 //!
 //! Design rules (so `cargo build` stays safe and predictable):
 //! - **Never fails the build.** The library + default tests build with none of
@@ -419,12 +419,22 @@ fn reboot_now() -> bool {
             ],
         )
     } else {
-        // The sudo credential is usually still cached from the apt install
-        // moments earlier (`-n` = fail instead of prompting); otherwise prompt,
-        // then fall back to systemd's polkit path for desktop sessions.
-        runs("sudo", &["-n", "shutdown", "-r", "now"])
-            || runs("sudo", &["shutdown", "-r", "now"])
-            || runs("systemctl", &["reboot"])
+        // The same 10-second grace as Windows (detached, so this call returns):
+        // the reboot report above is emitted by cargo only after this build
+        // script exits, and an immediate shutdown would race that flush. The
+        // sudo credential is usually still cached from the apt install moments
+        // earlier (`-n` = fail instead of prompting); otherwise prompt, then
+        // fall back to systemd's polkit path for desktop sessions.
+        let delayed = "(sleep 10 && shutdown -r now) </dev/null >/dev/null 2>&1 &";
+        runs("sudo", &["-n", "sh", "-c", delayed])
+            || runs("sudo", &["sh", "-c", delayed])
+            || runs(
+                "sh",
+                &[
+                    "-c",
+                    "(sleep 10 && systemctl reboot) </dev/null >/dev/null 2>&1 &",
+                ],
+            )
     }
 }
 
@@ -543,6 +553,15 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
             riscv_probe,
             "gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf",
             "RISC-V GNU toolchain (as/ld, for assembling the generated programs)",
+        ),
+        (
+            // Mirrors how tests/common finds it: PATH, then the toolchain
+            // release's bin/ (which bundles qemu-riscv64), then RISCV_BIN.
+            "command -v qemu-riscv64 \
+             || [ -x \"$HOME/riscv-toolchain/riscv/bin/qemu-riscv64\" ] \
+             || { [ -n \"$RISCV_BIN\" ] && [ -x \"$RISCV_BIN/qemu-riscv64\" ]; }",
+            "qemu-user",
+            "user-mode QEMU (qemu-riscv64, for the hosted Linux-program tests)",
         ),
         (
             "command -v mpicc",

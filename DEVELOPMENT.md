@@ -90,6 +90,8 @@ cargo fmt             # formats the code
 cargo clippy          # lints the code
 cargo run --example translate -- tests/uart_hello/input.hl tests/uart_hello/dialect.s
                       # regenerate a test's stored dialect from its hl source
+cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
+                      # factory-default setup e2e in a VM (§6.2; an hour+)
 ```
 
 `cargo-nextest` is the preferred runner (install once with
@@ -1421,6 +1423,71 @@ source, cached), runs the check on pushes touching the pipeline, and offers a
 `workflow_dispatch` **measure** mode (optionally **full**) that re-blesses and
 commits `metrics.prom` + `index.html` - so the "re-measure" loop can run
 entirely in the controlled CI environment.
+
+### 6.2 The factory-default setup tests ([tests/setup_e2e/](tests/setup_e2e/))
+
+Two **`#[ignore]`d** integration tests prove the "setup is `cargo build`"
+promise end to end, with no shims: each boots an **empty factory-default
+machine** as a local QEMU/KVM VM, performs the documented human steps (install
+Rust, unpack this repository), runs `cargo build` over `ssh -tt` - a real
+terminal, so setup's console prompts genuinely appear and a piped `y` answers
+the reboot question - rides through the reboot when setup requests one, then
+runs the **full test suite inside the guest**. Run them deliberately (they
+download images and take an hour or more):
+
+```sh
+cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
+cargo nextest run --run-ignored all -E 'test(factory_default_windows)'
+```
+
+- **Requirements fail loud.** Each test probes its requirements up front
+  (QEMU x86-64, `qemu-img`, `genisoimage`, the OpenSSH client, `curl`, KVM
+  access; all driven through WSL on a Windows host, like the QEMU boot tests)
+  and a missing one fails the test with the exact install command - no silent
+  skipping.
+- **`factory_default_linux`** boots the current Ubuntu LTS server cloud image
+  (cached under `~/.cache/formal-e2e/images`; delete to refresh). It asserts
+  the first build reports real installs, handles the reboot + login-shell
+  resume when the apt run requests one, builds `--features hpc` (which
+  provisions libclang), asserts a re-run build is **silent** (setup complete +
+  idempotent), asserts every dependency probe passes, and runs
+  `cargo nextest run` inside. Works on a Linux host or through WSL2 (Windows
+  11 enables the needed nested virtualisation for WSL2 by default), and on
+  GitHub's standard Linux runners (they expose `/dev/kvm`).
+- **`factory_default_windows`** boots a prepared factory Windows image and
+  exercises the full Windows path: WSL detection, the UAC-elevated
+  `wsl --install`, the `[y/N]` reboot prompt, the `RunOnce` resume at the
+  autologon session, driving Ubuntu's headless first-run init, WSL-side
+  provisioning, the silent re-run, and the suite (with `RISCV_BIN=/usr/bin`,
+  the documented redirect to the apt toolchain, after giving the guest's WSL
+  its own developer prerequisites - a C linker and rustup - which the suite's
+  hpc tests build with).
+  It needs **nested virtualisation** (the guest runs WSL2, its own
+  hypervisor): a Linux host with nested KVM, or a bare-metal/self-hosted CI
+  runner - a Windows host cannot provide the third virtualisation level, and
+  the test says so. The image is built **once** from a Windows Server
+  evaluation ISO by
+  [tests/setup_e2e/windows/build-image.sh](tests/setup_e2e/windows/build-image.sh)
+  (unattended install via `autounattend.xml`; factory-default except what
+  headless driving requires: OpenSSH + a throwaway key stored next to the
+  image, silent UAC elevation, autologon, no sleep); point
+  `FORMAL_E2E_WINDOWS_IMAGE` at the result.
+- **Recursion guard.** Every in-guest command sets `FORMAL_E2E_INNER=1` and
+  both tests fail immediately (loudly, never a silent green skip) under it,
+  so the suite running inside a guest cannot boot a VM inside the VM
+  (`#[ignore]` already keeps them out of the guest's plain
+  `cargo nextest run`).
+- **Observability.** Live progress streams to
+  `target/tmp/test-logs/<test>/e2e.progress`; every driver command is logged
+  to `driver.log`, the guest console to `serial.log`, and each long phase
+  (prep, builds, suite) to its own tail-able `.log`.
+
+CI ([.github/workflows/setup-e2e.yml](.github/workflows/setup-e2e.yml)) runs
+the Linux test weekly and on demand on standard runners; the Windows test runs
+only when `workflow_dispatch` names a nested-virt-capable runner label
+(self-hosted bare metal, a KVM-capable managed runner service, or an
+Azure v3+/GCP VM with nested virtualisation registered as self-hosted; AWS
+only on `*.metal`) with `FORMAL_E2E_WINDOWS_IMAGE` provisioned on it.
 
 ## 7. Verification complexity
 
