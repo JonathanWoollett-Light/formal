@@ -75,16 +75,16 @@ relates to that.
 Compile-time reasoning is a spectrum of *how much the compiler evaluates, and
 what it can therefore prove, before the program runs*.
 
-| Language | What it evaluates at compile time | What it proves automatically | Cost / decidability | Verifies |
-|---|---|---|---|---|
-| **Python** | nothing (just compiles to bytecode) | nothing | trivial | nothing |
-| **C** | types | weak type safety; UB everywhere else | linear, decidable | source (then trusts the compiler) |
-| **C++** | types + `constexpr`/templates (Turing-complete *concrete* metaprogramming) | type safety + values of *known* expressions | template instantiation, decidable-ish | source |
-| **Rust** | types + ownership/borrows/lifetimes | memory safety + data-race-freedom, **conservatively** | ~linear, decidable | source |
-| **Zig** | types + `comptime` (*concrete* partial evaluation & metaprogramming) | type safety + asserts on *known* values | ~linear, decidable | source |
-| **`formal`** | types (**completely inferred**) + **abstract interpretation over all interleavings, branches, and type assignments** | assertion-unreachability + bounds/permission safety **under races**, for **all inputs**, up to a hart bound | **exponential, bounded** | the **instruction-level program** |
-| **Lean** | full dependent types + **manually written proofs** | **any** theorem (functional correctness, …) | undecidable, manual | a model / pure code |
-| **Ada/SPARK** | types + **contracts** | absence of run-time errors + your contracts, **deductively** (SMT), for all inputs | modular, decidable-ish, but **prover-incomplete** | source (qualified compiler) |
+| Language      | What it evaluates                        | Proves automatically                | Cost / decidability  | Verifies     |
+| ------------- | ---------------------------------------- | ----------------------------------- | -------------------- | ------------ |
+| **Python**    | nothing                                  | nothing                             | trivial              | nothing      |
+| **C**         | types                                    | weak type safety                    | linear               | source       |
+| **C++**       | types + `constexpr`/templates (concrete) | asserts on *known* values           | decidable            | source       |
+| **Rust**      | types + borrows/lifetimes                | memory + race safety, conservative  | ~linear              | source       |
+| **Zig**       | types + `comptime` (concrete)            | asserts on *known* values           | ~linear              | source       |
+| **`formal`**  | the *unknown*: interleavings + typings   | asserts + memory safety under races | exponential, bounded | machine code |
+| **Lean**      | dependent types + manual proofs          | any theorem                         | undecidable, manual  | a model      |
+| **Ada/SPARK** | types + contracts                        | run-time errors + contracts (SMT)   | prover-incomplete    | source       |
 
 Two columns do the heavy lifting:
 
@@ -311,14 +311,14 @@ properties, anything expressible in its logic), and the proofs are checked by a
 
 Set side by side, the trade is stark and runs in both directions:
 
-| Dimension | Lean | `formal` |
-|---|---|---|
-| **Expressiveness** | maximal: any theorem in the logic | a **fixed** class: `fail`-unreachability + bounds/permission safety across all interleavings |
-| **Automation** | **manual**: you write the proof (tactics, lemmas) | **push-button**: no human proof |
-| **What is verified** | a **model** of the program (or pure functional code) | the **RISC-V instructions themselves**, with real memory and real concurrency |
-| **Concurrency** | must be **modeled and proved by hand** | **automatic**, by exhaustive interleaving |
-| **Completeness** | sound and, in principle, complete for what you can prove | **bounded** (hart count; lists/unions must be written explicitly); *incomplete* beyond the bounds |
-| **Trusted base** | a small, audited kernel | a large, `unsafe`, still-maturing symbolic executor |
+| Dimension            | Lean                                   | `formal`                                                 |
+| -------------------- | -------------------------------------- | -------------------------------------------------------- |
+| **Expressiveness**   | maximal: any theorem in the logic      | a **fixed** class: `fail`-unreachability + memory safety |
+| **Automation**       | **manual**: you write the proof        | **push-button**: no human proof                          |
+| **What is verified** | a **model** (or pure functional code)  | the **RISC-V instructions themselves**                   |
+| **Concurrency**      | must be **modeled and proved by hand** | **automatic**: exhaustive interleaving                   |
+| **Completeness**     | sound; complete in principle           | **bounded** (harts; explicit lists/unions only)          |
+| **Trusted base**     | a small, audited kernel                | a large `unsafe` symbolic executor                       |
 
 So Lean is more **expressive**, more **rigorous**, and higher-**assurance**;
 `formal` is more **automatic**, operates on the **real executable**, and handles
@@ -499,19 +499,19 @@ The same design that gives the strengths above caps them hard:
 
 ## Bottom line
 
-| | Python | C | C++ | Rust | Zig | **`formal`** | Lean | Ada/SPARK |
-|---|---|---|---|---|---|---|---|---|
-| Compile-time eval of *unknown* values | no | no | no | partial (types) | no | **yes** | yes (manual) | yes (deductive) |
-| Proves assertions hold under races | no | no | no | n/a (forbids races) | no | **yes (exhaustive)** | yes (manual) | n/a (restricts races) |
-| Admits provably-correct racy code | n/a | yes (unchecked) | yes (unchecked) | only via `unsafe` | yes (unchecked) | **yes (checked)** | yes (manual) | no (restricts) |
-| Verifies at the instruction level | no | no | no | no | no | **yes** | no | no |
-| Type inference | n/a | no | no | local (incomplete) | local (incomplete) | **complete (bounded)** | no | no |
-| Infers memory layout | no | no | no | no | no | **yes** | no | no |
-| Proof-driven dead-*data* elimination | no | no | no | no | no | **yes** | no | no |
-| Automatic (no manual proof) | n/a | yes | yes | yes | yes | **yes** | **no** | mostly (contracts) |
-| Arbitrary functional correctness | no | no | no | no | no | no | **yes** | yes (contracts) |
-| Unbounded threads / scale | n/a | n/a | n/a | **yes** | n/a | **no** | yes | yes |
-| Cheap / fast | yes | yes | mostly | yes | mostly | **no** | no | mostly |
+|                            | Python | C         | C++       | Rust         | Zig       | **`formal`**   | Lean    | Ada/SPARK  |
+| -------------------------- | ------ | --------- | --------- | ------------ | --------- | -------------- | ------- | ---------- |
+| Evaluates *unknown* values | no     | no        | no        | types only   | no        | **yes**        | manual  | deductive  |
+| Asserts proved under races | no     | no        | no        | forbidden    | no        | **exhaustive** | manual  | restricted |
+| Admits correct racy code   | n/a    | unchecked | unchecked | via `unsafe` | unchecked | **checked**    | manual  | no         |
+| Verifies machine code      | no     | no        | no        | no           | no        | **yes**        | no      | no         |
+| Type inference             | n/a    | no        | no        | local        | local     | **complete**   | no      | no         |
+| Infers memory layout       | no     | no        | no        | no           | no        | **yes**        | no      | no         |
+| Dead-*data* elimination    | no     | no        | no        | no           | no        | **yes**        | no      | no         |
+| No manual proof            | n/a    | yes       | yes       | yes          | yes       | **yes**        | **no**  | mostly     |
+| Arbitrary correctness      | no     | no        | no        | no           | no        | no             | **yes** | contracts  |
+| Unbounded threads          | n/a    | n/a       | n/a       | **yes**      | n/a       | **no**         | yes     | yes        |
+| Cheap / fast               | yes    | yes       | mostly    | yes          | mostly    | **no**         | no      | mostly     |
 
 `formal`'s thesis, in one sentence: **it generalizes compile-time evaluation from
 Zig's concrete partial evaluation to full symbolic exploration, and turns Rust's

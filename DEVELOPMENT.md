@@ -162,27 +162,50 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 
 ## 3. Repository layout
 
-| Path                                           | Role                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [src/lib.rs](src/lib.rs)                       | Library root: declares + re-exports the modules, and defines `compress` (node re-allocation) and `print_ast` (serialization).                                                                                                                                                                                              |
-| [src/main.rs](src/main.rs)                     | The `formal` CLI: `formal new <name>` scaffolds a project whose `cargo run` compiles its `main.hl` ([§4.9](#49-the-compile-api--the-formal-cli)).                                                                                                                                                                          |
-| [src/hl.rs](src/hl.rs)                         | The `hl` front-end: `translate` lowers the Python-like layer one statement to one dialect line ([§5.1](#51-the-hl-front-end)).                                                                                                                                                                                             |
-| [examples/translate.rs](examples/translate.rs) | CLI over `hl::translate`; regenerates a test's `dialect.s` from its `input.hl`.                                                                                                                                                                                                                                            |
-| [examples/compile.rs](examples/compile.rs)     | CLI over `formal::compile`; runs an `hl` file through the whole pipeline and prints the dialect + assembly (a scratch driver for developing `hl` programs).                                                                                                                                                                |
-| [std/std.hl](std/std.hl)                       | The standard-library prelude (the `hl` dialect), prepended to every program by `translate`; defines `print` ([§5.1](#51-the-hl-front-end)).                                                                                                                                                                                |
-| [src/ast.rs](src/ast.rs)                       | Lexer/parser front-end: `AstNode` intrusive list, `Instruction` enum, all operand types, per-instruction parsers and `Display` impls.                                                                                                                                                                                      |
-| [src/verifier.rs](src/verifier.rs)             | The `Explorerer` state machine, the heart of verification.                                                                                                                                                                                                                                                                 |
-| [src/verifier_types.rs](src/verifier_types.rs) | Symbolic value & memory model, `State`, `TypeConfiguration`, runtime type reflection. No `unsafe`.                                                                                                                                                                                                                         |
-| [src/optimizer.rs](src/optimizer.rs)           | `remove_untouched` and `remove_branches` post-proof optimizations.                                                                                                                                                                                                                                                         |
-| [src/codegen.rs](src/codegen.rs)               | `emit_executable`: lowers the verified+optimized AST + inferred layout into runnable RISC-V (generated `.data`/`.bss` + lowered directives).                                                                                                                                                                               |
-| [src/draw.rs](src/draw.rs)                     | `draw_tree`: ASCII rendering of a `VerifierNode` tree (debug/diagnostic).                                                                                                                                                                                                                                                  |
-| [tests/](tests/)                               | Integration tests, one folder per test (named after the behaviour it pins; see [§6](#6-integration-tests-tests)): `tests/<name>/main.rs` plus that test's assets (`input.hl`, `dialect.s`, stage pins). `common/mod.rs` holds the shared helpers. The Valid-outcome tests also lower their output and **boot it in QEMU**. |
-| [scripts/build-run.sh](scripts/build-run.sh)   | Assemble + link (`as`/`ld`) the generated `target/gen/*.s` and boot in QEMU.                                                                                                                                                                                                                                               |
-| [tools/qemu-plugin/](tools/qemu-plugin/)       | `formal_stats.c`, the TCG plugin the QEMU-booting tests load to measure guest instructions executed + memory working set over time (see [§6](#6-integration-tests-tests)); built/cached in WSL by `ensure_plugin`.                                                                                                          |
-| [assets/](assets/)                             | Scratch inputs for the binary harness (`one.s`, `two.s`); the test programs live in their `tests/<name>/` folders.                                                                                                                                                                                                         |
-| [comparison.md](comparison.md)                 | Positioning against Python/C/C++/Rust/Zig/Lean/Ada-SPARK.                                                                                                                                                                                                                                                                  |
-| [index.html](index.html)                       | The marketing page (static, Pico.css; format with `npx prettier ./index.html --write`). Its comparison figures are **generated** from `tests/comparisons/metrics.prom` (the `COMPARISON-DATA` block; see [§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons)).                                            |
-| [tests/comparisons/](tests/comparisons/)       | The language-comparison metrics pipeline: the other languages' program sources, the measuring `comparisons` test, and `metrics.prom` (committed-but-generated results, `Cargo.lock`-style); [§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons).                                                          |
+```text
+.
+├── build.rs                   # the setup entry point: installs the system deps (§2)
+├── Cargo.toml                 # manifest; `[profile.test] opt-level = 3` (§2)
+├── .cargo/config.toml         # `cargo nt`/`cargo cov` aliases, nextest config (§2)
+├── .github/workflows/         # CI (`ci.yml`, `comparisons.yml`)
+├── src/                       # the compiler (library + `formal` binary)
+│   ├── lib.rs                 # library root: modules, `compress`, `print_ast`
+│   ├── main.rs                # the `formal` CLI: `formal new <name>` (§4.9)
+│   ├── hl.rs                  # `hl` front-end: one statement -> one dialect line (§5.1)
+│   ├── ast.rs                 # lexer/parser: `AstNode` list, `Instruction`, operands
+│   ├── verifier.rs            # the sequential `Explorerer`, the verification oracle
+│   ├── verifier_types.rs      # symbolic value & memory model; no `unsafe`
+│   ├── explore.rs             # pointer-free parallel exploration + config sweep (§7)
+│   ├── dist.rs                # the distributed MPI backend (`--features hpc`, §7)
+│   ├── optimizer.rs           # post-proof `remove_untouched` / `remove_branches`
+│   ├── codegen.rs             # `emit_executable`: AST + inferred layout -> RISC-V
+│   └── draw.rs                # `draw_tree`: ASCII tree rendering (debug)
+├── std/
+│   └── std.hl                 # stdlib prelude prepended to every program (§5.1)
+├── examples/
+│   ├── translate.rs           # regenerate a test's `dialect.s` via `hl::translate`
+│   ├── compile.rs             # scratch driver: an `hl` file -> dialect + assembly
+│   └── update_website.rs      # re-inject `metrics.prom` into `index.html` (§6.1)
+├── tests/                     # integration tests, one folder per pinned behaviour (§6)
+│   ├── common/mod.rs          # the shared test helpers
+│   ├── <name>/                # `main.rs` + its assets (`input.hl`, `dialect.s`,
+│   │                          #   stage pins); Valid-outcome tests boot in QEMU
+│   └── comparisons/           # language-comparison pipeline (§6.1): other languages'
+│                              #   sources + committed-but-generated `metrics.prom`
+├── scripts/
+│   └── build-run.sh           # `as`/`ld` + boot `target/gen/*.s` in QEMU
+├── tools/
+│   └── qemu-plugin/           # `formal_stats.c`: measures instructions + memory (§6)
+├── assets/                    # scratch inputs (`one.s`, `two.s`)
+├── deploy/                    # k8s + Kubeflow MPI Operator target for `hpc` (§7)
+├── comparison.md              # vs Python/C/C++/Rust/Zig/Lean/Ada-SPARK
+├── index.html                 # the website; `COMPARISON-DATA` is generated (§6.1)
+├── website.md                 # how to format `index.html`
+├── TODO.md                    # short/medium/long-term TODOs
+├── README.md                  # user instructions: setup, install, hello world
+├── CLAUDE.md                  # generic rules + the documentation separation
+└── DEVELOPMENT.md             # this document
+```
 
 ## 4. The compilation & verification pipeline (precise description)
 
@@ -723,23 +746,30 @@ patterns, and no code synthesis. Control flow is **structured only**: there is
 error pointing at `if`/`while`); the labels in the dialect output are generated
 (`_l0`, `_l1`, …). The simple statement forms:
 
-| `hl` statement                           | Dialect line                                                                                                                                               |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `value: global _` / `welcome: _ [u8*13]` | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a `name:` with an annotation is a define; list types are comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g. `[u8*13]` or `[u8*2, u16*2, u8*3]`, plain elements being runs of 1; the legacy outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`; counts are plain digits and the expansion is capped at 2^24 elements; every form expands to the space-separated flat dialect list) |
-| `t0 = &value`                            | `la t0, value`                                                                                                                                             |
-| `t0 = type(welcome)`                     | `#& t0, welcome`                                                                                                                                           |
-| `t0 = csr(mhartid)`                      | `csrr t0, mhartid`                                                                                                                                         |
-| `t1 = 0x10000000`                        | `li t1, 0x10000000` (radix text preserved)                                                                                                                 |
-| `t2 = t1`                                | `addi t2, t1, 0` (register move)                                                                                                                            |
-| `t1 = t1 + 1` / `t1 = t1 - 8`            | `addi t1, t1, 1` / `addi t1, t1, -8` (immediate `+`/`-` only)                                                                                               |
-| `t3 = t1 + t2` / `t3 = t1 - t2`          | `add t3, t1, t2` / `sub t3, t1, t2` (register-register)                                                                                                     |
-| `t3 = t1 * t2` / `t3 = t1 / t2` / `t3 = t1 % t2` | `mul` / `div` / `rem t3, t1, t2` (register-register; `*`/`/`/`%` have no immediate form, so the operand must be a register)                          |
-| `t0[0:4] = t1`                           | `sw t1, 0(t0)` (store; width 1 = `sb`, 2 = `sh`, 4 = `sw`)                                                                                                 |
-| `t1 = t0[8:16]`                          | `ld t1, 8(t0)` (load; width 1 = `lb`, 2 = `lh`, 4 = `lw`, 8 = `ld`)                                                                                        |
-| `forget t0`                              | `#~ t0` (havoc: set `t0` to *any* value for the verifier; emits nothing)                                                                                    |
-| `section 0x100 0x200 rw`                 | `#@ 0x100 0x200 rw`                                                                                                                                        |
-| `fail` / `unreachable`                   | `#!` / `#?`                                                                                                                                                |
-| `asm:` + indented lines                  | each block line emitted verbatim (the inline-assembly escape hatch; an empty block is an error)                                                            |
+| `hl` statement                                   | Dialect line                                                                     |
+| ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `value: global _` / `welcome: _ [u8*13]`         | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a define; lists expand below) |
+| `t0 = &value`                                    | `la t0, value`                                                                   |
+| `t0 = type(welcome)`                             | `#& t0, welcome`                                                                 |
+| `t0 = csr(mhartid)`                              | `csrr t0, mhartid`                                                               |
+| `t1 = 0x10000000`                                | `li t1, 0x10000000` (radix text preserved)                                       |
+| `t2 = t1`                                        | `addi t2, t1, 0` (register move)                                                 |
+| `t1 = t1 + 1` / `t1 = t1 - 8`                    | `addi t1, t1, 1` / `addi t1, t1, -8` (immediate `+`/`-` only)                    |
+| `t3 = t1 + t2` / `t3 = t1 - t2`                  | `add t3, t1, t2` / `sub t3, t1, t2` (register-register)                          |
+| `t3 = t1 * t2` / `t3 = t1 / t2` / `t3 = t1 % t2` | `mul` / `div` / `rem t3, t1, t2` (register-register; no immediate forms)         |
+| `t0[0:4] = t1`                                   | `sw t1, 0(t0)` (store; width 1 = `sb`, 2 = `sh`, 4 = `sw`)                       |
+| `t1 = t0[8:16]`                                  | `ld t1, 8(t0)` (load; width 1 = `lb`, 2 = `lh`, 4 = `lw`, 8 = `ld`)              |
+| `forget t0`                                      | `#~ t0` (havoc: `t0` becomes *any* value; emits nothing)                         |
+| `section 0x100 0x200 rw`                         | `#@ 0x100 0x200 rw`                                                              |
+| `fail` / `unreachable`                           | `#!` / `#?`                                                                      |
+| `asm:` + indented lines                          | each block line emitted verbatim (inline assembly; an empty block is an error)   |
+
+In the define row, a `name:` with an annotation is a define, and a list type is
+comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g.
+`[u8*13]` or `[u8*2, u16*2, u8*3]` (a plain element is a run of 1); the legacy
+outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`.
+Counts are plain digits, the expansion is capped at 2^24 elements, and every
+form expands to the space-separated flat dialect list.
 
 A **condition** is `<reg> <op> <reg>` with `<` / `<=` / `>` / `>=` / `==` /
 `!=`, or `<reg> ==|!= 0`. `>` and `<=` swap the operands onto `blt`/`bge`; the
@@ -1476,14 +1506,14 @@ sequential `Explorerer` which stays as the reference oracle):
 **How a verification executes** - the same exploration, exposed through five
 backends that all produce the identical outputs:
 
-| Backend | Entry point | Parallelism |
-| --- | --- | --- |
-| Sequential oracle | `Explorerer::next_step` | none (the reference) |
-| Fixed-config | `verify_configuration` / `verify_configuration_pooled` | none |
-| In-process pool | `verify_configuration_parallel` / `verify_sweep` / `verify_inferred` | rayon (all cores) |
-| Distributed simulation | `verify_configuration_distributed_sim` | rayon + per-continuation serialize round-trip |
-| Real MPI, wave | `outer_sweep_winner` + `verify_configuration_mpi` | `mpirun -n N`, barrier per wave |
-| Real MPI, work-stealing | `verify_configuration_mpi_stealing` | `mpirun -n N`, barrier-free + load-balanced |
+| Backend                 | Entry point                                                          | Parallelism                     |
+| ----------------------- | -------------------------------------------------------------------- | ------------------------------- |
+| Sequential oracle       | `Explorerer::next_step`                                              | none (the reference)            |
+| Fixed-config            | `verify_configuration` / `verify_configuration_pooled`               | none                            |
+| In-process pool         | `verify_configuration_parallel` / `verify_sweep` / `verify_inferred` | rayon (all cores)               |
+| Distributed simulation  | `verify_configuration_distributed_sim`                               | rayon + serialize round-trip    |
+| Real MPI, wave          | `outer_sweep_winner` + `verify_configuration_mpi`                    | `mpirun -n N`, barrier per wave |
+| Real MPI, work-stealing | `verify_configuration_mpi_stealing`                                  | `mpirun -n N`, barrier-free     |
 
 The flow is the same in every backend: seed one `Continuation` per system at the
 program entry; `step` each frontier item (validate the active node, `apply_node`
@@ -1645,24 +1675,49 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
 
 ## 8. Key data structures (quick reference)
 
-| Type                                                     | Location                                                                                                                          | Purpose                                                                                                                  |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `TranslateError`                                         | [hl.rs:41](src/hl.rs#L41)                                                                                                         | `{ line, message }` for an `hl` translation failure (1-based line; `translate` never panics).                            |
-| `AstNode` / `AstValue` / `Span`                          | [ast.rs:7](src/ast.rs#L7)                                                                                                         | Intrusive AST list node, value, source span.                                                                             |
-| `Instruction`                                            | [ast.rs:177](src/ast.rs#L177)                                                                                                     | 27-variant tagged union of supported instructions/directives (incl. `ecall`).                                            |
-| `Region` / `RegionBound` / `RegionPermissions`           | [ast.rs](src/ast.rs)                                                                                                              | The `#@` directive: region bounds (immediate/register) + `r`/`w`/`rw`.                                                   |
-| `Type` / `FlatType` / `Locality`                         | [ast.rs:335](src/ast.rs#L335) / [276](src/ast.rs#L279) / [313](src/ast.rs#L316)                                                   | Compile-time types; `FlatType` is the runtime type-number encoding.                                                      |
-| `Explorerer`                                             | [verifier.rs:150](src/verifier.rs#L150)                                                                                           | The verification state machine.                                                                                          |
-| `VerifierNode` / `VerifierLeafNode`                      | [verifier.rs:114](src/verifier.rs#L114) / [99](src/verifier.rs#L131)                                                              | Execution-tree interior / frontier nodes.                                                                                |
-| `ExplorePathResult`                                      | [verifier.rs:1708](src/verifier.rs#L1708)                                                                                         | `Valid` / `Invalid` / `Continue(self)`.                                                                                  |
-| `ValidPathResult`                                        | [verifier.rs:1770](src/verifier.rs#L1770)                                                                                         | `{ configuration, touched, jumped, accessed, transitions, uncompactable, pinned_nodes }`; feeds the optimizer + codegen. |
-| `AccessedRanges`                                         | [verifier_types.rs](src/verifier_types.rs)                                                                                        | `BTreeMap<Label, BTreeSet<(u64, u64)>>`: runtime-accessed bytes per region; drives dead-data elimination.                |
-| `AccessTransitions`                                      | [verifier_types.rs](src/verifier_types.rs)                                                                                        | Per-node `(label, from, to)` pointer transitions; drives layout compaction's instruction rewriting.                      |
-| `InnerVerifierConfiguration` / `Section` / `Permissions` | [verifier.rs:71](src/verifier.rs#L71) / [46](src/verifier.rs#L77) / [53](src/verifier.rs#L84)                                     | Per-system input: harts + memory map.                                                                                    |
-| `MemoryValue`                                            | [verifier_types.rs:660](src/verifier_types.rs#L660)                                                                               | Universal symbolic value (ranges / list / ptr / csr).                                                                    |
-| `MemoryLabel` / `MemoryPtr`                              | [verifier_types.rs:1235](src/verifier_types.rs#L1235) / [1189](src/verifier_types.rs#L1188)                                       | Label-tagged symbolic memory & pointers.                                                                                 |
-| `State` / `MemoryMap` / `RegisterValues`                 | [verifier_types.rs:1554](src/verifier_types.rs#L1554) / [1260](src/verifier_types.rs#L1259) / [1552](src/verifier_types.rs#L1680) | Reconstructed machine state.                                                                                             |
-| `TypeConfiguration` / `LabelLocality`                    | [verifier_types.rs:1726](src/verifier_types.rs#L1726) / [1573](src/verifier_types.rs#L1702)                                       | Inferred per-variable type+locality; the proof output.                                                                   |
+- `TranslateError` ([hl.rs:41](src/hl.rs#L41)): `{ line, message }` for an `hl`
+  translation failure (1-based line; `translate` never panics).
+- `AstNode` / `AstValue` / `Span` ([ast.rs:7](src/ast.rs#L7)): intrusive AST
+  list node, value, source span.
+- `Instruction` ([ast.rs:177](src/ast.rs#L177)): 27-variant tagged union of
+  supported instructions/directives (incl. `ecall`).
+- `Region` / `RegionBound` / `RegionPermissions` ([ast.rs](src/ast.rs)): the
+  `#@` directive: region bounds (immediate/register) + `r`/`w`/`rw`.
+- `Type` / `FlatType` / `Locality` ([ast.rs:335](src/ast.rs#L335) /
+  [276](src/ast.rs#L279) / [313](src/ast.rs#L316)): compile-time types;
+  `FlatType` is the runtime type-number encoding.
+- `Explorerer` ([verifier.rs:150](src/verifier.rs#L150)): the verification
+  state machine.
+- `VerifierNode` / `VerifierLeafNode` ([verifier.rs:114](src/verifier.rs#L114)
+  / [99](src/verifier.rs#L131)): execution-tree interior / frontier nodes.
+- `ExplorePathResult` ([verifier.rs:1708](src/verifier.rs#L1708)): `Valid` /
+  `Invalid` / `Continue(self)`.
+- `ValidPathResult` ([verifier.rs:1770](src/verifier.rs#L1770)):
+  `{ configuration, touched, jumped, accessed, transitions, uncompactable,
+  pinned_nodes }`; feeds the optimizer + codegen.
+- `AccessedRanges` ([verifier_types.rs](src/verifier_types.rs)):
+  `BTreeMap<Label, BTreeSet<(u64, u64)>>`: runtime-accessed bytes per region;
+  drives dead-data elimination.
+- `AccessTransitions` ([verifier_types.rs](src/verifier_types.rs)): per-node
+  `(label, from, to)` pointer transitions; drives layout compaction's
+  instruction rewriting.
+- `InnerVerifierConfiguration` / `Section` / `Permissions`
+  ([verifier.rs:71](src/verifier.rs#L71) / [46](src/verifier.rs#L77) /
+  [53](src/verifier.rs#L84)): per-system input: harts + memory map.
+- `MemoryValue` ([verifier_types.rs:660](src/verifier_types.rs#L660)):
+  universal symbolic value (ranges / list / ptr / csr).
+- `MemoryLabel` / `MemoryPtr`
+  ([verifier_types.rs:1235](src/verifier_types.rs#L1235) /
+  [1189](src/verifier_types.rs#L1188)): label-tagged symbolic memory &
+  pointers.
+- `State` / `MemoryMap` / `RegisterValues`
+  ([verifier_types.rs:1554](src/verifier_types.rs#L1554) /
+  [1260](src/verifier_types.rs#L1259) / [1552](src/verifier_types.rs#L1680)):
+  reconstructed machine state.
+- `TypeConfiguration` / `LabelLocality`
+  ([verifier_types.rs:1726](src/verifier_types.rs#L1726) /
+  [1573](src/verifier_types.rs#L1702)): inferred per-variable type+locality;
+  the proof output.
 
 ## 9. Conventions & gotchas
 
