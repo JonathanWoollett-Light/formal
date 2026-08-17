@@ -26,6 +26,15 @@ thousands = "0.2"
 # build needs no MPI.
 mpi = { version = "0.8", optional = true }
 
+[build-dependencies]
+# build.rs only: tcgetpgrp/getpgrp, to prompt (sudo, the reboot question) only
+# when the build owns the foreground of its controlling terminal - a
+# backgrounded `cargo build &` reading /dev/tty would be stopped by SIGTTIN.
+# (Unconditional rather than [target.'cfg(unix)'] because target-specific
+# build-dependencies resolve against the target, not the host; unused on
+# Windows.)
+libc = "0.2"
+
 [features]
 # The multi-node distributed backend (src/dist.rs). Requires a system MPI
 # library + a C compiler to build; `build.rs` provisions them.

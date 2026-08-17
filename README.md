@@ -29,12 +29,12 @@ the (planned) `--features hpc` distributed backend. So:
 cargo build      # builds the compiler AND sets up the environment
 ```
 
-build.rs detects each dependency and best-effort installs the ones it can do
-non-interactively (via the platform package manager); anything that needs admin
-or a reboot (installing WSL itself, MS-MPI, a large toolchain) is reported as the
-exact command to run. It **never fails the build** (the compiler builds fine with
-none of these present; they only enable the QEMU boots / the `hpc` feature) and
-is idempotent (it acts only on what is missing). Control it with:
+build.rs detects each dependency and installs whatever is missing, escalating
+(`sudo` / UAC) only where required; if a step needs a reboot to finish, setup
+resumes at your next login. It **never fails the build** (the compiler builds
+fine with none of these present; they only enable the QEMU boots / the `hpc`
+feature). Under CI it only detects and reports (set `FORMAL_SETUP=install` to
+install there too). Control it with:
 
 - `FORMAL_NO_SETUP=1` - skip the setup step entirely.
 - `FORMAL_SETUP=detect` - report what is missing without installing anything.

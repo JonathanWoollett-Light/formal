@@ -65,10 +65,18 @@ through `formal::compile` / the generated project's `cargo run`.
 ## 2. Commands
 
 `cargo build` is the **single setup entry point**: [build.rs](build.rs) detects
-(and best-effort, non-interactively installs) the system dependencies the tests
-and the distributed backend need (WSL on Windows, `qemu-system-riscv64`, the
-RISC-V GNU toolchain, a system MPI library), reporting an exact command for
-anything needing admin/reboot. It never fails the build and is idempotent;
+and installs the system dependencies the tests and the distributed backend need
+(WSL on Windows, `qemu-system-riscv64`, the RISC-V GNU toolchain, a system MPI
+library), escalating where required (a UAC dialog for installing WSL itself,
+`wsl -u root` / `sudo` for the apt packages). When a step needs a reboot to
+finish (installing WSL; an apt install that newly leaves
+`/var/run/reboot-required`), it asks `[y/N]` on the console device
+(`CONIN$`/`/dev/tty`, since Cargo captures build-script output), schedules
+`cargo build` to re-run at the next login (an `HKCU` RunOnce entry on Windows;
+on Linux a self-removing hook in the login-shell rc files, which expires after
+two weeks if it never fires), and reboots; being idempotent, the re-run
+continues where it left off.
+It never fails the build, and never prompts under `CI` or without a console;
 control it with `FORMAL_NO_SETUP=1` (skip), `FORMAL_SETUP=detect` (report only),
 or `FORMAL_SETUP=install` (install even under CI). See the README "Setup"
 section.
