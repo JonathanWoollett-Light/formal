@@ -21,8 +21,11 @@
 //!   is privileged in the distribution without any UAC prompt or WSL password.
 //!   Installing WSL itself needs host admin, so that (only) raises a UAC prompt
 //!   (`Start-Process -Verb RunAs`). On a native Linux host the apt install uses
-//!   `sudo`, which prompts for your password on the terminal. A multi-GB upstream
-//!   toolchain release is still reported, not downloaded silently.
+//!   `sudo`, which prompts for your password on the terminal; with no console
+//!   but an explicit `FORMAL_SETUP=install` (the CI opt-in) it uses `sudo -n`,
+//!   which never prompts and so either works (passwordless sudo, the standard
+//!   CI setup) or fails fast. A multi-GB upstream toolchain release is still
+//!   reported, not downloaded silently.
 //! - **Handles reboots.** When a step needs a reboot to finish (installing WSL
 //!   itself; an apt install that newly leaves `/var/run/reboot-required`), it
 //!   asks `[y/N]` on the console. On `y` it first schedules `cargo build` to
@@ -597,20 +600,26 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         // password on the controlling terminal. Cargo nulls a build script's
         // stdin and pipes its output, so the std streams say nothing about
         // interactivity; console() is the real test (an openable /dev/tty AND
-        // this build in its foreground, and not CI) - anything else instructs
-        // instead of hanging.
-        if console().is_some() {
+        // this build in its foreground, and not CI). With no console but an
+        // explicit `FORMAL_SETUP=install` (the CI opt-in), `sudo -n` is used
+        // instead: it never prompts, so it either works (passwordless sudo,
+        // the standard CI configuration) or fails fast into the instruction
+        // note. Anything else instructs instead of hanging.
+        let explicit_install = std::env::var("FORMAL_SETUP").as_deref() == Ok("install");
+        let sudo = if console().is_some() {
+            Some("sudo")
+        } else if explicit_install {
+            Some("sudo -n")
+        } else {
+            None
+        };
+        if let Some(sudo) = sudo {
             let reboot_already_pending = Path::new("/var/run/reboot-required").exists();
             let apt = format!(
-                "sudo dpkg --configure -a && sudo apt-get update \
-                 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}"
+                "{sudo} dpkg --configure -a && {sudo} apt-get update \
+                 && {sudo} DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}"
             );
-            let installed = try_install(
-                report,
-                "apt packages (via sudo, will prompt)",
-                "sh",
-                &["-c", &apt],
-            );
+            let installed = try_install(report, "apt packages (via sudo)", "sh", &["-c", &apt]);
             // apt can pull in packages (a kernel, libc) whose postinst requests
             // a reboot; offer to do it now and resume setup afterwards. Only a
             // flag this install newly created counts - a pre-existing one is
