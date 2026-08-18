@@ -783,15 +783,17 @@ fn factory_default_windows() {
     let cpus = guest_cpus();
     progress.update(|| "booting the factory Windows guest".to_string());
     // `-cpu host,hv-passthrough` hands the guest the virtualisation extensions
-    // and Hyper-V enlightenments it needs to run WSL2 itself; AHCI + e1000e
-    // because a factory Windows has no virtio drivers.
+    // and Hyper-V enlightenments it needs to run WSL2 itself. IDE disk (no
+    // storage driver injected), but virtio-net for the NIC: the image build
+    // installs NetKVM at provisioning because Server 2022's in-box e1000e is
+    // unreliable under qemu (no DHCP).
     sh_ok(
         "boot the factory Windows guest",
         &format!(
             "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host,hv-passthrough \
              -smp {cpus} -m 16384 \
              -drive file='{work}/disk.qcow2',if=ide,cache=unsafe,discard=unmap \
-             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device e1000e,netdev=n0 \
+             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device virtio-net-pci,netdev=n0 \
              -display none -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
             vm.port
         ),

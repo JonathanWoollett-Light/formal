@@ -75,7 +75,11 @@
   </settings>
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>factory</ComputerName>
+      <!-- Must differ from the account name: when they collide, group-adds
+           resolve the name to the machine account and fail with 0x8007056b,
+           leaving the user in no groups (no admin, no driver installs, and on
+           Server not even shutdown rights). -->
+      <ComputerName>factory-pc</ComputerName>
     </component>
   </settings>
   <settings pass="oobeSystem">
@@ -122,33 +126,43 @@
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>2</Order>
-          <Description>Never sleep</Description>
-          <CommandLine>powercfg -change -standby-timeout-ac 0</CommandLine>
+          <Description>Never sleep, never blank the console (screens stay snapshotable over VNC)</Description>
+          <CommandLine>cmd /c powercfg -change -standby-timeout-ac 0 &amp;&amp; powercfg -change -monitor-timeout-ac 0</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>3</Order>
-          <Description>Install the OpenSSH server</Description>
-          <CommandLine>powershell -NoProfile -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"</CommandLine>
+          <Description>Install the NetKVM (virtio) network driver from the answer CD; the guest has no NIC driver until now</Description>
+          <CommandLine>powershell -NoProfile -Command "$d=(Get-Volume -FileSystemLabel ANSWER).DriveLetter; pnputil /add-driver ($d+':\NetKVM\2k22\amd64\netkvm.inf') /install"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>4</Order>
+          <Description>Fetch the OpenSSH server (the standard Win32-OpenSSH release; Windows Update's capability install wedges behind NAT). Retries ride out DHCP settling on the just-installed NIC</Description>
+          <CommandLine>curl.exe -L --connect-timeout 15 --max-time 600 --retry 12 --retry-delay 5 --retry-all-errors -o %TEMP%\OpenSSH-Win64.zip https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>5</Order>
+          <Description>Install the OpenSSH server to C:\OpenSSH</Description>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path $env:TEMP\OpenSSH-Win64.zip -DestinationPath C:\; Move-Item C:\OpenSSH-Win64 C:\OpenSSH; &amp; C:\OpenSSH\install-sshd.ps1"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>6</Order>
           <Description>Start sshd now and at every boot</Description>
           <CommandLine>powershell -NoProfile -Command "Set-Service sshd -StartupType Automatic; Start-Service sshd"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>5</Order>
+          <Order>7</Order>
           <Description>Authorize the image's SSH key for the administrator</Description>
           <CommandLine>powershell -NoProfile -Command "Set-Content -Path $env:ProgramData\ssh\administrators_authorized_keys -Value '@PUBKEY@'; icacls $env:ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F'"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>6</Order>
+          <Order>8</Order>
           <Description>Allow SSH through the firewall</Description>
           <CommandLine>netsh advfirewall firewall add rule name="OpenSSH" dir=in action=allow protocol=TCP localport=22</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <Order>7</Order>
-          <Description>Provisioning complete: power off (build-image.sh waits for this)</Description>
-          <CommandLine>shutdown /s /t 10</CommandLine>
+          <Order>9</Order>
+          <Description>Power off only when provisioning actually succeeded (sshd exists); otherwise stay up so build-image.sh times out and publishes nothing</Description>
+          <CommandLine>powershell -NoProfile -Command "if (Get-Service sshd -ErrorAction SilentlyContinue) { shutdown /s /t 10 }"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
