@@ -970,9 +970,12 @@ impl Explorerer {
             while let Some(next) = stack.pop() {
                 match &next.as_ref().internal("invalid_path: null node")?.next {
                     InnerNextVerifierNode::Branch(branches) => stack.extend(branches),
-                    InnerNextVerifierNode::Leaf(leaf) => {
+                    // `Leaf(null)` is the not-yet-attached placeholder: nothing
+                    // to free (`dealloc(null)` is UB; rustc 1.97+ aborts on it).
+                    InnerNextVerifierNode::Leaf(leaf) if !leaf.is_null() => {
                         dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>())
                     }
+                    InnerNextVerifierNode::Leaf(_) => {}
                 }
                 // `next` is a `VerifierNode` (not a leaf): free it with its own layout.
                 dealloc(next.cast(), Layout::new::<VerifierNode>());
@@ -1433,9 +1436,12 @@ impl Drop for Explorerer {
                 debug_assert!(check.next().is_some());
                 match &(*current).next {
                     InnerNextVerifierNode::Branch(branch) => stack.extend_from_slice(branch),
-                    InnerNextVerifierNode::Leaf(leaf) => {
+                    // `Leaf(null)` is the not-yet-attached placeholder: nothing
+                    // to free (`dealloc(null)` is UB; rustc 1.97+ aborts on it).
+                    InnerNextVerifierNode::Leaf(leaf) if !leaf.is_null() => {
                         dealloc(leaf.cast(), Layout::new::<VerifierLeafNode>());
                     }
+                    InnerNextVerifierNode::Leaf(_) => {}
                 }
                 dealloc(current.cast(), Layout::new::<VerifierNode>());
             }
