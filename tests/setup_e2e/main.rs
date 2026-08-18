@@ -11,8 +11,9 @@
 //! (CLAUDE.md: one real end-to-end approach).
 //!
 //! Both tests are `#[ignore]`d: they download images, saturate the machine
-//! for an hour or more, and need virtualisation the host may not have. Run
-//! them deliberately:
+//! (the Linux one takes about 3 minutes on a 24-core host; expect longer on
+//! modest hardware), and need virtualisation the host may not have. Run them
+//! deliberately:
 //!
 //! ```sh
 //! cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
@@ -176,10 +177,14 @@ fn wait_ssh(vm: &Vm, up: bool, what: &str, deadline: Duration, progress: &mut Pr
     );
 }
 
-/// Runs a long in-guest command over `ssh -tt` (a real pty, so setup's
-/// console prompts appear; the piped `y` answers the reboot question if it
-/// comes), streaming the transcript to `target/tmp/test-logs/<test>/
-/// <log_name>.log` for live tailing. Returns (exited zero, transcript).
+/// Runs a long in-guest command, streaming the transcript to
+/// `target/tmp/test-logs/<test>/<log_name>.log` for live tailing. With
+/// `pty` the command runs under `ssh -tt` (a real terminal, so setup's
+/// console prompts appear and the piped `y` answers the reboot question if
+/// it comes) - use it for the `cargo build` phases, whose prompts are part
+/// of what is under test. Without it the command gets no terminal (plain
+/// line output; nextest would otherwise render its live progress bar as
+/// escape codes all over the transcript). Returns (exited zero, transcript).
 fn ssh_stream(
     vm: &Vm,
     what: &str,
@@ -187,6 +192,7 @@ fn ssh_stream(
     log_name: &str,
     secs: u64,
     progress: &mut Progress,
+    pty: bool,
 ) -> (bool, String) {
     let host_log = format!("{}/{log_name}.log", test_log_dir());
     let _ = std::fs::remove_file(&host_log);
@@ -195,10 +201,17 @@ fn ssh_stream(
     // arrives as Ctrl+J and never completes the console read), while a Linux
     // pty in canonical mode maps CR to NL via ICRNL - so CR answers the
     // prompt on both guests.
-    let script = format!(
-        "printf 'y\\r' | timeout {secs} {} -tt '{cmd}' >\"{log_env}\" 2>&1",
-        ssh_base(vm)
-    );
+    let script = if pty {
+        format!(
+            "printf 'y\\r' | timeout {secs} {} -tt '{cmd}' >\"{log_env}\" 2>&1",
+            ssh_base(vm)
+        )
+    } else {
+        format!(
+            "timeout {secs} {} '{cmd}' </dev/null >\"{log_env}\" 2>&1",
+            ssh_base(vm)
+        )
+    };
     log_driver(&format!("$ {script}"));
     let worker = {
         let script = script.clone();
@@ -312,13 +325,14 @@ impl Drop for VmGuard {
     }
 }
 
-/// The guest CPU count: the host's, clamped to a sensible VM size.
+/// The guest CPU count: all host cores minus two of headroom (the in-guest
+/// compiles dominate the wall-clock, so the guest gets the machine).
 fn guest_cpus() -> u32 {
-    sh_ok("count host CPUs", "nproc")
+    let n = sh_ok("count host CPUs", "nproc")
         .trim()
         .parse::<u32>()
-        .unwrap_or(4)
-        .clamp(2, 8)
+        .unwrap_or(4);
+    n.saturating_sub(2).clamp(2, 32)
 }
 
 /// The absolute `$HOME` of the shell environment (resolved once so workspace
@@ -413,7 +427,7 @@ fn assert_setup_silent(what: &str, ok: bool, transcript: &str) {
 
 #[test]
 #[ignore = "boots a factory-default Linux VM and runs full setup + the whole suite inside \
-            (an hour or more; downloads a cloud image once). DEVELOPMENT.md §6.2."]
+            (about 3 minutes on a 24-core host; downloads a cloud image once). DEVELOPMENT.md §6.2."]
 fn factory_default_linux() {
     inner_guard();
     let _ = std::fs::remove_file(format!("{}/driver.log", test_log_dir()));
@@ -461,12 +475,16 @@ fn factory_default_linux() {
     // installer.
     // The bootcmd stops Ubuntu's background auto-updates: on a factory image
     // they grab the dpkg lock minutes after every boot and would race the
-    // real apt runs under test. Operator machine-configuration, not a shim
-    // (setup itself is untouched); it runs on every boot, so it also covers
-    // the post-reboot resumed build.
+    // real apt runs under test. The swapfile stands in for the swap any real
+    // installation has (cloud images alone omit it): without it the suite's
+    // memory-heavy verifier tests, 20+ at once, get null allocations and
+    // abort. Operator machine-configuration, not a shim (setup itself is
+    // untouched); the bootcmd runs on every boot, so it also covers the
+    // post-reboot resumed build.
     let user_data = format!(
         "#cloud-config\n\
          ssh_authorized_keys:\n  - {}\n\
+         swap:\n  filename: /swap.img\n  size: 8589934592\n  maxsize: 8589934592\n\
          bootcmd:\n  - [sh, -c, \"systemctl stop --no-block apt-daily.timer apt-daily-upgrade.timer || true; \
          systemctl mask --now apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true\"]\n",
         pubkey.trim()
@@ -503,8 +521,8 @@ fn factory_default_linux() {
     sh_ok(
         "boot the factory guest",
         &format!(
-            "qemu-system-x86_64 -enable-kvm -cpu host -smp {cpus} -m 8192 \
-             -drive file='{work}/disk.qcow2',if=virtio \
+            "qemu-system-x86_64 -enable-kvm -cpu host -smp {cpus} -m 24576 \
+             -drive file='{work}/disk.qcow2',if=virtio,cache=unsafe,discard=unmap \
              -drive file='{work}/seed.iso',media=cdrom \
              -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device virtio-net-pci,netdev=n0 \
              -display none -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
@@ -553,6 +571,7 @@ fn factory_default_linux() {
         "prep",
         1800,
         &mut progress,
+        false,
     );
     assert!(ok, "guest prep failed (see prep.log)");
 
@@ -567,6 +586,7 @@ fn factory_default_linux() {
         "build1",
         5400,
         &mut progress,
+        true,
     );
     assert!(
         build1.contains("formal setup:"),
@@ -638,6 +658,7 @@ fn factory_default_linux() {
         "build-hpc",
         5400,
         &mut progress,
+        true,
     );
     assert!(ok, "the --features hpc build failed (see build-hpc.log)");
 
@@ -652,6 +673,7 @@ fn factory_default_linux() {
         "build2",
         3600,
         &mut progress,
+        true,
     );
     assert_setup_silent("re-run after setup", ok, &build2);
     for (what, probe) in [
@@ -680,6 +702,7 @@ fn factory_default_linux() {
         "suite",
         10800,
         &mut progress,
+        false,
     );
     assert!(
         ok,
@@ -766,8 +789,8 @@ fn factory_default_windows() {
         "boot the factory Windows guest",
         &format!(
             "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host,hv-passthrough \
-             -smp {cpus} -m 12288 \
-             -drive file='{work}/disk.qcow2',if=ide \
+             -smp {cpus} -m 16384 \
+             -drive file='{work}/disk.qcow2',if=ide,cache=unsafe,discard=unmap \
              -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device e1000e,netdev=n0 \
              -display none -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
             vm.port
@@ -825,6 +848,7 @@ fn factory_default_windows() {
         "prep",
         7200,
         &mut progress,
+        false,
     );
     assert!(ok, "guest prep failed (see prep.log)");
 
@@ -852,6 +876,7 @@ fn factory_default_windows() {
         "build1",
         7200,
         &mut progress,
+        true,
     );
     assert!(
         build1.contains("formal setup:"),
@@ -948,6 +973,7 @@ fn factory_default_windows() {
         "build1b",
         5400,
         &mut progress,
+        true,
     );
     assert!(ok, "the post-reboot build failed (see build1b.log)");
 
@@ -988,6 +1014,7 @@ fn factory_default_windows() {
         "build-hpc",
         5400,
         &mut progress,
+        true,
     );
     assert!(ok, "the --features hpc build failed (see build-hpc.log)");
 
@@ -1015,6 +1042,7 @@ fn factory_default_windows() {
         "build2",
         3600,
         &mut progress,
+        true,
     );
     assert_setup_silent("re-run after setup", ok, &build2);
     for (what, probe) in [
@@ -1074,6 +1102,7 @@ fn factory_default_windows() {
         "suite",
         14400,
         &mut progress,
+        false,
     );
     assert!(
         ok,

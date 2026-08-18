@@ -37,8 +37,7 @@ The **logic** the distributed backend needs is implemented and unit-tested in
   Both are exercised by [`tests/mpi_cluster`](../tests/mpi_cluster/main.rs) under
   `mpirun` (the work-stealing path at 8/16/24 ranks). Build/run on Linux or under
   WSL: `cargo build --features hpc` then `mpirun -n <N> target/debug/formal
-  mpi-bench` (`build.rs` provisions the system MPI + libclang when `--features hpc`
-  is set).
+  mpi-bench` (`build.rs` provisions the system MPI + libclang).
 
 What remains, and **requires a multi-node cluster to validate** (so it is not
 exercised by `cargo test`):

@@ -91,7 +91,7 @@ cargo clippy          # lints the code
 cargo run --example translate -- tests/uart_hello/input.hl tests/uart_hello/dialect.s
                       # regenerate a test's stored dialect from its hl source
 cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
-                      # factory-default setup e2e in a VM (§6.2; an hour+)
+                      # factory-default setup e2e in a VM (§6.2; ~3 min)
 ```
 
 `cargo-nextest` is the preferred runner (install once with
@@ -1433,7 +1433,7 @@ Rust, unpack this repository), runs `cargo build` over `ssh -tt` - a real
 terminal, so setup's console prompts genuinely appear and a piped `y` answers
 the reboot question - rides through the reboot when setup requests one, then
 runs the **full test suite inside the guest**. Run them deliberately (they
-download images and take an hour or more):
+download images; the Linux one takes about 3 minutes on a 24-core host):
 
 ```sh
 cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
@@ -1563,7 +1563,7 @@ sequential `Explorerer` which stays as the reference oracle):
       union. `all_gather_bytes` is the var-count all-gather both use.
 
   `formal mpi-selftest` runs both axes end to end. Building needs a system MPI +
-  libclang (provisioned by `build.rs` under `--features hpc`), so it builds/runs
+  libclang (provisioned by `build.rs` alongside MPI), so it builds/runs
   on Linux / under WSL (see [`deploy/`](deploy/) for the k8s + Kubeflow MPI
   Operator target). The remaining work is purely a *scheduling* upgrade -
   replacing the per-wave barrier with lifeline work-stealing + Mattern

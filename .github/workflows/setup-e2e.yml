@@ -23,7 +23,7 @@ on:
         type: string
         default: ""
   schedule:
-    - cron: "14 3 * * 1" # weekly: the Linux factory run takes about an hour
+    - cron: "14 3 * * 1" # weekly (the run takes ~3 min on a fast host; longer on hosted runners)
 
 jobs:
   linux-factory:

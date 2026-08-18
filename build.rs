@@ -543,7 +543,7 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
         || [ -x \"$HOME/riscv-toolchain/riscv/bin/riscv64-unknown-elf-as\" ]";
 
     // (presence probe, apt packages that provide it, human name).
-    let mut deps: Vec<(&str, &str, &str)> = vec![
+    let deps: Vec<(&str, &str, &str)> = vec![
         (
             "command -v qemu-system-riscv64",
             "qemu-system-misc",
@@ -568,17 +568,19 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
             "libopenmpi-dev openmpi-bin",
             "system MPI (for the --features hpc distributed backend)",
         ),
-    ];
-    // When building `--features hpc`, rsmpi's `mpi-sys` runs bindgen, which needs
-    // libclang. Cargo sets `CARGO_FEATURE_HPC` for the build script when the
-    // feature is enabled, so pull in clang/libclang only then.
-    if std::env::var_os("CARGO_FEATURE_HPC").is_some() {
-        deps.push((
-            "ldconfig -p 2>/dev/null | grep -q libclang || command -v clang",
+        // clang/libclang belong with MPI, not behind CARGO_FEATURE_HPC: rsmpi's
+        // `mpi-sys` runs bindgen, and within one `cargo build --features hpc`
+        // there is no ordering between this script's apt and mpi-sys's bindgen,
+        // so the toolchain must already be present from the plain build. The
+        // probe demands the clang driver (its builtin headers provide stddef.h)
+        // AND the real libclang - `grep -q libclang` alone is fooled by
+        // libclang-cpp.so, which bindgen cannot use.
+        (
+            "command -v clang >/dev/null && ldconfig -p 2>/dev/null | grep -Eq 'libclang(-[0-9]+)?\\.so'",
             "clang libclang-dev",
-            "libclang (for rsmpi's bindgen, --features hpc)",
-        ));
-    }
+            "clang/libclang (for rsmpi's bindgen, --features hpc)",
+        ),
+    ];
 
     let missing: Vec<&(&str, &str, &str)> = deps.iter().filter(|(p, _, _)| !present(p)).collect();
     if missing.is_empty() {
