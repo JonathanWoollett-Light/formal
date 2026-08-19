@@ -19,8 +19,11 @@
 //! - **Escalates where genuinely required.** On Windows the QEMU / RISC-V
 //!   toolchain / MPI packages install *inside WSL as root* (`wsl -u root`), which
 //!   is privileged in the distribution without any UAC prompt or WSL password.
-//!   Installing WSL itself needs host admin, so that (only) raises a UAC prompt
-//!   (`Start-Process -Verb RunAs`). On a native Linux host the apt install uses
+//!   Installing WSL itself needs host admin: `wsl --install` is tried directly
+//!   first (an admin token - an admin terminal, or any Windows OpenSSH session
+//!   of an admin user - needs no ceremony), with a UAC elevation request
+//!   (`Start-Process -Verb RunAs`) as the fallback, judged by the resulting
+//!   feature state rather than exit codes. On a native Linux host the apt install uses
 //!   `sudo`, which prompts for your password on the terminal; with no console
 //!   but an explicit `FORMAL_SETUP=install` (the CI opt-in) it uses `sudo -n`,
 //!   which never prompts and so either works (passwordless sudo, the standard
@@ -483,14 +486,27 @@ fn setup_windows(report: &mut Report, install: bool) {
     let have_wsl = runs("wsl", &["--status"]);
     if !have_wsl {
         if install {
-            // Installing WSL needs Windows admin: request elevation (UAC) and
-            // run `wsl --install` in the elevated shell. Windows then needs a
-            // reboot to finish enabling it; offer_reboot prompts, schedules the
-            // post-login resume, and reboots.
-            if elevate_windows(report, "WSL", "wsl --install") {
+            // Try `wsl --install` directly first: with an administrator token
+            // (an admin terminal, or any Windows OpenSSH session of an admin
+            // user) it works with no UAC ceremony - and `Start-Process -Verb
+            // RunAs` is unreliable from non-interactive sessions. Its exit
+            // code is useless either way (nonzero even on success while a
+            // reboot is pending), so judge by the ground truth instead: the
+            // optional-feature state. Fall back to a UAC elevation request
+            // only when the direct run left the features untouched.
+            let _ = runs("wsl", &["--install"]);
+            if !wsl_features_coming() {
+                elevate_windows(report, "WSL", "wsl --install");
+            }
+            if wsl_features_coming() {
+                report.note("WSL: features enabled (the distribution follows after the reboot).");
                 offer_reboot(
                     report,
                     "WSL is installed, but Windows must reboot to finish enabling it.",
+                );
+            } else {
+                report.note(
+                    "WSL: could not be installed automatically. Run in an admin shell:  wsl --install",
                 );
             }
         } else {
@@ -670,9 +686,31 @@ fn provision_linux(report: &mut Report, install: bool, via_wsl: bool) {
     );
 }
 
+/// Whether the WSL Windows features are enabled or pending-enable: the ground
+/// truth `wsl --install` leaves behind (its exit code is nonzero even on
+/// success while the reboot is pending). The PowerShell enum prints
+/// locale-independently ("Enabled"/"EnablePending"; "Disabled" never contains
+/// a capital-E "Enable"). Needs an admin token, like the install itself; for
+/// a non-admin user this stays false and setup conservatively reports the
+/// manual command even if a UAC-elevated install succeeded.
+fn wsl_features_coming() -> bool {
+    Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State; \
+             (Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform).State",
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).matches("Enable").count() >= 2)
+        .unwrap_or(false)
+}
+
 /// Request Windows privilege escalation (a UAC prompt) and run `command` in the
-/// elevated shell, waiting for it; returns whether it exited successfully.
-/// Used for the only host-admin action: installing WSL itself.
+/// elevated shell, waiting for it; returns whether it exited successfully (for
+/// `wsl --install` the caller must judge by `wsl_features_coming` instead,
+/// since that command's exit code is unreliable). Used for the only host-admin
+/// action: installing WSL itself.
 fn elevate_windows(report: &mut Report, human: &str, command: &str) -> bool {
     // PowerShell `Start-Process -Verb RunAs` raises the UAC dialog; `-Wait
     // -PassThru` blocks until the elevated `cmd /c <command>` finishes and
@@ -689,16 +727,7 @@ fn elevate_windows(report: &mut Report, human: &str, command: &str) -> bool {
         .args(["-NoProfile", "-Command", &ps])
         .status()
     {
-        Ok(s) if s.success() => {
-            report.note(format!("{human}: installed (elevated via UAC)."));
-            true
-        }
-        Ok(_) => {
-            report.note(format!(
-                "{human}: elevation was declined or the install failed. Run in an admin shell:  {command}"
-            ));
-            false
-        }
+        Ok(s) => s.success(),
         Err(e) => {
             report.note(format!(
                 "{human}: could not request elevation ({e}). Run in an admin shell:  {command}"

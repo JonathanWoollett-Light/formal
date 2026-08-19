@@ -1480,7 +1480,52 @@ cargo nextest run --run-ignored all -E 'test(factory_default_windows)'
 - **Observability.** Live progress streams to
   `target/tmp/test-logs/<test>/e2e.progress`; every driver command is logged
   to `driver.log`, the guest console to `serial.log`, and each long phase
-  (prep, builds, suite) to its own tail-able `.log`.
+  (prep, builds, suite) to its own tail-able `.log`. Both guests expose VNC on
+  loopback (`5947` image build, `5948` Windows test) - snapshot with
+  `vncsnapshot 127.0.0.1:<display>` in WSL when a phase looks stuck.
+
+**Status (2026-08-19), for whoever continues the Windows test.** The Linux
+test **passes** (2m42s, 84/84 in-guest). On Windows everything up to and
+including the reboot is **proven on a real factory guest**: image build (~6
+min with a hot ISO cache), boot, prep (VS Build Tools has 3 bounded attempts;
+the bootstrapper can wedge silently - a WSL restart on the host cured a
+recurring guest-wedge-under-load, suspect the host after its hard crashes),
+`cargo build` detecting WSL missing, installing it directly (no UAC needed
+with an admin token; `wsl --install`'s exit code is *nonzero even on success*,
+so build.rs judges by `Get-WindowsOptionalFeature` ground truth), the `[y/N]`
+prompt answered over ConPTY, RunOnce scheduling, the reboot, and the resumed
+build (its `FORMAL_SETUP=install` env change re-runs build.rs). What remains
+is distribution provisioning and everything after (build1b, WSL-side rustup +
+C linker, hpc build, silent re-run, suite):
+
+- The in-box `wsl --install` distro download dies through slirp
+  (`0x80072ee7`, the MS CDN's DNS; a real resolver via
+  `Set-DnsClientServerAddress` is set for later downloads), `--no-launch` is
+  not in this Windows build's wsl, and `ubuntu*.exe` aliases never exist, so
+  the test now scp's a cached Ubuntu rootfs
+  (`releases.ubuntu.com/noble/ubuntu-24.04.3-wsl-amd64.wsl`, a plain tar.gz)
+  and drives `wsl --import`.
+- **Measured**: this in-box WSL defaults to **WSL 1**, so the import needs no
+  nested virtualisation at all (the L3 question was never actually reached),
+  and a WSL1 import unpacks ~3GB to NTFS in **30+ minutes** (the current
+  900s-per-attempt loop is far too short and an interrupted import leaves an
+  "install in progress" state that needs `wsl --unregister Ubuntu`). Under
+  that I/O load sshd sheds connections for minutes at a time and recovers, so
+  the import must run detached in-guest (`schtasks /create ... /run`, proven)
+  with a patient poll (~45 min deadline), not as a live ssh command.
+- **Next steps**: (1) rework the distro phase to prefer WSL2 - fetch the
+  kernel MSI directly (`wslstorestorage.blob.core.windows.net/wslblob/
+  wsl_update_x64.msi`), `wsl --set-default-version 2`, import (fast, VHDX)
+  which also finally answers whether WSL2 starts at this nesting depth - and
+  fall back to the proven WSL1 path (unregister, detached import, long poll);
+  (2) then the untested tail: build1b, WSL-side prep, hpc, silent re-run,
+  suite - all mirrored from the passing Linux test. WSL1 runs everything the
+  suite needs (TCG QEMU, toolchain, MPI, cargo are plain user space).
+- Everything is cached under `~/.cache/formal-e2e/images/` in WSL (Server
+  eval ISO, virtio-win ISO, the factory image + key, the Ubuntu rootfs);
+  rebuilding the image takes ~6 minutes, so iterate freely. Run the test
+  with, in Git Bash, `MSYS2_ENV_CONV_EXCL='FORMAL_E2E_WINDOWS_IMAGE'` (MSYS
+  path conversion otherwise mangles the WSL path in the variable).
 
 CI ([.github/workflows/setup-e2e.yml](.github/workflows/setup-e2e.yml)) runs
 the Linux test weekly and on demand on standard runners; the Windows test runs

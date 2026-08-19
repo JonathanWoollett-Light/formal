@@ -764,6 +764,23 @@ fn factory_default_windows() {
     let work = format!("{home}/.cache/formal-e2e/windows");
     kill_qemu(&work);
     sh_ok("create the VM workspace", &format!("mkdir -p '{work}'"));
+    // The Ubuntu WSL rootfs, cached like the other images: the guest's WSL
+    // distribution is provisioned with `wsl --import` because the in-box
+    // `wsl --install` distro download does not survive slirp's DNS forwarder
+    // (0x80072ee7) and its appx/OOBE path cannot run headlessly on this
+    // Windows build. The release .wsl file is a plain tar.gz, which even the
+    // in-box `wsl --import` accepts.
+    let images = format!("{home}/.cache/formal-e2e/images");
+    let rootfs = format!("{images}/ubuntu-wsl-rootfs.wsl");
+    progress.update(|| "fetching the Ubuntu WSL rootfs (cached after the first run)".to_string());
+    sh_ok(
+        "fetch the Ubuntu WSL rootfs (cached)",
+        &format!(
+            "mkdir -p '{images}' && [ -f '{rootfs}' ] || {{ curl -fSL --retry 3 -o '{rootfs}.tmp' \
+             'https://releases.ubuntu.com/noble/ubuntu-24.04.3-wsl-amd64.wsl' \
+             && mv '{rootfs}.tmp' '{rootfs}'; }}"
+        ),
+    );
     let vm = Vm {
         port: WINDOWS_SSH_PORT,
         user: "factory",
@@ -782,19 +799,21 @@ fn factory_default_windows() {
     let serial = script_path(&format!("{}/serial.log", test_log_dir()));
     let cpus = guest_cpus();
     progress.update(|| "booting the factory Windows guest".to_string());
-    // `-cpu host,hv-passthrough` hands the guest the virtualisation extensions
-    // and Hyper-V enlightenments it needs to run WSL2 itself. IDE disk (no
+    // Plain `-cpu host` (the configuration the image build boots under):
+    // `hv-passthrough` advertises Hyper-V enlightenments nested KVM cannot
+    // all back and hangs Windows at boot. The guest still sees the AMD-V/VT-x
+    // extensions WSL2 needs via `-cpu host` + nested KVM. IDE disk (no
     // storage driver injected), but virtio-net for the NIC: the image build
     // installs NetKVM at provisioning because Server 2022's in-box e1000e is
-    // unreliable under qemu (no DHCP).
+    // unreliable under qemu (no DHCP). VNC on 127.0.0.1:5948 for inspection.
     sh_ok(
         "boot the factory Windows guest",
         &format!(
-            "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host,hv-passthrough \
+            "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host \
              -smp {cpus} -m 16384 \
              -drive file='{work}/disk.qcow2',if=ide,cache=unsafe,discard=unmap \
              -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device virtio-net-pci,netdev=n0 \
-             -display none -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
+             -display none -vnc 127.0.0.1:48 -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
             vm.port
         ),
     );
@@ -817,24 +836,64 @@ fn factory_default_windows() {
         ),
     );
     // Windows OpenSSH's default shell is cmd; scripts are pushed as .cmd files
-    // with CRLF endings.
+    // with CRLF endings. The VS Build Tools installer is its own phase with
+    // bounded host-side attempts: the bootstrapper occasionally wedges
+    // silently for good, and only killing and rerunning it recovers.
     push_file(
         &vm,
-        "prep.cmd",
+        "prep-tools.cmd",
         &[
             "@echo off",
-            "rem Factory prep: Rust's documented Windows prerequisites (the MSVC build",
-            "rem tools; skipped when the image already carries them) + rustup + unpack.",
-            &format!("set {INNER_MARKER}=1"),
-            "if exist \"%ProgramFiles(x86)%\\Microsoft Visual Studio\\2022\\BuildTools\" goto have_tools",
+            "rem Rust's documented Windows prerequisite: the MSVC build tools",
+            "rem (skipped when the image already carries them).",
+            "if exist \"%ProgramFiles(x86)%\\Microsoft Visual Studio\\2022\\BuildTools\\VC\" exit /b 0",
             "curl -fL -o %TEMP%\\vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe || exit /b 1",
             "%TEMP%\\vs_buildtools.exe --quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended",
             "rem 3010 = success-with-reboot-required; `if errorlevel N` means >= N, so",
             "rem check descending: >= 3011 fails, exactly 3010 passes, other nonzero fails.",
             "if errorlevel 3011 exit /b 1",
-            "if errorlevel 3010 goto have_tools",
+            "if errorlevel 3010 exit /b 0",
             "if errorlevel 1 exit /b 1",
-            ":have_tools",
+            "exit /b 0",
+            "",
+        ]
+        .join("\r\n"),
+    );
+    let mut tools_ok = false;
+    for attempt in 1..=3 {
+        let (ok, _) = ssh_stream(
+            &vm,
+            &format!("guest prep: VS Build Tools (attempt {attempt})"),
+            "cmd /c prep-tools.cmd",
+            "prep-tools",
+            2700,
+            &mut progress,
+            false,
+        );
+        if ok {
+            tools_ok = true;
+            break;
+        }
+        // A timed-out ssh leaves the installer running in-guest; kill it so
+        // the retry does not collide with the wedged instance's mutex.
+        let _ = ssh_try(
+            &vm,
+            "taskkill /f /im vs_buildtools.exe /im setup.exe /im vs_installer.exe /t",
+            60,
+        );
+        std::thread::sleep(Duration::from_secs(10));
+    }
+    assert!(
+        tools_ok,
+        "VS Build Tools did not install after 3 attempts (see prep-tools.log)"
+    );
+    push_file(
+        &vm,
+        "prep.cmd",
+        &[
+            "@echo off",
+            "rem Factory prep after the build tools: rustup + unpack the repo.",
+            &format!("set {INNER_MARKER}=1"),
             "curl -fL -o %TEMP%\\rustup-init.exe https://win.rustup.rs/x86_64 || exit /b 1",
             "%TEMP%\\rustup-init.exe -y --profile minimal || exit /b 1",
             "if not exist formal mkdir formal",
@@ -845,10 +904,10 @@ fn factory_default_windows() {
     );
     let (ok, _) = ssh_stream(
         &vm,
-        "guest prep (VS Build Tools + rustup + unpack)",
+        "guest prep (rustup + unpack)",
         "cmd /c prep.cmd",
         "prep",
-        7200,
+        1800,
         &mut progress,
         false,
     );
@@ -932,24 +991,53 @@ fn factory_default_windows() {
         std::thread::sleep(Duration::from_secs(20));
     }
 
-    // Then: a ready distribution. `wsl --install`'s own continuation registers
-    // Ubuntu at the same autologon, and its first-launch setup normally blocks
-    // on an interactive create-a-user prompt nobody answers here, so drive it
-    // with the distro's documented headless init (root user, no prompt).
-    let deadline = Instant::now() + Duration::from_secs(2700);
+    // Then: a ready distribution, provisioned deterministically with
+    // `wsl --import` of the cached Ubuntu rootfs (see the fetch above). Point
+    // the guest at a real IPv4 resolver first - operator machine
+    // configuration, like cloud-init's on the Linux side - so later in-guest
+    // downloads (rustup and friends) do not depend on slirp's DNS forwarder.
+    let _ = ssh_try(
+        &vm,
+        "powershell -NoProfile -Command \"Get-NetAdapter | Where-Object Status -eq Up | \
+         Set-DnsClientServerAddress -ServerAddresses 1.1.1.1,8.8.8.8\"",
+        180,
+    );
+    // Retried: right after the resume the guest is at its busiest and sshd
+    // sheds the occasional connection.
+    let scp = format!(
+        "scp -i '{}' -P {} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+         -o LogLevel=ERROR '{rootfs}' {}@127.0.0.1:ubuntu-rootfs.wsl",
+        vm.key, vm.port, vm.user
+    );
+    let mut copied = false;
+    for _ in 0..5 {
+        if sh(&scp).status.success() {
+            copied = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(20));
+    }
+    assert!(
+        copied,
+        "could not copy the Ubuntu WSL rootfs into the guest (see driver.log)"
+    );
+    let deadline = Instant::now() + Duration::from_secs(1800);
     loop {
         assert!(
             Instant::now() < deadline,
             "no WSL distribution became ready after the reboot (wsl -e true keeps \
-             failing; check `wsl -l -v` and the Ubuntu first-run state in the guest)"
+             failing; check `wsl -l -v` and wsl-import.log in the guest home)"
         );
         progress.update(|| "waiting for the WSL distribution to become ready".to_string());
         if ssh_try(&vm, "wsl -e true", 120).status.success() {
             break;
         }
-        let _ = ssh_try(&vm, "ubuntu.exe install --root", 600);
-        let _ = ssh_try(&vm, "ubuntu2404.exe install --root", 600);
-        std::thread::sleep(Duration::from_secs(20));
+        let _ = ssh_try(
+            &vm,
+            "wsl --import Ubuntu %USERPROFILE%\\wsl-ubuntu ubuntu-rootfs.wsl > wsl-import.log 2>&1",
+            900,
+        );
+        std::thread::sleep(Duration::from_secs(15));
     }
 
     // The resume may have run before the distribution was ready (build.rs then
