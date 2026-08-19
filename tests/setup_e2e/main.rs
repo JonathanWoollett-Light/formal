@@ -1,23 +1,28 @@
-//! Factory-default setup end-to-end tests.
+//! Factory-default setup end-to-end test.
 //!
-//! Each test boots an **empty factory-default machine** as a local VM
-//! (QEMU/KVM), then does exactly what a new user does: install Rust by the
-//! documented steps, unpack this repository, run `cargo build` (the single
-//! setup entry point) on a real terminal (`ssh -tt`, so setup's console
-//! prompts genuinely appear and a piped `y` answers the reboot question),
-//! ride through the reboot when setup requests one, and finally run the full
-//! test suite inside the guest. No shims: the guest runs the real installers
-//! against a real empty system, and the test plays the human at the terminal
-//! (CLAUDE.md: one real end-to-end approach).
+//! Boots an **empty factory-default Linux machine** as a local VM (QEMU/KVM),
+//! then does exactly what a new user does: install Rust by the documented
+//! steps, unpack this repository, run `cargo build` (the single setup entry
+//! point) on a real terminal (`ssh -tt`, so setup's console prompts genuinely
+//! appear and a piped `y` answers the reboot question), ride through the
+//! reboot when setup requests one, and finally run the full test suite inside
+//! the guest. No shims: the guest runs the real installers against a real
+//! empty system, and the test plays the human at the terminal (CLAUDE.md: one
+//! real end-to-end approach).
 //!
-//! Both tests are `#[ignore]`d: they download images, saturate the machine
-//! (the Linux one takes about 3 minutes on a 24-core host; expect longer on
-//! modest hardware), and need virtualisation the host may not have. Run them
+//! (A Windows sibling existed and proved setup's WSL-install/reboot/
+//! resume flow on a factory Server guest, but WSL2 inside a guest needs a
+//! virtualisation depth no Windows host or hosted runner provides, so it was
+//! removed; `git log -- tests/setup_e2e/windows` has the full recipe and
+//! findings should it return.)
+//!
+//! The test is `#[ignore]`d: it downloads an image once, saturates the
+//! machine (about 3 minutes on a 24-core host; expect longer on modest
+//! hardware), and needs virtualisation the host may not have. Run it
 //! deliberately:
 //!
 //! ```sh
 //! cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
-//! cargo nextest run --run-ignored all -E 'test(factory_default_windows)'
 //! ```
 //!
 //! Requirements are probed up front; a missing one **fails** the test with
@@ -29,13 +34,12 @@
 //! `.log` beside it.
 //!
 //! Recursion guard: every in-guest command runs with `FORMAL_E2E_INNER=1`
-//! set, and both tests fail immediately (loudly, per the suite's no-silent-
+//! set, and the test fails immediately (loudly, per the suite's no-silent-
 //! skip convention) when that variable is present, so the suite running
 //! inside a guest can never boot a VM inside the VM (the `#[ignore]` already
-//! keeps them out of a plain `cargo nt`; this is the belt to that suspender).
+//! keeps it out of a plain `cargo nt`; this is the belt to that suspender).
 //!
-//! See DEVELOPMENT.md §6.2 for the full description, the CI wiring, and the
-//! Windows guest-image recipe ([windows/](windows/)).
+//! See DEVELOPMENT.md §6.2 for the full description and the CI wiring.
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -44,10 +48,9 @@ use common::{script_path, test_log_dir, toolchain_shell, Progress};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-/// Host loopback ports the guests' SSH is forwarded to. Fixed (deterministic
+/// Host loopback port the guest's SSH is forwarded to. Fixed (deterministic
 /// runs, findable in `driver.log`); a collision fails the boot fast.
 const LINUX_SSH_PORT: u16 = 2261;
-const WINDOWS_SSH_PORT: u16 = 2262;
 
 /// The factory-default Linux the guest boots: the current Ubuntu LTS server
 /// cloud image. "Factory default" deliberately tracks what a user installs
@@ -162,8 +165,7 @@ fn wait_ssh(vm: &Vm, up: bool, what: &str, deadline: Duration, progress: &mut Pr
     let started = Instant::now();
     while started.elapsed() < deadline {
         progress.update(|| format!("{what}: {:.0}s", started.elapsed().as_secs_f32()));
-        // `exit 0` is valid for both remote shells (bash on the Linux guest,
-        // cmd.exe on the Windows guest; `true` would exit 9009 under cmd).
+        // `exit 0`: the cheapest liveness probe (shell-agnostic).
         let alive = sh(&format!("{} 'exit 0'", ssh_base(vm))).status.success();
         if alive == up {
             return;
@@ -175,45 +177,6 @@ fn wait_ssh(vm: &Vm, up: bool, what: &str, deadline: Duration, progress: &mut Pr
         deadline.as_secs_f32(),
         test_log_dir()
     );
-}
-
-/// One rung of the Windows distro-import ladder: clear any half-done
-/// registration, select the WSL `version`, kick off a **detached**
-/// `wsl --import` (a WSL1 import unpacks ~3GB to NTFS for 30+ minutes and
-/// sshd sheds connections under that load, so a live ssh command would die
-/// with its connection; a scheduled task survives), then poll until the
-/// distribution answers or the deadline passes.
-fn drive_wsl_import(vm: &Vm, progress: &mut Progress, version: u8, deadline_secs: u64) -> bool {
-    let _ = ssh_try(vm, "wsl --unregister Ubuntu", 300);
-    let set = ssh_try(vm, &format!("wsl --set-default-version {version}"), 120);
-    if version == 2 && !set.status.success() {
-        // The kernel MSI did not take: WSL 2 is not available here.
-        return false;
-    }
-    let _ = ssh_try(
-        vm,
-        "schtasks /create /f /tn wslimport /sc once /st 00:00 /tr \"cmd /c wsl --import Ubuntu \
-         %USERPROFILE%\\wsl-ubuntu %USERPROFILE%\\ubuntu-wsl-rootfs.wsl > \
-         %USERPROFILE%\\wsl-import.log 2>&1\"",
-        60,
-    );
-    let _ = ssh_try(vm, "schtasks /run /tn wslimport", 60);
-    let deadline = Instant::now() + Duration::from_secs(deadline_secs);
-    while Instant::now() < deadline {
-        progress.update(|| {
-            format!(
-                "waiting for the WSL{version} distribution import \
-                 (a WSL1 import can take 40+ minutes)"
-            )
-        });
-        if ssh_try(vm, "wsl -e true", 120).status.success() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_secs(30));
-    }
-    // Best-effort evidence into driver.log before giving up on this rung.
-    let _ = ssh_try(vm, "type wsl-import.log & wsl -l -v", 60);
-    false
 }
 
 /// Runs a long in-guest command, streaming the transcript to
@@ -236,15 +199,13 @@ fn ssh_stream(
     let host_log = format!("{}/{log_name}.log", test_log_dir());
     let _ = std::fs::remove_file(&host_log);
     let log_env = script_path(&host_log);
-    // `y\r`, not `y\n`: a Windows ConPTY only synthesizes Enter for CR (LF
-    // arrives as Ctrl+J and never completes the console read), while a Linux
-    // pty in canonical mode maps CR to NL via ICRNL - so CR answers the
-    // prompt on both guests.
+    // `y\r` (CR): a pty in canonical mode maps CR to NL via ICRNL, and CR is
+    // what a real Enter key sends.
     let script = if pty {
-        // Process substitution, not a plain pipe: newer Windows OpenSSH
-        // (Server 2025) tears the ConPTY session down on stdin EOF before the
-        // command even runs, so stdin must stay open for the session's
-        // lifetime (the leftover `sleep` dies on its own).
+        // Process substitution, not a plain pipe: stdin stays open for the
+        // session's lifetime (some sshd/pty stacks tear the session down on
+        // stdin EOF before the command runs; the leftover `sleep` dies on
+        // its own).
         format!(
             "timeout {secs} {} -tt '{cmd}' < <(printf 'y\\r'; sleep {secs}) >\"{log_env}\" 2>&1",
             ssh_base(vm)
@@ -307,11 +268,9 @@ fn push_file(vm: &Vm, name: &str, content: &str) {
 /// ignored) into `<work>/repo.tar` in the shell environment.
 fn stage_repo(work: &str) {
     let root = env!("CARGO_MANIFEST_DIR");
-    // Stage under the per-test log dir: the two factory tests can run
-    // concurrently in one nextest invocation, so a shared staging path would
-    // let one test's `tar -cf` race the other's copy. Relative paths keep a
-    // drive-letter colon out of tar's arguments (GNU tar would read `C:` as a
-    // remote host).
+    // Staged under the per-test log dir, beside the run's other artifacts.
+    // Relative paths keep a drive-letter colon out of tar's arguments (GNU
+    // tar would read `C:` as a remote host).
     let rel = format!("target/tmp/test-logs/{}", common::test_name());
     std::fs::create_dir_all(format!("{root}/{rel}")).expect("create the staging dir");
     let list = std::process::Command::new("git")
@@ -389,8 +348,8 @@ fn env_home() -> String {
     home
 }
 
-/// The requirements shared by both guests, each failing with its exact fix.
-/// `apt_hint` suffixes the install commands with the WSL note on Windows.
+/// The VM-driving requirements, each failing with its exact fix (the install
+/// commands get the inside-WSL note when the host is Windows).
 fn require_vm_tooling() {
     let wsl = if cfg!(windows) { " (inside WSL)" } else { "" };
     require(
@@ -568,7 +527,7 @@ fn factory_default_linux() {
              -drive file='{work}/disk.qcow2',if=virtio,cache=unsafe,discard=unmap \
              -drive file='{work}/seed.iso',media=cdrom \
              -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device virtio-net-pci,netdev=n0 \
-             -display none -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
+             -display none -vnc 127.0.0.1:48 -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
             vm.port
         ),
     );
@@ -754,520 +713,4 @@ fn factory_default_linux() {
 
     let _ = ssh_try(&vm, "sudo poweroff", 30);
     progress.finish("factory-default Linux: setup + suite passed");
-}
-
-// ---------------------------------------------------------------------------
-// The factory-default Windows test.
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "boots a factory-default Windows VM (image from FORMAL_E2E_WINDOWS_IMAGE, see \
-            DEVELOPMENT.md §6.2) and runs full setup - WSL install, UAC, reboot, resume - \
-            plus the whole suite inside (hours; needs nested virtualisation)."]
-fn factory_default_windows() {
-    inner_guard();
-    let _ = std::fs::remove_file(format!("{}/driver.log", test_log_dir()));
-    let mut progress = Progress::new("e2e");
-
-    // --- requirements -------------------------------------------------------
-    progress.update(|| "probing requirements".to_string());
-    require_vm_tooling();
-    require(
-        "nested virtualisation (the guest must run WSL2, i.e. its own hypervisor)",
-        "grep -qE '^(1|Y)' /sys/module/kvm_intel/parameters/nested 2>/dev/null \
-         || grep -qE '^(1|Y)' /sys/module/kvm_amd/parameters/nested 2>/dev/null",
-        "enable nested KVM (Linux host:  echo 'options kvm_intel nested=1' | sudo tee \
-         /etc/modprobe.d/kvm.conf  and reload the module). Note: on a Windows host this \
-         would be a third virtualisation level under Hyper-V, which is not supported - \
-         run this test on a Linux host or a bare-metal CI runner (DEVELOPMENT.md §6.2).",
-    );
-    let image = std::env::var("FORMAL_E2E_WINDOWS_IMAGE").unwrap_or_default();
-    assert!(
-        !image.is_empty(),
-        "requirement missing: FORMAL_E2E_WINDOWS_IMAGE must point at a prepared factory \
-         Windows image (a path in the shell environment). Build one once with \
-         tests/setup_e2e/windows/build-image.sh (DEVELOPMENT.md §6.2)."
-    );
-    let key = std::env::var("FORMAL_E2E_WINDOWS_KEY").unwrap_or_else(|_| format!("{image}.key"));
-    require(
-        "the prepared Windows image",
-        &format!("[ -f '{image}' ]"),
-        "point FORMAL_E2E_WINDOWS_IMAGE at the qcow2 produced by \
-         tests/setup_e2e/windows/build-image.sh",
-    );
-    require(
-        "the image's SSH key",
-        &format!("[ -f '{key}' ]"),
-        "the key is written next to the image by build-image.sh as <image>.key \
-         (or set FORMAL_E2E_WINDOWS_KEY)",
-    );
-
-    // --- workspace + factory-fresh disk -------------------------------------
-    let home = env_home();
-    let work = format!("{home}/.cache/formal-e2e/windows");
-    kill_qemu(&work);
-    sh_ok("create the VM workspace", &format!("mkdir -p '{work}'"));
-    // The Ubuntu WSL rootfs, cached like the other images: the guest's WSL
-    // distribution is provisioned with `wsl --import` because the in-box
-    // `wsl --install` distro download does not survive slirp's DNS forwarder
-    // (0x80072ee7) and its appx/OOBE path cannot run headlessly on this
-    // Windows build. The release .wsl file is a plain tar.gz, which even the
-    // in-box `wsl --import` accepts.
-    let images = format!("{home}/.cache/formal-e2e/images");
-    let rootfs = format!("{images}/ubuntu-wsl-rootfs.wsl");
-    progress.update(|| "fetching the Ubuntu WSL rootfs (cached after the first run)".to_string());
-    sh_ok(
-        "fetch the Ubuntu WSL rootfs (cached)",
-        &format!(
-            "mkdir -p '{images}' && [ -f '{rootfs}' ] || {{ curl -fSL --retry 3 -o '{rootfs}.tmp' \
-             'https://releases.ubuntu.com/noble/ubuntu-24.04.3-wsl-amd64.wsl' \
-             && mv '{rootfs}.tmp' '{rootfs}'; }}"
-        ),
-    );
-    // The modern WSL, as its official standalone MSI (microsoft/WSL releases):
-    // the in-box WSL on Server 2022 is WSL1-only (`--set-default-version 2`
-    // is rejected outright; the separate kernel MSI does not change that), so
-    // the WSL2 rung of the import ladder installs this package, which
-    // replaces wsl.exe wholesale and is the supported WSL2 route on Server.
-    let kernel_msi = format!("{images}/wsl-modern-x64.msi");
-    sh_ok(
-        "fetch the modern WSL MSI (cached)",
-        &format!(
-            "[ -f '{kernel_msi}' ] || {{ url=$(curl -fsSL --retry 3 \
-             https://api.github.com/repos/microsoft/WSL/releases/latest \
-             | grep -oE '\"browser_download_url\": \"[^\"]*x64.msi\"' \
-             | cut -d'\"' -f4 | head -1) && curl -fSL --retry 3 -o '{kernel_msi}.tmp' \"$url\" \
-             && mv '{kernel_msi}.tmp' '{kernel_msi}'; }}"
-        ),
-    );
-    let vm = Vm {
-        port: WINDOWS_SSH_PORT,
-        user: "factory",
-        key,
-    };
-    sh_ok(
-        "create the factory-fresh overlay disk",
-        &format!(
-            "rm -f '{work}/disk.qcow2' && \
-             qemu-img create -q -f qcow2 -b '{image}' -F qcow2 '{work}/disk.qcow2'"
-        ),
-    );
-
-    // --- boot ----------------------------------------------------------------
-    let _guard = VmGuard { work: work.clone() };
-    let serial = script_path(&format!("{}/serial.log", test_log_dir()));
-    let cpus = guest_cpus();
-    progress.update(|| "booting the factory Windows guest".to_string());
-    // Plain `-cpu host` (the configuration the image build boots under):
-    // `hv-passthrough` advertises Hyper-V enlightenments nested KVM cannot
-    // all back and hangs Windows at boot. The guest still sees the AMD-V/VT-x
-    // extensions WSL2 needs via `-cpu host` + nested KVM. IDE disk (no
-    // storage driver injected), but virtio-net for the NIC: the image build
-    // installs NetKVM at provisioning because Server 2022's in-box e1000e is
-    // unreliable under qemu (no DHCP). VNC on 127.0.0.1:5948 for inspection.
-    sh_ok(
-        "boot the factory Windows guest",
-        &format!(
-            "qemu-system-x86_64 -enable-kvm -machine q35 -cpu host \
-             -smp {cpus} -m 16384 \
-             -drive file='{work}/disk.qcow2',if=ide,cache=unsafe,discard=unmap \
-             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:{}-:22 -device virtio-net-pci,netdev=n0 \
-             -display none -vnc 127.0.0.1:48 -serial file:\"{serial}\" -daemonize -pidfile '{work}/qemu.pid'",
-            vm.port
-        ),
-    );
-    wait_ssh(
-        &vm,
-        true,
-        "waiting for the guest's SSH",
-        Duration::from_secs(900),
-        &mut progress,
-    );
-
-    // --- the documented human steps before `cargo build` --------------------
-    stage_repo(&work);
-    sh_ok(
-        "copy the repository into the guest",
-        &format!(
-            "scp -i '{}' -P {} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-             -o LogLevel=ERROR '{work}/repo.tar' {}@127.0.0.1:repo.tar",
-            vm.key, vm.port, vm.user
-        ),
-    );
-    // Windows OpenSSH's default shell is cmd; scripts are pushed as .cmd files
-    // with CRLF endings. The VS Build Tools installer is its own phase with
-    // bounded host-side attempts: the bootstrapper occasionally wedges
-    // silently for good, and only killing and rerunning it recovers.
-    push_file(
-        &vm,
-        "prep-tools.cmd",
-        &[
-            "@echo off",
-            "rem Rust's documented Windows prerequisite: the MSVC build tools",
-            "rem (skipped when the image already carries them).",
-            "if exist \"%ProgramFiles(x86)%\\Microsoft Visual Studio\\2022\\BuildTools\\VC\" exit /b 0",
-            "curl -fL -o %TEMP%\\vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe || exit /b 1",
-            "%TEMP%\\vs_buildtools.exe --quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended",
-            "rem 3010 = success-with-reboot-required; `if errorlevel N` means >= N, so",
-            "rem check descending: >= 3011 fails, exactly 3010 passes, other nonzero fails.",
-            "if errorlevel 3011 exit /b 1",
-            "if errorlevel 3010 exit /b 0",
-            "if errorlevel 1 exit /b 1",
-            "exit /b 0",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let mut tools_ok = false;
-    for attempt in 1..=3 {
-        let (ok, _) = ssh_stream(
-            &vm,
-            &format!("guest prep: VS Build Tools (attempt {attempt})"),
-            "cmd /c prep-tools.cmd",
-            "prep-tools",
-            2700,
-            &mut progress,
-            false,
-        );
-        if ok {
-            tools_ok = true;
-            break;
-        }
-        // A timed-out ssh leaves the installer running in-guest; kill it so
-        // the retry does not collide with the wedged instance's mutex.
-        let _ = ssh_try(
-            &vm,
-            "taskkill /f /im vs_buildtools.exe /im setup.exe /im vs_installer.exe /t",
-            60,
-        );
-        std::thread::sleep(Duration::from_secs(10));
-    }
-    assert!(
-        tools_ok,
-        "VS Build Tools did not install after 3 attempts (see prep-tools.log)"
-    );
-    push_file(
-        &vm,
-        "prep.cmd",
-        &[
-            "@echo off",
-            "rem Factory prep after the build tools: rustup + unpack the repo.",
-            &format!("set {INNER_MARKER}=1"),
-            "curl -fL -o %TEMP%\\rustup-init.exe https://win.rustup.rs/x86_64 || exit /b 1",
-            "%TEMP%\\rustup-init.exe -y --profile minimal || exit /b 1",
-            "if not exist formal mkdir formal",
-            "tar -xf repo.tar -C formal || exit /b 1",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (ok, _) = ssh_stream(
-        &vm,
-        "guest prep (rustup + unpack)",
-        "cmd /c prep.cmd",
-        "prep",
-        1800,
-        &mut progress,
-        false,
-    );
-    assert!(ok, "guest prep failed (see prep.log)");
-
-    // --- `cargo build` IS the setup: WSL install, UAC, reboot prompt --------
-    // FORMAL_SETUP stays unset: the human flow, install-by-default (no CI
-    // vars in the guest), and it keeps the RunOnce resume's own
-    // FORMAL_SETUP=install a real env change - which is what makes build.rs
-    // re-run after the reboot.
-    push_file(
-        &vm,
-        "build1.cmd",
-        &[
-            "@echo off",
-            "cd /d %USERPROFILE%\\formal",
-            &format!("set {INNER_MARKER}=1"),
-            "%USERPROFILE%\\.cargo\\bin\\cargo.exe build",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (_, build1) = ssh_stream(
-        &vm,
-        "first `cargo build` (installs WSL; answers y to the reboot)",
-        "cmd /c build1.cmd",
-        "build1",
-        7200,
-        &mut progress,
-        true,
-    );
-    assert!(
-        build1.contains("formal setup:"),
-        "the first build on a factory Windows reported no setup activity; WSL cannot have \
-         been missing (is the image really factory-default?). Transcript: build1.log"
-    );
-    assert!(
-        build1.contains("Rebooting now"),
-        "setup did not reach the approved reboot on a factory Windows (WSL install + \
-         reboot is the expected path). Transcript: build1.log"
-    );
-
-    // --- the reboot: RunOnce fires at the autologon console session ---------
-    wait_ssh(
-        &vm,
-        false,
-        "waiting for the reboot",
-        Duration::from_secs(900),
-        &mut progress,
-    );
-    wait_ssh(
-        &vm,
-        true,
-        "waiting for the guest to come back",
-        Duration::from_secs(1800),
-        &mut progress,
-    );
-    // First: the RunOnce resume itself (registered by setup, consumed by
-    // Windows at the autologon) must have run to completion.
-    let deadline = Instant::now() + Duration::from_secs(3600);
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "the RunOnce-resumed `cargo build` did not complete in time (check \
-             %TEMP%\\formal-setup-resume.cmd and the RunOnce key in the guest)"
-        );
-        progress.update(|| "waiting for the RunOnce resume after the reboot".to_string());
-        let runonce_gone = !ssh_try(
-            &vm,
-            "reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce /v formal-setup-resume",
-            30,
-        )
-        .status
-        .success();
-        let cargo_running = ssh_try(&vm, "tasklist | findstr /i cargo.exe", 30)
-            .status
-            .success();
-        if runonce_gone && !cargo_running {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(20));
-    }
-
-    // Then: a ready distribution, provisioned deterministically with
-    // `wsl --import` of the cached Ubuntu rootfs (see the fetch above). Point
-    // the guest at a real IPv4 resolver first - operator machine
-    // configuration, like cloud-init's on the Linux side - so later in-guest
-    // downloads (rustup and friends) do not depend on slirp's DNS forwarder.
-    let _ = ssh_try(
-        &vm,
-        "powershell -NoProfile -Command \"Get-NetAdapter | Where-Object Status -eq Up | \
-         Set-DnsClientServerAddress -ServerAddresses 1.1.1.1,8.8.8.8\"",
-        180,
-    );
-    // Retried: right after the resume the guest is at its busiest and sshd
-    // sheds the occasional connection.
-    let scp = format!(
-        "scp -i '{}' -P {} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -o LogLevel=ERROR '{rootfs}' '{kernel_msi}' {}@127.0.0.1:",
-        vm.key, vm.port, vm.user
-    );
-    let mut copied = false;
-    for _ in 0..5 {
-        if sh(&scp).status.success() {
-            copied = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(20));
-    }
-    assert!(
-        copied,
-        "could not copy the Ubuntu WSL rootfs + kernel MSI into the guest (see driver.log)"
-    );
-    // The import ladder: WSL 2 first (kernel from the MSI; a fast VHDX import,
-    // and the empirical answer to whether the WSL2 utility VM starts at this
-    // virtualisation depth), then WSL 1 (this Windows build's in-box default;
-    // needs no nested virtualisation at all, and everything the suite runs in
-    // it is plain user space - TCG QEMU, the toolchain, MPI, cargo - at the
-    // cost of a very slow NTFS unpack).
-    // Retried like the scp above: sshd sheds connections while the guest is
-    // still busy right after the resume, and a failed MSI install silently
-    // forfeits the whole WSL2 rung. (The modern-WSL install replaces wsl.exe;
-    // it can take a couple of minutes to settle.)
-    for _ in 0..5 {
-        if ssh_try(&vm, "msiexec /i wsl-modern-x64.msi /qn", 900)
-            .status
-            .success()
-        {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(20));
-    }
-    if !drive_wsl_import(&vm, &mut progress, 2, 1500) {
-        // Measured: a WSL1 import of this rootfs runs well past an hour, with
-        // sshd shedding most connections for the duration.
-        assert!(
-            drive_wsl_import(&vm, &mut progress, 1, 5400),
-            "no WSL distribution became ready (neither WSL 2 nor WSL 1; see \
-             wsl-import.log in the guest home, and driver.log)"
-        );
-    }
-
-    // The resume may have run before the distribution was ready (build.rs then
-    // reports "no Linux distribution is ready yet" and returns), so run one
-    // more build with FORMAL_SETUP unset - a real env change against the
-    // resume's `install` - to let setup finish the WSL-side provisioning.
-    push_file(
-        &vm,
-        "build1b.cmd",
-        &[
-            "@echo off",
-            "cd /d %USERPROFILE%\\formal",
-            &format!("set {INNER_MARKER}=1"),
-            "%USERPROFILE%\\.cargo\\bin\\cargo.exe build",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (ok, _) = ssh_stream(
-        &vm,
-        "post-reboot `cargo build` (finishes WSL-side provisioning)",
-        "cmd /c build1b.cmd",
-        "build1b",
-        5400,
-        &mut progress,
-        true,
-    );
-    assert!(ok, "the post-reboot build failed (see build1b.log)");
-
-    // The suite's hpc tests build `--features hpc` with cargo INSIDE the
-    // guest's WSL (tests/common `mpirun_formal`), so give the WSL side its
-    // documented developer prerequisites too: a C linker and rustup.
-    ssh_ok(
-        &vm,
-        "provision a C linker inside the guest's WSL",
-        "wsl -u root -e bash -lc \"DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y build-essential\"",
-        1800,
-    );
-    ssh_ok(
-        &vm,
-        "install Rust inside the guest's WSL",
-        "wsl -e bash -lc \"curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal\"",
-        1800,
-    );
-    // The hpc feature build re-runs build.rs with CARGO_FEATURE_HPC set (a
-    // feature change re-fingerprints the build script), which installs
-    // clang/libclang into WSL for rsmpi's bindgen.
-    push_file(
-        &vm,
-        "build-hpc.cmd",
-        &[
-            "@echo off",
-            "cd /d %USERPROFILE%\\formal",
-            &format!("set {INNER_MARKER}=1"),
-            "%USERPROFILE%\\.cargo\\bin\\cargo.exe build --features hpc",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (ok, _) = ssh_stream(
-        &vm,
-        "`cargo build --features hpc` (provisions libclang)",
-        "cmd /c build-hpc.cmd",
-        "build-hpc",
-        5400,
-        &mut progress,
-        true,
-    );
-    assert!(ok, "the --features hpc build failed (see build-hpc.log)");
-
-    // --- setup must now be silent, and the WSL side fully provisioned -------
-    // FORMAL_SETUP=detect differs from every value the guest has seen (the
-    // env change genuinely re-runs build.rs) and never installs, so silence
-    // here means complete.
-    push_file(
-        &vm,
-        "build2.cmd",
-        &[
-            "@echo off",
-            "cd /d %USERPROFILE%\\formal",
-            &format!("set {INNER_MARKER}=1"),
-            "set FORMAL_SETUP=detect",
-            "%USERPROFILE%\\.cargo\\bin\\cargo.exe build",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (ok, build2) = ssh_stream(
-        &vm,
-        "re-run `cargo build` (must be silent)",
-        "cmd /c build2.cmd",
-        "build2",
-        3600,
-        &mut progress,
-        true,
-    );
-    assert_setup_silent("re-run after setup", ok, &build2);
-    for (what, probe) in [
-        (
-            "QEMU system emulator",
-            "wsl -e bash -lc \"qemu-system-riscv64 --version\"",
-        ),
-        (
-            "RISC-V assembler",
-            "wsl -e bash -lc \"riscv64-unknown-elf-as --version\"",
-        ),
-        (
-            "user-mode QEMU",
-            "wsl -e bash -lc \"qemu-riscv64 --version\"",
-        ),
-        (
-            "MPI compiler wrapper",
-            "wsl -e bash -lc \"mpicc --version\"",
-        ),
-    ] {
-        ssh_ok(
-            &vm,
-            &format!("{what} present in the guest's WSL"),
-            probe,
-            120,
-        );
-    }
-
-    // --- the full suite, inside the factory guest ---------------------------
-    // The apt toolchain lives on the WSL PATH (/usr/bin), not the release-
-    // tarball default, so point RISCV_BIN there - the step build.rs's report
-    // documents for exactly this situation.
-    ssh_ok(
-        &vm,
-        "install cargo-nextest (prebuilt)",
-        "curl -LsSf -o %TEMP%\\nt.tar.gz https://get.nexte.st/latest/windows-tar \
-         && tar -xf %TEMP%\\nt.tar.gz -C %USERPROFILE%\\.cargo\\bin",
-        300,
-    );
-    push_file(
-        &vm,
-        "suite.cmd",
-        &[
-            "@echo off",
-            "cd /d %USERPROFILE%\\formal",
-            &format!("set {INNER_MARKER}=1"),
-            "set RISCV_BIN=/usr/bin",
-            "%USERPROFILE%\\.cargo\\bin\\cargo.exe nextest run --no-fail-fast",
-            "",
-        ]
-        .join("\r\n"),
-    );
-    let (ok, _) = ssh_stream(
-        &vm,
-        "the full test suite inside the factory guest",
-        "cmd /c suite.cmd",
-        "suite",
-        14400,
-        &mut progress,
-        false,
-    );
-    assert!(
-        ok,
-        "the suite failed inside the factory guest (see suite.log)"
-    );
-
-    let _ = ssh_try(&vm, "shutdown /s /t 5", 30);
-    progress.finish("factory-default Windows: setup (incl. reboot/resume) + suite passed");
 }

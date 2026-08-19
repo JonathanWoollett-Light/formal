@@ -1,27 +1,17 @@
-# The factory-default setup end-to-end tests (tests/setup_e2e/, DEVELOPMENT.md
-# 6.2): each boots an EMPTY factory-default VM, installs Rust by the documented
-# human steps, runs `cargo build` (which IS setup) answering its real console
-# prompts, rides through the reboot when setup requests one, and then runs the
-# full test suite inside the guest.
+# The factory-default setup end-to-end test (tests/setup_e2e/, DEVELOPMENT.md
+# 6.2): boots an EMPTY factory-default Linux VM, installs Rust by the
+# documented human steps, runs `cargo build` (which IS setup) answering its
+# real console prompts, rides through the reboot when setup requests one, and
+# then runs the full test suite inside the guest. Needs only KVM, which
+# GitHub's standard Linux runners expose.
 #
-# The Linux test needs only KVM, which GitHub's standard Linux runners expose.
-# The Windows test additionally needs NESTED virtualisation (the guest runs
-# WSL2, its own hypervisor) and a prepared Windows image - neither exists on
-# GitHub-hosted runners - so it only runs when workflow_dispatch names a
-# capable runner label: a self-hosted bare-metal box (Hetzner/OVH class), a
-# KVM-capable managed runner service, or a cloud VM with nested virt (Azure
-# v3+/GCP; AWS only on *.metal) registered as self-hosted. That runner must
-# export FORMAL_E2E_WINDOWS_IMAGE (image built once with
-# tests/setup_e2e/windows/build-image.sh).
+# (A Windows factory test existed but was removed: WSL2 inside a guest needs a
+# virtualisation depth neither Windows hosts nor hosted runners provide. Its
+# recipe and findings live in git history under tests/setup_e2e/windows.)
 name: setup-e2e
 
 on:
   workflow_dispatch:
-    inputs:
-      windows_runner:
-        description: "Runner label for the Windows factory test (nested virt + FORMAL_E2E_WINDOWS_IMAGE required); empty = Linux only"
-        type: string
-        default: ""
   schedule:
     - cron: "14 3 * * 1" # weekly (the run takes ~3 min on a fast host; longer on hosted runners)
 
@@ -55,22 +45,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: setup-e2e-linux-logs
-          path: target/tmp/test-logs/
-
-  windows-factory:
-    if: github.event_name == 'workflow_dispatch' && inputs.windows_runner != ''
-    runs-on: ${{ inputs.windows_runner }}
-    timeout-minutes: 420
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Factory-default Windows setup (WSL install, UAC, reboot, resume) + suite
-        run: cargo nextest run --run-ignored all -E 'test(factory_default_windows)' --no-capture
-      - name: Upload the driver/serial/build/suite logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: setup-e2e-windows-logs
           path: target/tmp/test-logs/
