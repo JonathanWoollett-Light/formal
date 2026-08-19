@@ -131,8 +131,8 @@
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>3</Order>
-          <Description>Install the NetKVM (virtio) network driver from the answer CD; the guest has no NIC driver until now</Description>
-          <CommandLine>powershell -NoProfile -Command "$d=(Get-Volume -FileSystemLabel ANSWER).DriveLetter; pnputil /add-driver ($d+':\NetKVM\2k22\amd64\netkvm.inf') /install"</CommandLine>
+          <Description>Install the NetKVM (virtio) network driver from the answer CD; the guest has no NIC driver until now. Both Server generations are tried; the mismatched one fails harmlessly</Description>
+          <CommandLine>powershell -NoProfile -Command "$d=(Get-Volume -FileSystemLabel ANSWER).DriveLetter; pnputil /add-driver ($d+':\NetKVM\2k25\amd64\netkvm.inf') /install; pnputil /add-driver ($d+':\NetKVM\2k22\amd64\netkvm.inf') /install"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>4</Order>

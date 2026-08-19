@@ -177,6 +177,45 @@ fn wait_ssh(vm: &Vm, up: bool, what: &str, deadline: Duration, progress: &mut Pr
     );
 }
 
+/// One rung of the Windows distro-import ladder: clear any half-done
+/// registration, select the WSL `version`, kick off a **detached**
+/// `wsl --import` (a WSL1 import unpacks ~3GB to NTFS for 30+ minutes and
+/// sshd sheds connections under that load, so a live ssh command would die
+/// with its connection; a scheduled task survives), then poll until the
+/// distribution answers or the deadline passes.
+fn drive_wsl_import(vm: &Vm, progress: &mut Progress, version: u8, deadline_secs: u64) -> bool {
+    let _ = ssh_try(vm, "wsl --unregister Ubuntu", 300);
+    let set = ssh_try(vm, &format!("wsl --set-default-version {version}"), 120);
+    if version == 2 && !set.status.success() {
+        // The kernel MSI did not take: WSL 2 is not available here.
+        return false;
+    }
+    let _ = ssh_try(
+        vm,
+        "schtasks /create /f /tn wslimport /sc once /st 00:00 /tr \"cmd /c wsl --import Ubuntu \
+         %USERPROFILE%\\wsl-ubuntu %USERPROFILE%\\ubuntu-wsl-rootfs.wsl > \
+         %USERPROFILE%\\wsl-import.log 2>&1\"",
+        60,
+    );
+    let _ = ssh_try(vm, "schtasks /run /tn wslimport", 60);
+    let deadline = Instant::now() + Duration::from_secs(deadline_secs);
+    while Instant::now() < deadline {
+        progress.update(|| {
+            format!(
+                "waiting for the WSL{version} distribution import \
+                 (a WSL1 import can take 40+ minutes)"
+            )
+        });
+        if ssh_try(vm, "wsl -e true", 120).status.success() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    }
+    // Best-effort evidence into driver.log before giving up on this rung.
+    let _ = ssh_try(vm, "type wsl-import.log & wsl -l -v", 60);
+    false
+}
+
 /// Runs a long in-guest command, streaming the transcript to
 /// `target/tmp/test-logs/<test>/<log_name>.log` for live tailing. With
 /// `pty` the command runs under `ssh -tt` (a real terminal, so setup's
@@ -202,8 +241,12 @@ fn ssh_stream(
     // pty in canonical mode maps CR to NL via ICRNL - so CR answers the
     // prompt on both guests.
     let script = if pty {
+        // Process substitution, not a plain pipe: newer Windows OpenSSH
+        // (Server 2025) tears the ConPTY session down on stdin EOF before the
+        // command even runs, so stdin must stay open for the session's
+        // lifetime (the leftover `sleep` dies on its own).
         format!(
-            "printf 'y\\r' | timeout {secs} {} -tt '{cmd}' >\"{log_env}\" 2>&1",
+            "timeout {secs} {} -tt '{cmd}' < <(printf 'y\\r'; sleep {secs}) >\"{log_env}\" 2>&1",
             ssh_base(vm)
         )
     } else {
@@ -781,6 +824,22 @@ fn factory_default_windows() {
              && mv '{rootfs}.tmp' '{rootfs}'; }}"
         ),
     );
+    // The modern WSL, as its official standalone MSI (microsoft/WSL releases):
+    // the in-box WSL on Server 2022 is WSL1-only (`--set-default-version 2`
+    // is rejected outright; the separate kernel MSI does not change that), so
+    // the WSL2 rung of the import ladder installs this package, which
+    // replaces wsl.exe wholesale and is the supported WSL2 route on Server.
+    let kernel_msi = format!("{images}/wsl-modern-x64.msi");
+    sh_ok(
+        "fetch the modern WSL MSI (cached)",
+        &format!(
+            "[ -f '{kernel_msi}' ] || {{ url=$(curl -fsSL --retry 3 \
+             https://api.github.com/repos/microsoft/WSL/releases/latest \
+             | grep -oE '\"browser_download_url\": \"[^\"]*x64.msi\"' \
+             | cut -d'\"' -f4 | head -1) && curl -fSL --retry 3 -o '{kernel_msi}.tmp' \"$url\" \
+             && mv '{kernel_msi}.tmp' '{kernel_msi}'; }}"
+        ),
+    );
     let vm = Vm {
         port: WINDOWS_SSH_PORT,
         user: "factory",
@@ -1006,7 +1065,7 @@ fn factory_default_windows() {
     // sheds the occasional connection.
     let scp = format!(
         "scp -i '{}' -P {} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -o LogLevel=ERROR '{rootfs}' {}@127.0.0.1:ubuntu-rootfs.wsl",
+         -o LogLevel=ERROR '{rootfs}' '{kernel_msi}' {}@127.0.0.1:",
         vm.key, vm.port, vm.user
     );
     let mut copied = false;
@@ -1019,25 +1078,35 @@ fn factory_default_windows() {
     }
     assert!(
         copied,
-        "could not copy the Ubuntu WSL rootfs into the guest (see driver.log)"
+        "could not copy the Ubuntu WSL rootfs + kernel MSI into the guest (see driver.log)"
     );
-    let deadline = Instant::now() + Duration::from_secs(1800);
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "no WSL distribution became ready after the reboot (wsl -e true keeps \
-             failing; check `wsl -l -v` and wsl-import.log in the guest home)"
-        );
-        progress.update(|| "waiting for the WSL distribution to become ready".to_string());
-        if ssh_try(&vm, "wsl -e true", 120).status.success() {
+    // The import ladder: WSL 2 first (kernel from the MSI; a fast VHDX import,
+    // and the empirical answer to whether the WSL2 utility VM starts at this
+    // virtualisation depth), then WSL 1 (this Windows build's in-box default;
+    // needs no nested virtualisation at all, and everything the suite runs in
+    // it is plain user space - TCG QEMU, the toolchain, MPI, cargo - at the
+    // cost of a very slow NTFS unpack).
+    // Retried like the scp above: sshd sheds connections while the guest is
+    // still busy right after the resume, and a failed MSI install silently
+    // forfeits the whole WSL2 rung. (The modern-WSL install replaces wsl.exe;
+    // it can take a couple of minutes to settle.)
+    for _ in 0..5 {
+        if ssh_try(&vm, "msiexec /i wsl-modern-x64.msi /qn", 900)
+            .status
+            .success()
+        {
             break;
         }
-        let _ = ssh_try(
-            &vm,
-            "wsl --import Ubuntu %USERPROFILE%\\wsl-ubuntu ubuntu-rootfs.wsl > wsl-import.log 2>&1",
-            900,
+        std::thread::sleep(Duration::from_secs(20));
+    }
+    if !drive_wsl_import(&vm, &mut progress, 2, 1500) {
+        // Measured: a WSL1 import of this rootfs runs well past an hour, with
+        // sshd shedding most connections for the duration.
+        assert!(
+            drive_wsl_import(&vm, &mut progress, 1, 5400),
+            "no WSL distribution became ready (neither WSL 2 nor WSL 1; see \
+             wsl-import.log in the guest home, and driver.log)"
         );
-        std::thread::sleep(Duration::from_secs(15));
     }
 
     // The resume may have run before the distribution was ready (build.rs then

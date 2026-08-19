@@ -1484,48 +1484,44 @@ cargo nextest run --run-ignored all -E 'test(factory_default_windows)'
   loopback (`5947` image build, `5948` Windows test) - snapshot with
   `vncsnapshot 127.0.0.1:<display>` in WSL when a phase looks stuck.
 
-**Status (2026-08-19), for whoever continues the Windows test.** The Linux
-test **passes** (2m42s, 84/84 in-guest). On Windows everything up to and
-including the reboot is **proven on a real factory guest**: image build (~6
-min with a hot ISO cache), boot, prep (VS Build Tools has 3 bounded attempts;
-the bootstrapper can wedge silently - a WSL restart on the host cured a
-recurring guest-wedge-under-load, suspect the host after its hard crashes),
-`cargo build` detecting WSL missing, installing it directly (no UAC needed
-with an admin token; `wsl --install`'s exit code is *nonzero even on success*,
-so build.rs judges by `Get-WindowsOptionalFeature` ground truth), the `[y/N]`
-prompt answered over ConPTY, RunOnce scheduling, the reboot, and the resumed
-build (its `FORMAL_SETUP=install` env change re-runs build.rs). What remains
-is distribution provisioning and everything after (build1b, WSL-side rustup +
-C linker, hpc build, silent re-run, suite):
+**Status (2026-08-19, end of day), for whoever continues the Windows test.**
+The Linux test **passes** (2m42s, 84/84 in-guest). The Windows test is proven
+on a real factory guest through: image build (~6-14 min), boot, prep (VS
+Build Tools in 3 bounded attempts), `cargo build` detecting WSL, the `[y/N]`
+prompt over ConPTY, RunOnce scheduling, the reboot, and the resumed build.
+The guest image is now **Server 2025** (the 2022 image was a dead end: its
+in-box WSL is WSL1-only, `--set-default-version 2` is rejected, the modern
+WSL MSI refuses the OS with `WSL_E_OS_NOT_SUPPORTED`, and its WSL1
+`--import` wedges for 90+ minutes with sshd unreachable). What was measured,
+per platform:
 
-- The in-box `wsl --install` distro download dies through slirp
-  (`0x80072ee7`, the MS CDN's DNS; a real resolver via
-  `Set-DnsClientServerAddress` is set for later downloads), `--no-launch` is
-  not in this Windows build's wsl, and `ubuntu*.exe` aliases never exist, so
-  the test now scp's a cached Ubuntu rootfs
-  (`releases.ubuntu.com/noble/ubuntu-24.04.3-wsl-amd64.wsl`, a plain tar.gz)
-  and drives `wsl --import`.
-- **Measured**: this in-box WSL defaults to **WSL 1**, so the import needs no
-  nested virtualisation at all (the L3 question was never actually reached),
-  and a WSL1 import unpacks ~3GB to NTFS in **30+ minutes** (the current
-  900s-per-attempt loop is far too short and an interrupted import leaves an
-  "install in progress" state that needs `wsl --unregister Ubuntu`). Under
-  that I/O load sshd sheds connections for minutes at a time and recovers, so
-  the import must run detached in-guest (`schtasks /create ... /run`, proven)
-  with a patient poll (~45 min deadline), not as a live ssh command.
-- **Next steps**: (1) rework the distro phase to prefer WSL2 - fetch the
-  kernel MSI directly (`wslstorestorage.blob.core.windows.net/wslblob/
-  wsl_update_x64.msi`), `wsl --set-default-version 2`, import (fast, VHDX)
-  which also finally answers whether WSL2 starts at this nesting depth - and
-  fall back to the proven WSL1 path (unregister, detached import, long poll);
-  (2) then the untested tail: build1b, WSL-side prep, hpc, silent re-run,
-  suite - all mirrored from the passing Linux test. WSL1 runs everything the
-  suite needs (TCG QEMU, toolchain, MPI, cargo are plain user space).
-- Everything is cached under `~/.cache/formal-e2e/images/` in WSL (Server
-  eval ISO, virtio-win ISO, the factory image + key, the Ubuntu rootfs);
-  rebuilding the image takes ~6 minutes, so iterate freely. Run the test
-  with, in Git Bash, `MSYS2_ENV_CONV_EXCL='FORMAL_E2E_WINDOWS_IMAGE'` (MSYS
-  path conversion otherwise mangles the WSL path in the variable).
+- Server 2025 in-box `wsl --install` refuses headless sessions ("not
+  installed. You can install by running wsl.exe --install"); the working
+  route, probed end to end, is the official standalone MSI
+  (microsoft/WSL releases, cached as `wsl-modern-x64.msi`) + `dism
+  /enable-feature VirtualMachinePlatform` + reboot.
+- **The local L3 verdict is negative and final for this class of host**: with
+  VirtualMachinePlatform enabled, the guest must boot its own hypervisor on
+  top of KVM-inside-WSL2-inside-Hyper-V, and that boot pegs every vCPU for
+  27+ minutes without completing (VM-exit storms). WSL2-in-guest therefore
+  cannot run on a Windows host; the full Windows e2e needs the documented
+  nested-virt runner (a **Linux host with KVM**, where the Windows guest's
+  WSL2 is only the second nesting level).
+- The harness fixes are all committed and platform-agnostic: pty phases keep
+  stdin open (`< <(printf 'y'; sleep N)`; Server 2025's OpenSSH kills the
+  ConPTY session on stdin EOF), the distro phase ships a cached Ubuntu
+  rootfs + the modern WSL MSI and drives a detached `wsl --import` ladder
+  (v2 then v1), and the guest DNS is set to a real resolver (slirp's
+  forwarder drops the MS CDN's outsized answers, `0x80072ee7`).
+
+**Next steps on a Linux/KVM host or CI runner**: run the test as-is; the
+expected remaining work is (1) in the ladder, install `wsl-modern-x64.msi` +
+enable VirtualMachinePlatform + reboot once before the v2 import (the probe
+sequence above; the current ladder only runs msiexec), and (2) first
+execution of the tail phases (build1b, WSL-side rustup + linker, hpc, silent
+re-run, suite), which mirror the passing Linux test. `build.rs` may also
+want the MSI route as a fallback when `wsl --install` refuses a headless
+session - decide when a capable host shows the shape of the failure.
 
 CI ([.github/workflows/setup-e2e.yml](.github/workflows/setup-e2e.yml)) runs
 the Linux test weekly and on demand on standard runners; the Windows test runs

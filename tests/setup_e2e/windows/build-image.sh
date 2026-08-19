@@ -46,8 +46,9 @@ VIRTIO_ISO="${3:-$HOME/.cache/formal-e2e/images/virtio-win.iso}"
 command -v bsdtar >/dev/null 2>&1 || { echo "missing bsdtar (extracts the driver from the iso):  sudo apt-get install -y libarchive-tools"; exit 1; }
 mkdir -p "$WORK/extract"
 # --exclude the Readme: the ISO stores it as a hard link into a directory
-# outside this pattern, which bsdtar reports as an error.
-bsdtar -xf "$VIRTIO_ISO" -C "$WORK/extract" --exclude '*.md' 'NetKVM/2k22/amd64'
+# outside this pattern, which bsdtar reports as an error. Both Server driver
+# generations ride along; the answer file installs whichever matches.
+bsdtar -xf "$VIRTIO_ISO" -C "$WORK/extract" --exclude '*.md' 'NetKVM/2k22/amd64' 'NetKVM/2k25/amd64'
 [ -f "$WORK/extract/NetKVM/2k22/amd64/netkvm.inf" ] || { echo "netkvm.inf did not extract from $VIRTIO_ISO"; exit 1; }
 # bsdtar preserves the ISO's read-only modes, which would break the
 # answer-ISO build.
