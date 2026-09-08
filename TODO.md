@@ -18,6 +18,25 @@ Short, medium and long terms things to do.
 - Add instructions executed during compilation to the language comparison panels.
 - Add more configuration to limit the verification space.
 - Add more of the programs from [https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html] as tests and benchmarks.
+- Add leetcode-style algorithm tests, picked to fill the families the suite
+  lacks rather than repeat it (`binary_search`, `bubble_sort`, `sieve`, `gcd`
+  and `difference_array` already cover binary search, sorting, number theory
+  and prefix arrays). Each runs over a small fixed input and ends in a
+  `require` on the known answer, so a `Valid` outcome is the proof:
+  - Two Sum (hashing). `std` has no hash map, so this is an O(n^2) scan or a
+    direct-address table over a bounded value range, with every index into
+    that table proven in bounds.
+  - Trapping Rain Water (two pointers). Three optimal forms in one problem:
+    two pointers, a monotonic stack, and prefix/suffix maxima.
+  - Number of Islands (graph traversal). A grid flood fill, so the graph is
+    implicit and no allocator is needed; with no recursion the traversal uses
+    an explicit worklist.
+  - Coin Change (dynamic programming). A 1D table and nested loops.
+  - Merge Intervals (sorting and greedy). Reuses `bubble_sort`, then one
+    sweep whose correctness rests on an ordering invariant worth proving.
+  Linked lists (Reverse Linked List, Merge Two Sorted Lists) and heaps (Top K
+  Frequent Elements) are the next uncovered families, but they need a memory
+  region and an allocator first, so they belong in a second wave.
 
 ## Medium
 
