@@ -33,6 +33,7 @@ fn atomic_add() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -47,6 +48,7 @@ fn atomic_add() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "atomic_add/emitted.s",

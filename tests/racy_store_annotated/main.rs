@@ -48,6 +48,7 @@ fn racy_store_annotated() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
@@ -170,6 +171,7 @@ fn racy_store_annotated() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "racy_store_annotated/emitted.s",
@@ -191,6 +193,7 @@ fn racy_store_annotated() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "racy_store_annotated produces no UART output");

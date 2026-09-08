@@ -65,6 +65,7 @@ fn hpc_demo() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = match result {
         ExplorePathResult::Valid(valid) => valid,
         _ => panic!("hpc_demo: expected a valid path"),
@@ -99,6 +100,7 @@ fn hpc_demo() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("hpc_demo/emitted.s", asm, include_str!("emitted.s"));
     let serial = unsafe {
@@ -110,6 +112,7 @@ fn hpc_demo() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "hpc_demo produces no UART output");

@@ -34,6 +34,7 @@ fn signed_bytes() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -48,6 +49,7 @@ fn signed_bytes() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "signed_bytes/emitted.s",

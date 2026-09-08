@@ -46,6 +46,7 @@ fn fannkuch_redux() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -61,6 +62,7 @@ fn fannkuch_redux() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "fannkuch_redux/emitted.s",

@@ -2,29 +2,29 @@
     li a1, 4
     la t0, data
     li t1, 3
-    sw t1, 0(t0)
+    #] t1, 0(t0)
     li t1, 1
-    sw t1, 4(t0)
+    #] t1, 1(t0)
     li t1, 4
-    sw t1, 8(t0)
+    #] t1, 2(t0)
     li t1, 1
-    sw t1, 12(t0)
+    #] t1, 3(t0)
     li t1, 5
-    sw t1, 16(t0)
+    #] t1, 4(t0)
     li t1, 9
-    sw t1, 20(t0)
+    #] t1, 5(t0)
     li t1, 0
-    sw t1, 24(t0)
+    #] t1, 6(t0)
     li a2, 0
     li a3, 0
     la t0, data
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
 _l0:
     beqz t1, _l1
     add a2, a2, t1
     addi a3, a3, 1
     add t0, t0, a1
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
     j _l0
 _l1:
     li t5, 23

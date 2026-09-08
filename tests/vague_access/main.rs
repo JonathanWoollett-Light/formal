@@ -72,6 +72,7 @@ fn partially_covered_field_is_emitted_whole() {
         &Default::default(),
         &uncompactable,
         &Default::default(),
+        &Default::default(),
     );
     let expected = normalize(include_str!("emitted.s"));
     assert_eq!(normalize(asm), expected);

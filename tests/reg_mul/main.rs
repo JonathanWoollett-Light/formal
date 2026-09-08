@@ -35,6 +35,7 @@ fn reg_mul() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -49,6 +50,7 @@ fn reg_mul() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("reg_mul/emitted.s", asm.clone(), include_str!("emitted.s"));
 

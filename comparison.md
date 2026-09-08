@@ -45,7 +45,7 @@ in the wild).
 A global counter `value`, incremented **non-atomically** by every hart, asserted
 to stay below 4 (this is essentially
 [`tests/racy_increment/`](tests/racy_increment/); in the Python-like surface
-the increment reads `t1 = t0[0:4]`, `t1 = t1 + 1`, `t0[0:4] = t1`):
+the increment reads `t1 = t0[0]`, `t1 = t1 + 1`, `t0[0] = t1`):
 
 ```asm
     #$ value global _      # `value` is global; infer its type
@@ -486,9 +486,11 @@ The same design that gives the strengths above caps them hard:
 - **Finitely-explorable execution only.** Programs need statically-bounded loops;
   unbounded or input-shaped iteration breaks the finite execution tree.
 - **Low-level ergonomics.** The Python-like surface layer is still
-  assembly-shaped: explicit registers and byte-slice loads/stores, with `if`/
-  `while`/`require` the only control flow. There are no expressions, no
-  functions, no ecosystem, no libraries.
+  assembly-shaped: explicit registers, one statement per instruction, and
+  `if`/`while`/`require` as the only control flow. Indexing at least reads like
+  a language (`arr[k]` against the element type, bounds-checked at compile
+  time); a byte slice is now only for memory with no type of its own. There
+  are no expressions, no functions, no ecosystem, no libraries.
 - **Maturity and trusted base.** The verifier is a large body of `unsafe`
   pointer code under active development: its soundness rests on *its own*
   correctness (a far larger trusted base than Lean's kernel or Rust's type

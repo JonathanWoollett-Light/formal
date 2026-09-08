@@ -6,14 +6,14 @@
 counter: thread [u32]*1
 t0 = &counter
 t1 = 5
-t0[0:4] = t1          # counter = 5
+t0[0] = t1          # counter = 5
 t3 = 3
 asm:
     amoadd.w t2, t3, (t0)   # t2 = old (5); counter = 5 + 3 = 8
 
 a0 = 5
 require t2 == a0      # the returned old value
-t4 = t0[0:4]
+t4 = t0[0]
 a1 = 8
 require t4 == a1      # the incremented counter
 exit(0)

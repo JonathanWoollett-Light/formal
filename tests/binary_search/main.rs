@@ -34,6 +34,7 @@ fn binary_search() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -48,6 +49,7 @@ fn binary_search() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "binary_search/emitted.s",

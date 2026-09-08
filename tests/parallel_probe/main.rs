@@ -52,6 +52,7 @@ fn parallel_probe() {
             &v.transitions,
             &v.uncompactable,
             &v.pinned_nodes,
+            &v.indexed,
         )
     };
     assert_eq!(serial, "3", "sum of slots (1+2)");

@@ -34,6 +34,7 @@ fn difference_array() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -48,6 +49,7 @@ fn difference_array() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "difference_array/emitted.s",

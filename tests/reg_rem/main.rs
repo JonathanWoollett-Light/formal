@@ -35,6 +35,7 @@ fn reg_rem() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -49,6 +50,7 @@ fn reg_rem() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("reg_rem/emitted.s", asm.clone(), include_str!("emitted.s"));
 

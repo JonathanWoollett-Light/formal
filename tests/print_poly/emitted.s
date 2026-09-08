@@ -12,12 +12,12 @@ _start:
     sb t1, 3(t0)
     la a1, __str0
     li a2, 0
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
 _l0:
     beqz t0, _l1
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
     j _l0
 _l1:
     li a0, 1
@@ -36,7 +36,7 @@ _l2:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l2
 _l3:
@@ -56,7 +56,7 @@ _l4:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l4
 _l5:

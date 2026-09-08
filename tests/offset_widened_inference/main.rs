@@ -39,6 +39,7 @@ fn store_offset_widens_inferred_type() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps for the six failed candidates plus
@@ -98,6 +99,7 @@ fn store_offset_widens_inferred_type() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "offset_widened_inference/emitted.s",

@@ -14,8 +14,8 @@ fn compile_lowers_a_provable_program() {
 value: global u32
 t0 = &value
 t1 = 7
-t0[0:4] = t1
-t2 = t0[0:4]
+t0[0] = t1
+t2 = t0[0]
 a0 = 7
 require t2 == a0
 exit(0)
@@ -26,9 +26,14 @@ exit(0)
         "combined source keeps the program"
     );
     assert!(
-        compiled.dialect.contains("sw t1, 0(t0)"),
-        "dialect lowers the store: {}",
+        compiled.dialect.contains("#] t1, 0(t0)"),
+        "dialect lowers the element store to the index directive: {}",
         compiled.dialect
+    );
+    assert!(
+        compiled.assembly.contains("sw t1, 0(t0)"),
+        "the verifier resolved element 0 of the `u32` to a 4-byte store: {}",
+        compiled.assembly
     );
     assert!(
         compiled.assembly.contains("_start"),
@@ -44,8 +49,8 @@ fn compile_rejects_an_unprovable_program() {
 value: global u32
 t0 = &value
 t1 = 7
-t0[0:4] = t1
-t2 = t0[0:4]
+t0[0] = t1
+t2 = t0[0]
 a0 = 8
 require t2 == a0
 exit(0)

@@ -35,6 +35,7 @@ fn collatz() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -49,6 +50,7 @@ fn collatz() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("collatz/emitted.s", asm.clone(), include_str!("emitted.s"));
 

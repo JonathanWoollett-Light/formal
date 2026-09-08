@@ -38,6 +38,7 @@ fn fannkuch_v1() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -52,6 +53,7 @@ fn fannkuch_v1() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     // forget/assume are verifier-only; nothing leaks into the binary.
     assert!(

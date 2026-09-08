@@ -21,11 +21,11 @@ def print(msg):
     if typeof msg == [u8]:
         a1 = &msg
         a2 = 0
-        t0 = a1[0:1]
+        t0 = a1[0]
         while t0 != 0:
             a2 = a2 + 1
             a1 = a1 + 1
-            t0 = a1[0:1]
+            t0 = a1[0]
         a0 = 1
         a1 = &msg
         a7 = 64
@@ -46,7 +46,7 @@ def print(msg):
             t5 = t5 / t1
             t2 = t2 + 48
             t0 = t0 - 1
-            t0[0:1] = t2
+            t0[0] = t2
             a2 = a2 + 1
         a1 = t0 + 0
         a0 = 1

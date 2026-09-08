@@ -35,6 +35,7 @@ fn bubble_sort() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -49,6 +50,7 @@ fn bubble_sort() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "bubble_sort/emitted.s",

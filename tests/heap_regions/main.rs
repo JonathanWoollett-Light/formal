@@ -53,6 +53,7 @@ fn heap_regions() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to validate every interleaving of the
@@ -83,6 +84,7 @@ fn heap_regions() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     let expected = normalize(include_str!("emitted.s"));
     assert_eq!(normalize(asm), expected);
@@ -99,6 +101,7 @@ fn heap_regions() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "heap_regions produces no UART output");

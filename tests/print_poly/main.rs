@@ -37,6 +37,7 @@ fn print_poly() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -51,6 +52,7 @@ fn print_poly() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     // The `typeof` dispatch is compile-time only: no directive leaks into the binary.
     assert!(

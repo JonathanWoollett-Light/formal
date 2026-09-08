@@ -33,6 +33,7 @@ fn global_zero_init() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -47,6 +48,7 @@ fn global_zero_init() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "global_zero_init/emitted.s",

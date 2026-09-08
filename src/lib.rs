@@ -162,6 +162,7 @@ pub fn compile(source: &str) -> Result<Compiled, CompileError> {
             &valid.transitions,
             &valid.uncompactable,
             &valid.pinned_nodes,
+            &valid.indexed,
         ))
     })();
     let _ = std::fs::remove_file(&dialect_path);

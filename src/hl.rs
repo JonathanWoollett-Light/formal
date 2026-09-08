@@ -18,6 +18,8 @@
 //! t0 = csr(mhartid)            ->  csrr t0, mhartid
 //! t1 = 0x10000000              ->  li t1, 0x10000000
 //! t1 = t1 + 1                  ->  addi t1, t1, 1
+//! t0[0] = t1                   ->  #] t1, 0(t0)
+//! t1 = t0[2]                   ->  #[ t1, 2(t0)
 //! t0[0:4] = t1                 ->  sw t1, 0(t0)
 //! t1 = t0[8:16]                ->  ld t1, 8(t0)
 //! section 0x100 0x200 rw       ->  #@ 0x100 0x200 rw
@@ -46,9 +48,23 @@
 //! the operands onto `blt`/`bge`), or `<reg> ==|!= 0` (`beqz`/`bnez`).
 //!
 //! `#` starts a comment exactly as in Python; comments and blank lines do not
-//! appear in the output. Loads and stores are byte slices off a register
-//! (`reg[offset : offset+len]`), so the access width is visible at the call
-//! site: 1 = `lb`/`sb`, 4 = `lw`/`sw`, 8 = `ld`.
+//! appear in the output.
+//!
+//! Indexing is **element-based**: `t0[k]` is element `k` of whatever `t0`
+//! points at, so the width comes from the pointee's type rather than the call
+//! site. The front-end is stateless and does not track what a register points
+//! at, so it lowers the access to the `#[` / `#]` directives and the verifier
+//! (the only part that knows every pointer's pointee type, per state and per
+//! type configuration) resolves each one to a byte offset and a width, checks
+//! the index is in bounds, and hands codegen the sized load/store. A *runtime*
+//! index is not supported yet: compute the address (`t = i * <element size>`,
+//! `p = base + t`) and index that with `p[0]`.
+//!
+//! `reg[a:b]` is the raw byte slice, for memory that has no element type of
+//! its own: a memory-mapped address, a `#@` region, or a variable whose type
+//! the verifier is still inferring (there the access width is what drives the
+//! inference). It lowers directly, the width visible at the call site:
+//! 1 = `lb`/`sb`, 2 = `lh`/`sh`, 4 = `lw`/`sw`, 8 = `ld`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -865,37 +881,46 @@ fn translate_type(text: &str) -> Result<String, String> {
 
 /// Everything of the form `<lhs> = <rhs>`.
 fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
-    // Store: `reg[a:b] = reg2`.
-    if let Some((register, slice)) = split_slice(lhs)? {
+    // Store: `reg[k] = reg2` (element) or `reg[a:b] = reg2` (raw bytes).
+    if let Some((register, index)) = split_index(lhs)? {
         if !is_register(rhs) {
             return Err(format!(
                 "a store's right-hand side must be a register, got `{rhs}`"
             ));
         }
-        let (offset, len) = slice;
-        let mnemonic = match len {
-            1 => "sb",
-            2 => "sh",
-            4 => "sw",
-            _ => return Err(format!("unsupported store width {len} (1, 2 or 4)")),
-        };
-        return Ok(format!("    {mnemonic} {rhs}, {offset}({register})"));
+        return Ok(match index {
+            Index::Element(index) => format!("    #] {rhs}, {index}({register})"),
+            Index::Bytes { offset, len } => {
+                let mnemonic = match len {
+                    1 => "sb",
+                    2 => "sh",
+                    4 => "sw",
+                    _ => return Err(format!("unsupported store width {len} (1, 2 or 4)")),
+                };
+                format!("    {mnemonic} {rhs}, {offset}({register})")
+            }
+        });
     }
 
     if !is_register(lhs) {
-        return Err(format!("`{lhs}` is not a register"));
+        return Err(place_error(lhs));
     }
 
-    // Load: `reg = reg2[a:b]`.
-    if let Some((register, (offset, len))) = split_slice(rhs)? {
-        let mnemonic = match len {
-            1 => "lb",
-            2 => "lh",
-            4 => "lw",
-            8 => "ld",
-            _ => return Err(format!("unsupported load width {len} (1, 2, 4 or 8)")),
-        };
-        return Ok(format!("    {mnemonic} {lhs}, {offset}({register})"));
+    // Load: `reg = reg2[k]` (element) or `reg = reg2[a:b]` (raw bytes).
+    if let Some((register, index)) = split_index(rhs)? {
+        return Ok(match index {
+            Index::Element(index) => format!("    #[ {lhs}, {index}({register})"),
+            Index::Bytes { offset, len } => {
+                let mnemonic = match len {
+                    1 => "lb",
+                    2 => "lh",
+                    4 => "lw",
+                    8 => "ld",
+                    _ => return Err(format!("unsupported load width {len} (1, 2, 4 or 8)")),
+                };
+                format!("    {mnemonic} {lhs}, {offset}({register})")
+            }
+        });
     }
 
     // Address of a variable: `reg = &label`.
@@ -970,10 +995,22 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
     Err(format!("unrecognized right-hand side `{rhs}`"))
 }
 
-/// Splits `reg[a:b]` into the register and `(offset-text, length)`; the
-/// offset keeps the programmer's literal text (radix preserved).
-#[allow(clippy::type_complexity)]
-fn split_slice(text: &str) -> Result<Option<(&str, (&str, i64))>, String> {
+/// What the brackets in `reg[...]` select.
+enum Index<'a> {
+    /// `reg[k]`: element `k` of whatever the register points at. The width and
+    /// the byte offset follow from the pointee's type, so they are resolved by
+    /// the verifier (`#[` / `#]`), not here.
+    Element(&'a str),
+    /// `reg[a:b]`: the raw byte range, for memory with no element type of its
+    /// own (a memory-mapped address, a `#@` region, a variable whose type the
+    /// verifier is still inferring).
+    Bytes { offset: &'a str, len: i64 },
+}
+
+/// Splits `reg[...]` into the register and what the brackets select; both the
+/// index and the byte offset keep the programmer's literal text (radix
+/// preserved). `Ok(None)` when the text is not a bracketed register access.
+fn split_index<'a>(text: &'a str) -> Result<Option<(&'a str, Index<'a>)>, String> {
     let Some((register, rest)) = text.split_once('[') else {
         return Ok(None);
     };
@@ -983,10 +1020,26 @@ fn split_slice(text: &str) -> Result<Option<(&str, (&str, i64))>, String> {
     }
     let inner = rest
         .strip_suffix(']')
-        .ok_or_else(|| format!("unterminated slice `{text}`"))?;
-    let (start_text, end_text) = inner
-        .split_once(':')
-        .ok_or_else(|| format!("a slice needs `start:end`, got `{inner}`"))?;
+        .ok_or_else(|| format!("unterminated index `{text}`"))?;
+    let Some((start_text, end_text)) = inner.split_once(':') else {
+        // `reg[k]`: an element index, which must be a constant.
+        let index = inner.trim();
+        if index.is_empty() {
+            return Err(format!("empty index `{text}`"));
+        }
+        if is_register(index) {
+            return Err(format!(
+                "a runtime index `{register}[{index}]` is not supported yet: \
+                 compute the address (`t = {index} * <element size>`, \
+                 `p = {register} + t`) and index that with `p[0]`"
+            ));
+        }
+        let value = parse_int(index).ok_or_else(|| format!("invalid index `{index}`"))?;
+        if value < 0 {
+            return Err(format!("negative index `{index}`"));
+        }
+        return Ok(Some((register, Index::Element(index))));
+    };
     let start_text = start_text.trim();
     let start = parse_int(start_text).ok_or_else(|| format!("invalid offset `{start_text}`"))?;
     let end = parse_int(end_text.trim())
@@ -994,7 +1047,26 @@ fn split_slice(text: &str) -> Result<Option<(&str, (&str, i64))>, String> {
     if end <= start {
         return Err(format!("empty slice `{inner}`"));
     }
-    Ok(Some((register, (start_text, end - start))))
+    Ok(Some((
+        register,
+        Index::Bytes {
+            offset: start_text,
+            len: end - start,
+        },
+    )))
+}
+
+/// The error for an assignment target that is not a register, pointing a
+/// bracketed *label* (`arr[0] = t1`) at the address-then-index form.
+fn place_error(place: &str) -> String {
+    match place.split_once('[') {
+        Some((label, _)) if is_label(label.trim()) => format!(
+            "`{place}` indexes a variable directly: take its address first \
+             (`t0 = &{}`), then index the register (`t0[0] = ...`)",
+            label.trim()
+        ),
+        _ => format!("`{place}` is not a register"),
+    }
 }
 
 /// `name(argument)` for a specific builtin, returning the trimmed argument.

@@ -62,6 +62,7 @@ fn uart_hello() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path: the racy
@@ -171,6 +172,7 @@ fn uart_hello() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("uart_hello/emitted.s", asm, include_str!("emitted.s"));
 
@@ -186,6 +188,7 @@ fn uart_hello() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(

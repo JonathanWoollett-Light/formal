@@ -38,6 +38,7 @@ fn vector_add() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -52,6 +53,7 @@ fn vector_add() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "vector_add/emitted.s",

@@ -7,8 +7,8 @@ _start:
     div t3, t1, t2
     li t4, 3
     div t3, t3, t4
-    sw t3, 0(t0)
-    lw t5, 0(t0)
+    sw t3, 0(t0)  # #] t3, 0(t0)
+    lwu t5, 0(t0)  # #[ t5, 0(t0)
     li a0, 4
     beq t5, a0, _l0
 _l0:

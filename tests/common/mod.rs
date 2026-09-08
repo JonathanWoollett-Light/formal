@@ -4,7 +4,9 @@
 //! helpers appear unused from any single test binary's perspective.
 #![allow(dead_code)]
 
-use formal::verifier_types::{AccessTransitions, AccessedRanges, TypeConfiguration};
+use formal::verifier_types::{
+    AccessTransitions, AccessedRanges, IndexLowerings, TypeConfiguration,
+};
 use formal::*;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -894,6 +896,7 @@ echo "===END==="
 ///
 /// # Safety
 /// `ast` must be a live AST (typically the optimized output of the pipeline).
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn run_program(
     name: &str,
     ast: Option<NonNull<AstNode>>,
@@ -902,6 +905,7 @@ pub unsafe fn run_program(
     transitions: &AccessTransitions,
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+    indexed: &IndexLowerings,
 ) -> String {
     run_program_smp(
         name,
@@ -913,6 +917,7 @@ pub unsafe fn run_program(
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     )
 }
 
@@ -932,6 +937,7 @@ pub unsafe fn run_program_smp(
     transitions: &AccessTransitions,
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+    indexed: &IndexLowerings,
 ) -> String {
     let asm = emit_executable(
         ast,
@@ -940,6 +946,7 @@ pub unsafe fn run_program_smp(
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     );
 
     // The emitted program must be self-contained.

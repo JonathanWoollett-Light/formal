@@ -42,6 +42,7 @@ fn mixed_pointer_and_raw_node_keeps_its_immediate() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps (the search walks u8…i32, each failing
@@ -84,6 +85,7 @@ fn mixed_pointer_and_raw_node_keeps_its_immediate() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "mixed_pointer_raw/emitted.s",
@@ -102,6 +104,7 @@ fn mixed_pointer_and_raw_node_keeps_its_immediate() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "mixed_pointer_raw produces no UART output");

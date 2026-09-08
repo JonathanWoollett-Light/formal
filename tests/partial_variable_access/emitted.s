@@ -7,8 +7,8 @@ _start:
     la t0, data
     add t0, t0, tp  # thread-local
     li t1, 7
-    sb t1, 0(t0)
-    lb t2, 1(t0)
+    sb t1, 0(t0)  # #] t1, 0(t0)
+    lbu t2, 1(t0)  # #[ t2, 2(t0)
 __halt:
     wfi
     j __halt

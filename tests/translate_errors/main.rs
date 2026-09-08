@@ -90,6 +90,21 @@ const MALFORMED: &[(&str, &str)] = &[
         "t0 = t1[0:5]\nexit(0)\n",
         "unsupported load width (only 1/2/4/8)",
     ),
+    // Element indexing: the index must be a constant the directive can carry
+    // (the pointee's type, and so the access width, is the verifier's to
+    // resolve, but the index is the source's to state).
+    (
+        "t0[t1] = t2\nexit(0)\n",
+        "a runtime index is not supported yet",
+    ),
+    ("t0 = t1[a0]\nexit(0)\n", "a runtime index on the load side"),
+    ("t0[-1] = t1\nexit(0)\n", "a negative element index"),
+    ("t0[] = t1\nexit(0)\n", "an empty index"),
+    ("t0[x] = t1\nexit(0)\n", "an index that is not an integer"),
+    (
+        "arr[0] = t1\nexit(0)\n",
+        "indexing a variable instead of a register",
+    ),
     ("t0 = type(9bad)\nexit(0)\n", "type() of an invalid label"),
     (
         "t0 = 5 + t1\nexit(0)\n",

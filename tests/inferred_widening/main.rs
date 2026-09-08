@@ -37,6 +37,7 @@ fn inferred_widening() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // The search must have widened all the way to u32 (the 4-byte store).
@@ -62,6 +63,7 @@ fn inferred_widening() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "inferred_widening/emitted.s",

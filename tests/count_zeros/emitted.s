@@ -3,17 +3,17 @@ _start:
     #$ arr thread [u32 u32 u32 u32 u32 u32]
     la t0, arr
     li t1, 3
-    sw t1, 0(t0)
+    sw t1, 0(t0)  # #] t1, 0(t0)
     li t1, 0
-    sw t1, 4(t0)
+    sw t1, 4(t0)  # #] t1, 1(t0)
     li t1, 5
-    sw t1, 8(t0)
+    sw t1, 8(t0)  # #] t1, 2(t0)
     li t1, 0
-    sw t1, 12(t0)
+    sw t1, 12(t0)  # #] t1, 3(t0)
     li t1, 0
-    sw t1, 16(t0)
+    sw t1, 16(t0)  # #] t1, 4(t0)
     li t1, 2
-    sw t1, 20(t0)
+    sw t1, 20(t0)  # #] t1, 5(t0)
     li a0, 0
     li a1, 0
     li a2, 6
@@ -23,7 +23,7 @@ _l0:
     mul t1, a1, a5
     la t2, arr
     add t2, t2, t1
-    lw t3, 0(t2)
+    lwu t3, 0(t2)  # #[ t3, 0(t2)
     bnez t3, _l2
     addi a0, a0, 1
 _l2:

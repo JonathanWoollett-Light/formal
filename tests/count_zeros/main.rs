@@ -34,6 +34,7 @@ fn count_zeros() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -48,6 +49,7 @@ fn count_zeros() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "count_zeros/emitted.s",

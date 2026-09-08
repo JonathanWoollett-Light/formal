@@ -13,7 +13,7 @@ _l0:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l0
 _l1:

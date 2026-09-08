@@ -196,6 +196,27 @@ pub unsafe fn step(
         Instruction::Lh(Lh { from, offset, .. }) => {
             check_load_at(&cont.state, hart, active, sinks, from, offset, 2)?
         }
+        // An element-indexed access states no width: resolve it against the
+        // pointee's type first, then validate the sized access it stands for.
+        Instruction::Lidx(Lidx { from, index, .. }) => {
+            match resolve_index(&cont.state, hart, from, index)? {
+                IndexLowering::OutOfBounds => false,
+                IndexLowering::At { label, offset, ty } => {
+                    record_index_into(sinks.indexed, active, &label, &offset, &ty);
+                    check_load_at(&cont.state, hart, active, sinks, from, &offset, size(&ty))?
+                }
+            }
+        }
+        Instruction::Sidx(Sidx { to, index, .. }) => {
+            match resolve_index(&cont.state, hart, to, index)? {
+                IndexLowering::OutOfBounds => false,
+                IndexLowering::At { label, offset, ty } => {
+                    check_store_width(&ty)?;
+                    record_index_into(sinks.indexed, active, &label, &offset, &ty);
+                    check_store_at(&cont.state, hart, active, sinks, to, &offset, size(&ty))?
+                }
+            }
+        }
         // An atomic accesses `(rs1)` (zero offset): validate it like a 4-byte
         // store (read and write hit the same address, so the store check covers
         // both).
@@ -442,6 +463,12 @@ pub struct Explorerer {
     /// Nodes that must keep their original immediate (they also executed with a
     /// raw address, scalar operand, or range offset). Grows like `accessed`.
     pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
+    /// The lowering each element-indexed access resolved to (see
+    /// [`IndexLowerings`]). Unlike the records above this is *not* monotone:
+    /// a lowering is a function of the variable's type, so `invalid_path`
+    /// drops the entries of the variable it re-types (the re-exploration that
+    /// follows re-records them under the new type).
+    pub indexed: IndexLowerings,
     /// Cached [`State`] per live leaf: the state *before* the leaf's
     /// `prev.node` executes. The tree only extends at leaves, so `queue_up`
     /// derives each successor's state incrementally (parent state + one
@@ -548,6 +575,7 @@ impl Explorerer {
             transitions: Default::default(),
             uncompactable: Default::default(),
             pinned_nodes: Default::default(),
+            indexed: Default::default(),
             state_cache: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
@@ -565,6 +593,7 @@ impl Explorerer {
             transitions: Default::default(),
             uncompactable: Default::default(),
             pinned_nodes: Default::default(),
+            indexed: Default::default(),
             state_cache: Default::default(),
             types: Default::default(),
             encountered: Default::default(),
@@ -585,6 +614,7 @@ impl Explorerer {
                     transitions: &mut self.transitions,
                     uncompactable: &mut self.uncompactable,
                     pinned_nodes: &mut self.pinned_nodes,
+                    indexed: &mut self.indexed,
                 },
             )?;
             self.state_cache.insert(leaf, state);
@@ -634,6 +664,7 @@ impl Explorerer {
                 transitions: self.transitions.clone(),
                 uncompactable: self.uncompactable.clone(),
                 pinned_nodes: self.pinned_nodes.clone(),
+                indexed: self.indexed.clone(),
             }));
         };
 
@@ -803,6 +834,20 @@ impl Explorerer {
                     ControlFlow::Break(outcome) => return Ok(outcome),
                 };
             }
+            // An element-indexed access resolves against the pointee's type
+            // first (see `check_index`), then validates like the sized access.
+            Instruction::Lidx(Lidx { from, index, .. }) => {
+                self = match self.check_index(leaf_ptr, branch, from, index, false)? {
+                    ControlFlow::Continue(x) => x,
+                    ControlFlow::Break(outcome) => return Ok(outcome),
+                };
+            }
+            Instruction::Sidx(Sidx { to, index, .. }) => {
+                self = match self.check_index(leaf_ptr, branch, to, index, true)? {
+                    ControlFlow::Continue(x) => x,
+                    ControlFlow::Break(outcome) => return Ok(outcome),
+                };
+            }
             // An atomic accesses `(rs1)` (zero offset): validate the 4-byte access
             // like a store (read and write hit the same address).
             Instruction::Amoadd(Amoadd { rs1, .. }) => {
@@ -898,6 +943,16 @@ impl Explorerer {
 
         // Remove from current type configuration.
         self.configuration.remove(recent);
+
+        // An element index resolves through the variable's type, so every
+        // lowering recorded against `recent` is about to be re-derived under a
+        // different type. Drop them (the replay past the variable's first
+        // encounter re-records each one) so codegen never sees the width a
+        // rejected candidate implied.
+        self.indexed.retain(|_, lowerings| {
+            lowerings.retain(|(label, _, _)| label != recent);
+            !lowerings.is_empty()
+        });
 
         // Split leafs into leafs which have encountered the variable and leafs which haven't.
         // We can leave the leafs which haven't encounterd the variable unchanged while we need to
@@ -1176,6 +1231,7 @@ impl Explorerer {
                 transitions: &mut self.transitions,
                 uncompactable: &mut self.uncompactable,
                 pinned_nodes: &mut self.pinned_nodes,
+                indexed: &mut self.indexed,
             },
             to.borrow(),
             offset.borrow(),
@@ -1185,6 +1241,37 @@ impl Explorerer {
             Ok(ControlFlow::Continue(self))
         } else {
             Ok(ControlFlow::Break(self.outer_invalid_path()?))
+        }
+    }
+
+    /// Resolves an element-indexed access against the pointee's type, then
+    /// verifies it as the sized access it stands for (the oracle's counterpart
+    /// of the `Lidx`/`Sidx` arms in `step`). An index past the end of the
+    /// pointee is an invalid path, like any other access past a label, so an
+    /// inferred variable's type search moves on to the next candidate.
+    unsafe fn check_index(
+        mut self,
+        leaf_ptr: *mut VerifierLeafNode,
+        branch: impl Borrow<VerifierNode>,
+        register: impl Borrow<Register>,
+        index: impl Borrow<crate::ast::Offset>,
+        store: bool,
+    ) -> Result<ControlFlow<ExplorePathResult, Self>, CompilerError> {
+        let state = self.state_for(leaf_ptr)?.clone();
+        let (hart, node) = (branch.borrow().hart, branch.borrow().node);
+        match resolve_index(&state, hart, register.borrow(), index.borrow())? {
+            IndexLowering::OutOfBounds => Ok(ControlFlow::Break(self.outer_invalid_path()?)),
+            IndexLowering::At { label, offset, ty } => {
+                if store {
+                    check_store_width(&ty)?;
+                }
+                record_index_into(&mut self.indexed, node, &label, &offset, &ty);
+                let width = size(&ty);
+                match store {
+                    true => self.check_store(leaf_ptr, branch, register, offset, width),
+                    false => self.check_load(leaf_ptr, branch, register, offset, width),
+                }
+            }
         }
     }
 
@@ -1210,6 +1297,7 @@ impl Explorerer {
                 transitions: &mut self.transitions,
                 uncompactable: &mut self.uncompactable,
                 pinned_nodes: &mut self.pinned_nodes,
+                indexed: &mut self.indexed,
             },
             from.borrow(),
             offset.borrow(),
@@ -1243,6 +1331,7 @@ impl Explorerer {
                     transitions: &mut self.transitions,
                     uncompactable: &mut self.uncompactable,
                     pinned_nodes: &mut self.pinned_nodes,
+                    indexed: &mut self.indexed,
                 },
             )?,
         };
@@ -1311,6 +1400,7 @@ impl Explorerer {
                 transitions: &mut self.transitions,
                 uncompactable: &mut self.uncompactable,
                 pinned_nodes: &mut self.pinned_nodes,
+                indexed: &mut self.indexed,
             },
         )?;
 
@@ -1536,6 +1626,10 @@ pub struct ValidPathResult {
     /// `transitions` that a rewrite would silently corrupt. Compaction demotes
     /// any region that would require rewriting a pinned node.
     pub pinned_nodes: BTreeSet<NonNull<AstNode>>,
+    /// What each element-indexed access (`#[` / `#]`) resolved to under this
+    /// configuration (see [`IndexLowerings`]): the byte offset and width
+    /// codegen emits the sized load/store with.
+    pub indexed: IndexLowerings,
 }
 
 impl From<&LabelLocality> for Locality {
@@ -1706,6 +1800,173 @@ pub struct RecordSinks<'a> {
     pub transitions: &'a mut AccessTransitions,
     pub uncompactable: &'a mut BTreeSet<Label>,
     pub pinned_nodes: &'a mut BTreeSet<NonNull<AstNode>>,
+    pub indexed: &'a mut IndexLowerings,
+}
+
+/// What an element-indexed access (`#[` / `#]`) resolves to in the current
+/// state: element `k` of whatever its register points at.
+#[derive(Debug)]
+enum IndexLowering {
+    /// The element exists: one of type `ty`, `offset` bytes from the pointer,
+    /// which points into `label`. Its width is the `len` a byte-slice access
+    /// states outright, so the access proceeds through the same checks and the
+    /// same state transfer; its *type* additionally tells codegen how the
+    /// value extends into a register.
+    At {
+        label: Label,
+        offset: Offset,
+        ty: Type,
+    },
+    /// The index is past the end of the pointee, the element-granular form of
+    /// an access past the label: an invalid path, so an inferred variable's
+    /// type search moves on to the next candidate.
+    OutOfBounds,
+}
+
+/// Resolves element `index` of whatever `register` points at against the
+/// pointee's type in this state ([`IndexLowering`]).
+///
+/// This is the whole of what makes indexing element-based: the width of
+/// `p[k]` is a property of the pointee, and only here is that type known (per
+/// state, and for an inferred variable per type configuration). A pointee of
+/// uniform element width resolves without knowing where in it the pointer
+/// sits, so a computed address (`p = &arr + i*4`) indexes as `p[0]`; a mixed
+/// shape (`[u8*2, u16*2]`, a descriptor record) needs an exact offset on an
+/// element boundary, and says so when it does not have one.
+unsafe fn resolve_index(
+    state: &State,
+    hart: u8,
+    register: &Register,
+    index: &Offset,
+) -> Result<IndexLowering, CompilerError> {
+    let (tag, base) = match state.registers[hart as usize].get(register) {
+        Some(MemoryValue::Ptr(MemoryPtr(Some(NonNullMemoryPtr { tag, offset })))) => (tag, offset),
+        // A raw address has no pointee type to count elements of. The byte
+        // slice is the access for such memory (`#@` regions, memory-mapped
+        // devices), and it states its own width.
+        Some(MemoryValue::I64(x)) => {
+            return Err(CompilerError::Unsupported(format!(
+                "element index through the raw address {x:?}, which has no element type: \
+                 use a byte slice (`p[a:b]`)"
+            )))
+        }
+        x => {
+            return Err(CompilerError::Unsupported(format!(
+                "element index through {x:?}, which is not a pointer"
+            )))
+        }
+    };
+    let label = <&Label>::from(tag).clone();
+    let (_locality, ttype) = state
+        .configuration
+        .get(&label)
+        .internal("index: label missing from configuration")?;
+
+    // A negative index would compute an address before the pointer, which the
+    // byte-offset model (unsigned offsets into a label) cannot express.
+    let Ok(index) = usize::try_from(index.value.value) else {
+        info!(
+            "reached invalid index: negative index {}",
+            index.value.value
+        );
+        return Ok(IndexLowering::OutOfBounds);
+    };
+
+    let elements: &[Type] = match ttype {
+        Type::List(items) => items,
+        Type::Union(_) => {
+            return Err(CompilerError::Unsupported(format!(
+                "element index into the union {ttype}"
+            )))
+        }
+        scalar => std::slice::from_ref(scalar),
+    };
+    if elements
+        .iter()
+        .any(|t| matches!(t, Type::List(_) | Type::Union(_)))
+    {
+        return Err(CompilerError::Unsupported(format!(
+            "element index into {ttype}, whose elements are not scalars: \
+             use a byte slice (`p[a:b]`)"
+        )));
+    }
+    let Some(width) = elements.first().map(size) else {
+        info!("reached invalid index: {ttype} has no elements");
+        return Ok(IndexLowering::OutOfBounds);
+    };
+
+    // A uniform element *type* needs no boundary: element `k` is `k` widths on
+    // from wherever the pointer is, whatever element the pointer sits at, and
+    // the access-past-the-label check that follows is the bounds check. Equal
+    // widths alone are not enough: `[u32 i32]` would resolve every index to
+    // element 0's type and load a negative `i32` zero-extended.
+    if elements.iter().all(|t| *t == elements[0]) {
+        let offset = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(width))
+            .and_then(|offset| i64::try_from(offset).ok())
+            .internal("index: element offset overflow")?;
+        return Ok(IndexLowering::At {
+            label,
+            offset: Offset::from(offset),
+            ty: elements[0].clone(),
+        });
+    }
+
+    // A mixed shape: which element the pointer is at decides which element
+    // `k` steps on is, so the offset must be exact and on a boundary.
+    let base = base
+        .exact()
+        .internal("index: mixed-shape element index at an under-determined offset")?;
+    let mut cursor = 0;
+    let mut first = None;
+    for (position, element) in elements.iter().enumerate() {
+        if cursor == base {
+            first = Some(position);
+            break;
+        }
+        cursor += size(element);
+    }
+    let first = first.internal("index: element index from a pointer that is not at an element boundary of a mixed-shape list")?;
+    let Some(target) = first.checked_add(index).filter(|t| *t < elements.len()) else {
+        info!(
+            "reached invalid index: element {index} past the end of {ttype} from element {first}"
+        );
+        return Ok(IndexLowering::OutOfBounds);
+    };
+    let offset = elements[first..target].iter().map(size).sum::<u64>();
+    Ok(IndexLowering::At {
+        label,
+        offset: Offset::from(i64::try_from(offset).internal("index: element offset overflow")?),
+        ty: elements[target].clone(),
+    })
+}
+
+/// The dialect stores at most a word, so an element store of a `u64`/`i64` has
+/// no instruction to lower to (`sd` is a later instruction batch). Refused here
+/// rather than at emission so the message names the source construct.
+fn check_store_width(ty: &Type) -> Result<(), CompilerError> {
+    match size(ty) {
+        1 | 2 | 4 => Ok(()),
+        width => Err(CompilerError::Unsupported(format!(
+            "element store of {ty} ({width} bytes): the dialect has no 8-byte store (`sd`) yet"
+        ))),
+    }
+}
+
+/// Records the lowering an element-indexed access resolved to, so codegen can
+/// emit the sized instruction it stands for (see [`IndexLowerings`]).
+fn record_index_into(
+    indexed: &mut IndexLowerings,
+    node: NonNull<AstNode>,
+    label: &Label,
+    offset: &Offset,
+    ty: &Type,
+) {
+    indexed
+        .entry(node)
+        .or_default()
+        .insert((label.clone(), ty.clone(), offset.value.value));
 }
 
 /// Rebuilds the [`State`] at `leaf` (the state *before* its `prev.node`
@@ -2082,6 +2343,10 @@ unsafe fn compute_next(
                 | Instruction::Lw(Lw { from: register, .. })
                 | Instruction::Lb(Lb { from: register, .. })
                 | Instruction::Lh(Lh { from: register, .. })
+                // An element-indexed access reaches memory exactly like the
+                // sized access it resolves to, so it is racy on the same terms.
+                | Instruction::Lidx(Lidx { from: register, .. })
+                | Instruction::Sidx(Sidx { to: register, .. })
                 // An atomic RMW is the racy primitive: it accesses `(rs1)`, racy
                 // exactly when that points at a global (the shared counter).
                 | Instruction::Amoadd(Amoadd { rs1: register, .. }) => {
@@ -2520,6 +2785,8 @@ unsafe fn compute_next(
                 | Instruction::Lw(_)
                 | Instruction::Lb(_)
                 | Instruction::Lh(_)
+                | Instruction::Lidx(_)
+                | Instruction::Sidx(_)
                 | Instruction::Fail(_)
                 | Instruction::Ecall(_)
                 | Instruction::Assume(_)
@@ -2690,6 +2957,29 @@ unsafe fn apply_node(
         }
         Instruction::Lh(Lh { to, from, offset }) => {
             find_state_load(state, sinks, node, hartu, to, from, offset, 2)?;
+        }
+        // Element-indexed accesses: the resolution is the same function the
+        // validation ran, over the same state, so it lands on the same
+        // `(offset, width)` and the transfer is the sized one's.
+        Instruction::Lidx(Lidx { to, from, index }) => {
+            let IndexLowering::At { label, offset, ty } = resolve_index(state, hart, from, index)?
+            else {
+                return Err(CompilerError::Internal(
+                    "apply: element load out of bounds after validation accepted it".to_string(),
+                ));
+            };
+            record_index_into(sinks.indexed, node, &label, &offset, &ty);
+            find_state_load(state, sinks, node, hartu, to, from, &offset, size(&ty))?;
+        }
+        Instruction::Sidx(Sidx { to, from, index }) => {
+            let IndexLowering::At { label, offset, ty } = resolve_index(state, hart, to, index)?
+            else {
+                return Err(CompilerError::Internal(
+                    "apply: element store out of bounds after validation accepted it".to_string(),
+                ));
+            };
+            record_index_into(sinks.indexed, node, &label, &offset, &ty);
+            find_state_store(state, sinks, node, hartu, to, from, &offset, size(&ty))?;
         }
         Instruction::Amoadd(Amoadd { rd, rs2, rs1, op }) => {
             // Atomic word read-modify-write: `rd = mem[rs1]; mem[rs1] = op(rd, rs2)`,

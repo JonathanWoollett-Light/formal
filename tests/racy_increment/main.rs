@@ -49,6 +49,7 @@ fn racy_increment() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps to reach the valid path.
@@ -121,6 +122,7 @@ fn racy_increment() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("racy_increment/emitted.s", asm, include_str!("emitted.s"));
 
@@ -136,6 +138,7 @@ fn racy_increment() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "racy_increment produces no UART output");

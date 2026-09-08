@@ -62,20 +62,20 @@ t0 = &perm
 t1 = 0
 t3 = 12
 while t1 != t3:
-    t0[0:4] = t1
+    t0[0] = t1
     t0 = t0 + 4
     t1 = t1 + 1
 t0 = &cnt
 t1 = 0
 t2 = 0
 while t1 != t3:
-    t0[0:4] = t2
+    t0[0] = t2
     t0 = t0 + 4
     t1 = t1 + 1
 t0 = &work
 t1 = 0
 while t1 != t3:
-    t0[0:4] = t2
+    t0[0] = t2
     t0 = t0 + 4
     t1 = t1 + 1
 
@@ -86,9 +86,9 @@ asm:
     amoadd.w a3, t1, (t0)
 # remember the rank (for the slot index) and seed the first block c = h.
 t0 = &myrank
-t0[0:4] = a3
+t0[0] = a3
 t0 = &blockc
-t0[0:4] = a3
+t0[0] = a3
 
 # partial accumulators (this hart's contribution across its blocks).
 a5 = 0
@@ -96,17 +96,17 @@ a6 = 0
 
 # ===== block loop: for c = h, h+2, ... while c < n =====
 t0 = &blockc
-t0 = t0[0:4]
+t0 = t0[0]
 while t0 < a2:
     # --- build the block's start permutation: perm[j] = (c + j) % n ---
     t1 = &blockc
-    t1 = t1[0:4]
+    t1 = t1[0]
     t0 = &perm
     t2 = 0
     while t2 != a2:
         t3 = t1 + t2
         t4 = t3 % a2
-        t0[0:4] = t4
+        t0[0] = t4
         t0 = t0 + 4
         t2 = t2 + 1
 
@@ -115,7 +115,7 @@ while t0 < a2:
     t2 = 0
     t3 = 0
     while t2 != a2:
-        t0[0:4] = t3
+        t0[0] = t3
         t0 = t0 + 4
         t2 = t2 + 1
 
@@ -130,8 +130,8 @@ while t0 < a2:
         t1 = &work
         t2 = 0
         while t2 != a2:
-            t4 = t0[0:4]
-            t1[0:4] = t4
+            t4 = t0[0]
+            t1[0] = t4
             t0 = t0 + 4
             t1 = t1 + 4
             t2 = t2 + 1
@@ -139,7 +139,7 @@ while t0 < a2:
         # count flips on work
         a0 = 0
         t0 = &work
-        t1 = t0[0:4]
+        t1 = t0[0]
         while t1 != 0:
             # &work[k] directly (k = t1); t4 holds the stride (4) for one multiply,
             # then becomes the reverse counter.
@@ -150,16 +150,16 @@ while t0 < a2:
             t4 = 0
             t5 = t1 + 0
             while t4 < t5:
-                t1 = t2[0:4]
-                a1 = t3[0:4]
-                t2[0:4] = a1
-                t3[0:4] = t1
+                t1 = t2[0]
+                a1 = t3[0]
+                t2[0] = a1
+                t3[0] = t1
                 t2 = t2 + 4
                 t3 = t3 - 4
                 t4 = t4 + 1
                 t5 = t5 - 1
             a0 = a0 + 1
-            t1 = t0[0:4]
+            t1 = t0[0]
 
         # max flips
         if a0 > a5:
@@ -189,23 +189,23 @@ while t0 < a2:
         a3 = 1
         while a3 < a1:
             t0 = &perm
-            t1 = t0[0:4]
+            t1 = t0[0]
             t2 = &perm
             t3 = 0
             while t3 < a3:
-                t4 = t2[4:8]
-                t2[0:4] = t4
+                t4 = t2[1]
+                t2[0] = t4
                 t2 = t2 + 4
                 t3 = t3 + 1
-            t2[0:4] = t1
+            t2[0] = t1
             t2 = &cnt
             t3 = 0
             while t3 < a3:
                 t2 = t2 + 4
                 t3 = t3 + 1
-            t4 = t2[0:4]
+            t4 = t2[0]
             t4 = t4 + 1
-            t2[0:4] = t4
+            t2[0] = t4
             t5 = 1
             if t4 <= a3:
                 a4 = 0
@@ -213,24 +213,24 @@ while t0 < a2:
                 t5 = 0
             if t5 != 0:
                 t3 = 0
-                t2[0:4] = t3
+                t2[0] = t3
                 a3 = a3 + 1
 
     # --- advance to this hart's next block: c += 2 ---
     t0 = &blockc
-    t1 = t0[0:4]
+    t1 = t0[0]
     t1 = t1 + 2
-    t0[0:4] = t1
+    t0[0] = t1
     t0 = t1
 
 # ===== combine: per-rank checksum slot + atomic-max the flip count =====
 t0 = &myrank
-t1 = t0[0:4]
+t1 = t0[0]
 t2 = 4
 t3 = t1 * t2
 t0 = &cs_slots
 t0 = t0 + t3
-t0[0:4] = a6
+t0[0] = a6
 # atomically max this hart's partial into the global max: a lock-free reduction.
 # amomax is a SINGLE instruction, so -- unlike a compare-and-select max in the
 # finisher -- there is no branch for remove_branches to specialise away at the
@@ -255,14 +255,14 @@ if t2 == a0:
         fence rw, rw
     # total checksum = cs_slots[0] + cs_slots[1]
     t0 = &cs_slots
-    a5 = t0[0:4]
+    a5 = t0[0]
     t0 = t0 + 4
-    a6 = t0[0:4]
+    a6 = t0[0]
     a5 = a5 + a6
     # total max flips: read the global the harts accumulated with amomax. No
     # combine, no branch -- the verify-small/run-large branch hazard is gone.
     t0 = &max_global
-    a6 = t0[0:4]
+    a6 = t0[0]
     # output "<checksum>\nPfannkuchen(<n>) = <maxflips>\n" (save n; `print`
     # clobbers a0-a2/t0-t2/t5 but preserves a3/a5/a6 between calls).
     a3 = a2 + 0

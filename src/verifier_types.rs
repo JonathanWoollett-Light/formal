@@ -888,7 +888,13 @@ impl Add for MemoryValue {
                 .unwrap()),
             (I64(a), I16(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
             (I16(a), I64(b)) => I64(MemoryValueI64::from(a).add(&b).unwrap()),
-            x => todo!("{x:?}"),
+            // Any other pair of scalars: a register is 64-bit, so arithmetic on
+            // values loaded from memory happens in `i64`, exactly as every arm
+            // above does for the pairs that were written out one by one.
+            (a, b) => match (as_i64_range(&a), as_i64_range(&b)) {
+                (Some(x), Some(y)) => I64(x.add(&y).unwrap()),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -911,7 +917,11 @@ impl Mul for MemoryValue {
             (I32(a), I32(b)) => I64(MemoryValueI64::from(a)
                 .mul(&MemoryValueI64::from(b))
                 .unwrap()),
-            x => todo!("{x:?}"),
+            // Any other pair of scalars multiplies in a 64-bit register.
+            (a, b) => match (as_i64_range(&a), as_i64_range(&b)) {
+                (Some(x), Some(y)) => I64(x.mul(&y).unwrap()),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -939,7 +949,12 @@ impl Sub for MemoryValue {
                 a.offset = MemoryValueU64::try_from(signed.sub(&b).unwrap()).unwrap();
                 Ptr(MemoryPtr(Some(a)))
             }
-            x => todo!("{x:?}"),
+            // Any other pair of scalars subtracts in a 64-bit register (which
+            // may go negative, so the result is `I64` whatever the operands).
+            (a, b) => match (as_i64_range(&a), as_i64_range(&b)) {
+                (Some(x), Some(y)) => I64(x.sub(&y).unwrap()),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -953,7 +968,11 @@ impl Div for MemoryValue {
             (I64(a), I64(b)) => I64(a / b),
             (I32(a), I64(b)) => I64(MemoryValueI64::from(a) / b),
             (U32(a), I64(b)) => I64(MemoryValueI64::from(a) / b),
-            x => todo!("{x:?}"),
+            // Any other pair of scalars divides in a 64-bit register.
+            (a, b) => match (as_i64_range(&a), as_i64_range(&b)) {
+                (Some(x), Some(y)) => I64(x / y),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -975,7 +994,11 @@ impl Rem for MemoryValue {
             // which has carried this arm all along); nonnegative, so the
             // envelope is already the tight `[0, d-1]` with no double-rem.
             (U32(a), I64(b)) => I64(rem_by_constant(&MemoryValueI64::from(a), &b)),
-            x => todo!("{x:?}"),
+            // Any other pair of scalars: the same envelope, in `i64`.
+            (a, b) => match (as_i64_range(&a), as_i64_range(&b)) {
+                (Some(x), Some(y)) => I64(rem_by_constant(&x, &y)),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -1020,6 +1043,14 @@ fn rem_by_constant(a: &MemoryValueI64, d: &MemoryValueI64) -> MemoryValueI64 {
 impl MemoryValue {
     fn get(&self, subslice: &SubSlice) -> Result<MemoryValue, MemoryValueGetError> {
         use MemoryValue::*;
+        // The whole of a scalar is the scalar (the load an element access of a
+        // scalar-typed variable makes, for every width inference can pick).
+        if subslice.offset.exact() == Some(0)
+            && is_scalar(self)
+            && size(&Type::from(self)) == subslice.len
+        {
+            return Ok(self.clone());
+        }
         match self {
             U8(x) => x.get(subslice).map_err(MemoryValueGetError::U8),
             U32(x) => x.get(subslice).map_err(MemoryValueGetError::U32),
@@ -1130,6 +1161,21 @@ impl MemoryValue {
                 },
             };
         }
+        // A store covering a whole scalar: the register's low `len`
+        // native-endian bytes replace it, the truncation the sized store
+        // performs. Uniform over the scalar widths, which is what an element
+        // access needs (`p[k]` of a scalar-typed variable is the whole
+        // variable, whatever type inference lands on); the byte-slice shapes
+        // below (a partial or straddling store) keep their own arms.
+        if offset.exact() == Some(0) && is_scalar(self) && size(&Type::from(&*self)) == *len {
+            let into = Type::from(&*self);
+            let Some(narrowed) = narrow_scalar(&value, &into) else {
+                return Err(MemoryValueSetError::TooLarge);
+            };
+            *self = narrowed;
+            return Ok(());
+        }
+
         let size_of_existing = size(&Type::from(self.clone()));
         let diff = MemoryValueU64::from(size_of_existing).sub(offset).unwrap();
 
@@ -1518,7 +1564,13 @@ impl MemoryValue {
             (I64(a), U32(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
             (I64(a), I32(b)) => Some(a.compare(&MemoryValueI64::from(b.clone()))),
             (I32(a), I64(b)) => Some(MemoryValueI64::from(a.clone()).compare(b)),
-            x => todo!("{x:?}"),
+            // Any other pair of scalars: compare them as `i64` ranges, the
+            // width-independent meaning of the comparison (a value loaded
+            // from a narrow variable against a register, either way round).
+            (a, b) => match (as_i64_range(a), as_i64_range(b)) {
+                (Some(a), Some(b)) => Some(a.compare(&b)),
+                _ => todo!("{:?}", (a, b)),
+            },
         }
     }
 }
@@ -1916,6 +1968,24 @@ pub type AccessedRanges = BTreeMap<Label, BTreeSet<(u64, u64)>>;
 /// observable (same rule as `touched`/`jumped`).
 pub type AccessTransitions = BTreeMap<NonNull<AstNode>, BTreeSet<(Label, u64, u64)>>;
 
+/// For each element-indexed access (`#[` / `#]`), the lowering the verifier
+/// resolved for it: `(label, element type, offset)` records that one execution
+/// of the node accessed an element of that type at `offset` bytes from its
+/// pointer, which pointed into `label`.
+///
+/// This is what lets codegen emit the sized `lb`/`lh`/`lw`/`ld`/`sb`/`sh`/`sw`
+/// for a directive whose width the source never states: element `k` of a
+/// pointee is a byte offset and a width only once the pointee's type is known,
+/// which (for an inferred variable) is only true of a *verified* configuration.
+/// Carrying the element's *type* rather than only its width is what lets an
+/// element load extend a value the way the verifier modelled it (`lbu` for a
+/// `u8`, `lb` for an `i8`): the type is exactly what a byte slice cannot know.
+/// A node must resolve the same way on every path for one instruction to stand
+/// for all of them, so more than one `(type, offset)` per node is a refusal,
+/// not a choice. The `label` is what [`crate::verifier::Explorerer`] uses to
+/// drop the lowerings a re-typed variable invalidates when it backtracks.
+pub type IndexLowerings = BTreeMap<NonNull<AstNode>, BTreeSet<(Label, Type, i64)>>;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct State {
     // Each hart has its own registers.
@@ -2206,6 +2276,80 @@ fn ranged_weak_update(
 /// scalar type added there is automatically covered here). `None` for
 /// non-scalars (a possibly-overwritten pointer or nested list has no sound
 /// havoc short of path-splitting; callers treat it as unsupported).
+/// A scalar value as an `i64` range, so values of different widths can be
+/// compared. `None` for a non-scalar, or for a `u64` range reaching past
+/// `i64::MAX` (unsupported rather than wrapped).
+fn as_i64_range(value: &MemoryValue) -> Option<MemoryValueI64> {
+    use MemoryValue::*;
+    let (start, stop) = match value {
+        U8(x) => (i64::from(x.start), i64::from(x.stop)),
+        I8(x) => (i64::from(x.start), i64::from(x.stop)),
+        U16(x) => (i64::from(x.start), i64::from(x.stop)),
+        I16(x) => (i64::from(x.start), i64::from(x.stop)),
+        U32(x) => (i64::from(x.start), i64::from(x.stop)),
+        I32(x) => (i64::from(x.start), i64::from(x.stop)),
+        U64(x) => (i64::try_from(x.start).ok()?, i64::try_from(x.stop).ok()?),
+        I64(x) => (x.start, x.stop),
+        _ => return None,
+    };
+    MemoryValueI64::new(start, stop)
+}
+
+/// Whether the value is a scalar (an integer of a fixed width), as opposed to
+/// a list, a pointer, or a CSR.
+fn is_scalar(value: &MemoryValue) -> bool {
+    use MemoryValue::*;
+    matches!(
+        value,
+        U8(_) | I8(_) | U16(_) | I16(_) | U32(_) | I32(_) | U64(_) | I64(_)
+    )
+}
+
+/// A scalar value's exact bytes, native-endian; `None` if it is not an exact
+/// scalar.
+fn scalar_bytes(value: &MemoryValue) -> Option<Vec<u8>> {
+    use MemoryValue::*;
+    Some(match value {
+        U8(x) => x.to_bytes()?.to_vec(),
+        I8(x) => x.to_bytes()?.to_vec(),
+        U16(x) => x.to_bytes()?.to_vec(),
+        I16(x) => x.to_bytes()?.to_vec(),
+        U32(x) => x.to_bytes()?.to_vec(),
+        I32(x) => x.to_bytes()?.to_vec(),
+        U64(x) => x.to_bytes()?.to_vec(),
+        I64(x) => x.to_bytes()?.to_vec(),
+        _ => return None,
+    })
+}
+
+/// Narrows a value to the scalar type `into`, keeping its low native-endian
+/// bytes: what a sized store writes when the register is wider than the slot.
+/// A value the model only knows as a range narrows to the full range of
+/// `into` (the sound over-approximation: the slot then holds *some* value of
+/// its type). `None` for a value with no scalar bytes at all (a pointer), which
+/// the caller reports rather than mis-modeling.
+fn narrow_scalar(value: &MemoryValue, into: &Type) -> Option<MemoryValue> {
+    let len = usize::try_from(size(into)).ok()?;
+    let Some(bytes) = scalar_bytes(value) else {
+        return is_scalar(value).then(|| MemoryValue::from(into.clone()));
+    };
+    if bytes.len() < len {
+        return None;
+    }
+    let low = &bytes[..len];
+    Some(match into {
+        Type::U8 => MemoryValue::U8(MemoryValueU8::from_bytes(&low.try_into().ok()?)),
+        Type::I8 => MemoryValue::I8(MemoryValueI8::from_bytes(&low.try_into().ok()?)),
+        Type::U16 => MemoryValue::U16(MemoryValueU16::from_bytes(&low.try_into().ok()?)),
+        Type::I16 => MemoryValue::I16(MemoryValueI16::from_bytes(&low.try_into().ok()?)),
+        Type::U32 => MemoryValue::U32(MemoryValueU32::from_bytes(&low.try_into().ok()?)),
+        Type::I32 => MemoryValue::I32(MemoryValueI32::from_bytes(&low.try_into().ok()?)),
+        Type::U64 => MemoryValue::U64(MemoryValueU64::from_bytes(&low.try_into().ok()?)),
+        Type::I64 => MemoryValue::I64(MemoryValueI64::from_bytes(&low.try_into().ok()?)),
+        _ => return None,
+    })
+}
+
 fn havoc_scalar(value: &MemoryValue) -> Option<MemoryValue> {
     use MemoryValue::*;
     match value {

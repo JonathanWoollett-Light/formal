@@ -5,12 +5,12 @@ _start:
     bnez t0, _l0
     la t1, __welcome_type  # #& t1, welcome
     li t5, 0
-    ld t2, 0(t1)
+    ld t2, 0(t1)  # #[ t2, 0(t1)
 _l0:
     beqz t0, _l1
     la t1, __welcome_type  # #& t1, welcome
     li t5, 0
-    ld t2, 8(t1)
+    ld t2, 8(t1)  # #[ t2, 2(t1)
 _l1:
     wfi
     j __halt  # unreachable (program end)

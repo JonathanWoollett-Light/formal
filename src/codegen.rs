@@ -53,6 +53,7 @@ pub fn emit_executable(
     transitions: &AccessTransitions,
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+    indexed: &IndexLowerings,
 ) -> String {
     emit_with_target(
         Target::BareMetal,
@@ -62,6 +63,7 @@ pub fn emit_executable(
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     )
 }
 
@@ -92,6 +94,7 @@ pub fn emit_executable_hosted(
     transitions: &AccessTransitions,
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+    indexed: &IndexLowerings,
 ) -> String {
     emit_with_target(
         Target::HostedLinux,
@@ -101,6 +104,7 @@ pub fn emit_executable_hosted(
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     )
 }
 
@@ -118,6 +122,7 @@ fn emit_with_target(
     transitions: &AccessTransitions,
     uncompactable: &BTreeSet<Label>,
     pinned_nodes: &BTreeSet<NonNull<AstNode>>,
+    indexed: &IndexLowerings,
 ) -> String {
     // Labels whose runtime *type descriptor* is read (via `#&` / lat).
     let mut lat_labels: BTreeSet<Label> = BTreeSet::new();
@@ -269,6 +274,66 @@ fn emit_with_target(
                 text.push_str(&format!(
                     "    la {register}, {label}\n    add {register}, {register}, tp  # thread-local\n"
                 ));
+            }
+            // Element-indexed access (`#[` / `#]`): the verifier resolved
+            // element `k` of the pointee to a byte offset and a width, so emit
+            // the sized instruction it stands for. Compaction re-points it like
+            // any other access, against that resolved offset.
+            Instruction::Lidx(Lidx {
+                to: value,
+                from: pointer,
+                ..
+            })
+            | Instruction::Sidx(Sidx {
+                from: value,
+                to: pointer,
+                ..
+            }) => {
+                let store = matches!(instr, Instruction::Sidx(_));
+                match index_lowering(indexed, node) {
+                    Some((ty, resolved)) => {
+                        let offset = rewrites.get(&node).copied().unwrap_or(resolved);
+                        // The element's type, not just its width: a load
+                        // extends the value the way the verifier modelled it,
+                        // so an unsigned element loads zero-extended (`lbu`)
+                        // and a signed one sign-extended (`lb`). A byte slice
+                        // cannot do this - it never knows the type.
+                        let mnemonic = match (store, &ty) {
+                            (false, Type::U8) => "lbu",
+                            (false, Type::I8) => "lb",
+                            (false, Type::U16) => "lhu",
+                            (false, Type::I16) => "lh",
+                            (false, Type::U32) => "lwu",
+                            (false, Type::I32) => "lw",
+                            (false, Type::U64 | Type::I64) => "ld",
+                            (true, Type::U8 | Type::I8) => "sb",
+                            (true, Type::U16 | Type::I16) => "sh",
+                            (true, Type::U32 | Type::I32) => "sw",
+                            // Element types are scalars and 8-byte stores are
+                            // refused during verification, so this is
+                            // unreachable; `.err` fails the assembler rather
+                            // than emitting a silently incomplete program.
+                            _ => {
+                                text.push_str(&format!(
+                                    "    .err  # no instruction for an element access of {ty}\n"
+                                ));
+                                next = unsafe { node.as_ref().next };
+                                continue;
+                            }
+                        };
+                        // Both directions print value-then-address, exactly as
+                        // `lw rd, off(rs)` and `sw rs2, off(rs1)` do.
+                        text.push_str(&format!(
+                            "    {mnemonic} {value}, {offset}({pointer})  # {instr}\n"
+                        ));
+                    }
+                    // Reachable only for a node the verifier never resolved
+                    // (never executed, so `remove_untouched` drops it) or one
+                    // that resolved two ways; `.err` fails the assembler.
+                    None => {
+                        text.push_str(&format!("    .err  # unresolved element index: {instr}\n"))
+                    }
+                }
             }
             // Labels and `.global` print at column 0; everything else is indented.
             Instruction::Label(_) | Instruction::Global(_) => text.push_str(&format!("{instr}\n")),
@@ -632,7 +697,27 @@ fn patchable(node: NonNull<AstNode>) -> bool {
             | Instruction::Sw(_)
             | Instruction::Sb(_)
             | Instruction::Sh(_)
+            // The immediate an element access emits is its resolved offset, so
+            // a rewrite reaches it the same way, applied at emission (the
+            // instruction it becomes does not exist before then).
+            | Instruction::Lidx(_)
+            | Instruction::Sidx(_)
     )
+}
+
+/// The `(element type, offset)` an element-indexed access resolved to, if every
+/// execution of the node resolved it the same way.
+///
+/// One directive becomes one instruction, so a node that lowered two ways (a
+/// mixed-shape pointee reached at different element boundaries) has no single
+/// instruction to emit and is refused rather than guessed at.
+fn index_lowering(indexed: &IndexLowerings, node: NonNull<AstNode>) -> Option<(Type, i64)> {
+    let lowerings = indexed.get(&node)?;
+    let mut resolved = lowerings
+        .iter()
+        .map(|(_label, ty, offset)| (ty.clone(), *offset));
+    let first = resolved.next()?;
+    resolved.all(|other| other == first).then_some(first)
 }
 
 /// Re-points an instruction's offset/immediate at the compacted layout. Returns

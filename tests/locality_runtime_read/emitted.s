@@ -3,7 +3,7 @@ _start:
     #$ x global u8
     la t0, __x_type  # #& t0, x
     li t5, 0
-    lb t1, 0(t0)
+    lbu t1, 0(t0)  # #[ t1, 3(t0)
     li a0, 0
     li a7, 93
     ecall

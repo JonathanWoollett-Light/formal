@@ -44,6 +44,7 @@ fn partial_access_compacts_storage_to_accessed_bytes() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps (everything is thread-local, so the
@@ -89,9 +90,13 @@ fn partial_access_compacts_storage_to_accessed_bytes() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
-    let expected = normalize(include_str!("emitted.s"));
-    assert_eq!(normalize(asm), expected);
+    bless_asm(
+        "partial_variable_access/emitted.s",
+        asm.clone(),
+        include_str!("emitted.s"),
+    );
 
     // Boot it in QEMU (requires the toolchain + QEMU): no output, no fault.
     let serial = unsafe {
@@ -103,6 +108,7 @@ fn partial_access_compacts_storage_to_accessed_bytes() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(

@@ -5,7 +5,7 @@
 # 0, proven at compile time and confirmed at runtime.
 counter: global u32
 t0 = &counter
-t1 = t0[0:4]          # read the unwritten global
+t1 = t0[0]          # read the unwritten global
 a0 = 0
 require t1 == a0      # it is zero
 exit(0)

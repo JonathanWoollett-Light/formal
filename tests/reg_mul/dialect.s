@@ -9,8 +9,8 @@
     mul t1, t1, t2
     li t2, 5
     mul t1, t1, t2
-    sw t1, 0(t0)
-    lw t3, 0(t0)
+    #] t1, 0(t0)
+    #[ t3, 0(t0)
     li a0, 120
     beq t3, a0, _l0
     #!

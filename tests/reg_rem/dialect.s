@@ -7,8 +7,8 @@
     li t5, 7
     rem t4, t4, t5
     add t3, t3, t4
-    sw t3, 0(t0)
-    lw t1, 0(t0)
+    #] t3, 0(t0)
+    #[ t1, 0(t0)
     li a0, 4
     beq t1, a0, _l0
     #!

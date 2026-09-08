@@ -68,6 +68,7 @@ fn fannkuch_v2() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
     eprintln!("fannkuch_v2: {} verifier steps", trace.len());
 
@@ -83,6 +84,7 @@ fn fannkuch_v2() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     assert!(
         !asm.contains("#~") && !asm.contains("#(") && !asm.contains("typeof"),

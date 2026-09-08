@@ -1,0 +1,17 @@
+# Element indexing an **inferred** variable: `value[0]` states no width, so the
+# access is as wide as whatever type inference lands on -- and inference lands
+# on the narrowest type under which the program is *provable*. Storing 300 and
+# proving it reads back rules out `u8`/`i8` (they truncate it to 44, so the
+# `require` fails and the candidate is rejected) and settles on `u16`, which the
+# emitted program shows as a 2-byte `sh`/`lhu` and 2 bytes of `.bss`.
+#
+# This is what byte slices cannot express: `value[0:4]` would have *told* the
+# verifier the width, pinning `u32` before inference began.
+value: global _
+t0 = &value
+t1 = 300
+t0[0] = t1
+t2 = t0[0]
+a0 = 300
+require t2 == a0
+exit(0)

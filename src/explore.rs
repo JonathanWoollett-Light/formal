@@ -21,7 +21,7 @@ use crate::verifier::{
     InnerVerifierConfiguration, LocalAccumulators, RecordSinks, Terminal, ValidPathResult,
 };
 use crate::verifier_types::{
-    AccessTransitions, AccessedRanges, LabelLocality, State, TypeConfiguration,
+    AccessTransitions, AccessedRanges, IndexLowerings, LabelLocality, State, TypeConfiguration,
 };
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -157,6 +157,7 @@ pub unsafe fn verify_configuration_pooled(
     let mut transitions: AccessTransitions = AccessTransitions::new();
     let mut uncompactable: BTreeSet<Label> = BTreeSet::new();
     let mut pinned_nodes: BTreeSet<NonNull<AstNode>> = BTreeSet::new();
+    let mut indexed: IndexLowerings = IndexLowerings::new();
 
     // Seed one continuation per system: every hart starts at the entry node,
     // hart 0 active (the analogue of `build_initial_chain`).
@@ -182,6 +183,7 @@ pub unsafe fn verify_configuration_pooled(
             transitions: &mut transitions,
             uncompactable: &mut uncompactable,
             pinned_nodes: &mut pinned_nodes,
+            indexed: &mut indexed,
         };
         let outcome = step(
             &cont,
@@ -205,6 +207,7 @@ pub unsafe fn verify_configuration_pooled(
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     }))
 }
 
@@ -260,11 +263,17 @@ pub unsafe fn step_local(
     let mut uncompactable = BTreeSet::new();
     let mut pinned = BTreeSet::new();
     let outcome = {
+        // The pointer-free pool reduces `LocalAccumulators`, which codegen
+        // never reads: the sweep re-runs the winning configuration through the
+        // pointer-keyed path above to get the result it emits from. So the
+        // lowerings resolved here are dropped with this frontier item.
+        let mut indexed = IndexLowerings::new();
         let mut sinks = RecordSinks {
             accessed: &mut accessed,
             transitions: &mut transitions,
             uncompactable: &mut uncompactable,
             pinned_nodes: &mut pinned,
+            indexed: &mut indexed,
         };
         step(
             cont,

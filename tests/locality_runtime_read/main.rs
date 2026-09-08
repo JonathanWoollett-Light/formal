@@ -44,6 +44,7 @@ fn runtime_locality_read_keeps_the_byte() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     if !blessing() {
@@ -51,7 +52,7 @@ fn runtime_locality_read_keeps_the_byte() {
             "h0/1 | #$ x global u8 | Config: [x:Gu8,] | q1 t1 j0",
             "h0/1 | #& t0, x | Config: [x:Gu8,] | q1 t2 j0",
             "h0/1 | li t5, 0 | Config: [x:Gu8,] | q1 t3 j0",
-            "h0/1 | lb t1, 24(t0) | Config: [x:Gu8,] | q1 t4 j0",
+            "h0/1 | #[ t1, 3(t0) | Config: [x:Gu8,] | q1 t4 j0",
             "h0/1 | li a0, 0 | Config: [x:Gu8,] | q1 t5 j0",
             "h0/1 | li a7, 93 | Config: [x:Gu8,] | q1 t6 j0",
             "h0/1 | ecall | Config: [x:Gu8,] | q0 t7 j0",
@@ -81,6 +82,7 @@ fn runtime_locality_read_keeps_the_byte() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "locality_runtime_read/emitted.s",

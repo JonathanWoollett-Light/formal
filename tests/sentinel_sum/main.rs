@@ -35,6 +35,7 @@ fn sentinel_sum() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -49,6 +50,7 @@ fn sentinel_sum() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "sentinel_sum/emitted.s",

@@ -11,8 +11,8 @@ t4 = 8
 t5 = t3 - t4      # sub t5, t3, t4  -> 62
 t1 = t5 - 12      # addi t1, t5, -12 -> 50 (immediate form unchanged)
 
-t0[0:4] = t1
-t2 = t0[0:4]
+t0[0] = t1
+t2 = t0[0]
 a0 = 50
 require t2 == a0
 exit(0)

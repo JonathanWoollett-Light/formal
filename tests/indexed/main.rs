@@ -36,6 +36,7 @@ fn indexed() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -50,6 +51,7 @@ fn indexed() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm("indexed/emitted.s", asm.clone(), include_str!("emitted.s"));
 

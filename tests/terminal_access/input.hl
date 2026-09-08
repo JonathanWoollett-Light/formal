@@ -6,5 +6,5 @@
 value: global u32
 t0 = type(value)
 t5 = 0
-t1 = t0[0:8]
+t1 = t0[0]
 unreachable

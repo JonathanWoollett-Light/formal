@@ -50,7 +50,9 @@ the verifier's only input language.
   behaviour of the state machine (a full per-step trace for `racy_store_inferred`/`racy_store_annotated`; the
   exact step count and type-inference timeline for `racy_increment`/`uart_hello`). `raw_access_undeclared` pins
   the every-access-must-verify rule (a raw access no `#@` region describes →
-  `Invalid`). See [§6](#6-integration-tests-tests).
+  `Invalid`), and `element_inference`/`element_mixed`/`element_refusals`
+  pin what element indexing resolves to and the two ways it is refused. See
+  [§6](#6-integration-tests-tests).
 - **The binary is the `formal` CLI.** [src/main.rs](src/main.rs) is a small
   command-line tool: `formal new <name>` scaffolds a Rust project (`cargo new`
   plus the `formal` git dependency, a starter `main.hl`, and a build-script
@@ -127,9 +129,11 @@ in `verifier_types.rs`/`verifier.rs`: those are mostly the **value/arithmetic
 paths for type/operation combinations the language does not implement yet**. The
 register-register arithmetic set (`add`/`sub`/`mul`/`div`/`rem`) and indexed
 addressing have since landed (with the `reg_*`/`indexed` tests), so those paths
-are now covered; what remains uncovered is the rarer combinations that still
-`panic` on a `todo!` (unions, multi-element list slices, some width/sign mixes,
-`.ascii`). They are deliberately uncovered until the feature lands, so coverage
+are now covered, and element indexing closed the width/sign mixes wholesale (a
+whole-scalar store/load of any width, and scalar comparison and arithmetic over
+any pair, are generic rather than a table of hand-written pairs); what remains
+uncovered is the rarer combinations that still `panic` on a `todo!` (unions,
+multi-element list slices, partial stores that straddle a scalar, `.ascii`). They are deliberately uncovered until the feature lands, so coverage
 of that code climbs **with** each new operation rather than from a test written
 against an unimplemented path. Re-run `cargo cov` after adding a feature.
 
@@ -323,9 +327,12 @@ empty.
 1. If `queue` is empty → **`Valid`**: every reachable path under the current
    `configuration` has been validated with no `#!` reached. Returns
    `ValidPathResult { configuration, touched, jumped, accessed, transitions,
-uncompactable, pinned_nodes }`.
+uncompactable, pinned_nodes, indexed }`.
 2. Pop (peek) the front leaf; mark its AST node in `touched`.
 3. Dispatch on the instruction:
+   - `Lidx` / `Sidx`: `resolve_index(..)` against the pointee's type, then the
+     same check as the sized load/store it resolves to; an index past the end
+     is invalid, a pointee with no element type (a raw address) is refused.
    - **No-op for checking** (`Li`, `Label`, `Addi`, `Blt`, `Csrr`, `Bne`,
      `Bnez`, `Beqz`, `Bge`, `Wfi`, `Beq`, `J`, `Unreachable`, `Region`):
      nothing to check here; their _effects_ are applied later by
@@ -455,10 +462,22 @@ influence exploration.
 `configuration: TypeConfiguration` (inferred type+locality per variable),
 `touched: BTreeSet<NonNull<AstNode>>` (every reachable node),
 `jumped: BTreeSet<NonNull<AstNode>>` (branches that ever take their jump),
-`accessed: AccessedRanges` (runtime-accessed bytes per region), and the layout
-compaction inputs `transitions` / `uncompactable` / `pinned_nodes`; together
-these drive dead-data elimination in codegen,
+`accessed: AccessedRanges` (runtime-accessed bytes per region), the layout
+compaction inputs `transitions` / `uncompactable` / `pinned_nodes`, and
+`indexed: IndexLowerings` (what each element-indexed access resolved to);
+together these drive dead-data elimination and the element expansion in codegen,
 [§4.8](#48-code-generation--emit_executable-srccodegenrs).
+
+`indexed` is the one record that is **not** monotone. The others may keep
+entries from since-abandoned configurations, which only over-approximates (more
+bytes kept alive, more regions left padded). A lowering cannot work that way:
+one directive becomes one instruction, so a width left over from a rejected
+candidate type would be a *wrong* instruction, not a conservative one. So
+`invalid_path` drops the lowerings recorded against the variable it re-types,
+and the replay past that variable's first encounter records them afresh under
+the new type. `element_inference` ([§6](#6-integration-tests-tests)) is the
+test that would fail if it did not: its `accessed` still carries the rejected
+`u8` candidate's byte, while its emitted program is the `u16` pair.
 
 `Explorerer` owns the whole tree and frees it in a manual `Drop`
 ([src/verifier.rs:1681](src/verifier.rs#L1681)).
@@ -607,6 +626,21 @@ emits the dialect verbatim for the test assertions); it walks the AST itself:
 __<label>_type` (load the generated descriptor's address); `#!` (fail) →
   `ebreak`; `#?` (unreachable / end) → jump to a `__halt: wfi; j __halt` loop
   appended after `.text`.
+- **Expands the element-indexed accesses** (`#[` / `#]`) into the sized
+  instruction each stands for. The directive carries an element index; the
+  *proof* carries what that index means, as `indexed: IndexLowerings` (per node,
+  the `(label, element type, byte offset from the pointer)` every execution
+  resolved to). Codegen takes the single lowering a node agreed on, applies the
+  same compaction rewrite as any other access, and picks the mnemonic from the
+  element's **type**, so the load extends the way the verifier modelled the
+  value: `lbu`/`lhu`/`lwu` for `u8`/`u16`/`u32`, `lb`/`lh`/`lw` for the signed
+  types, `ld` for 8 bytes, and `sb`/`sh`/`sw` for stores. This is the
+  extraction split the design intends (the verifier checks a model, codegen's
+  fixed expansion is trusted, like the TLS `la` expansion): a node with no
+  lowering, or with two, emits `.err` so the assembler fails rather than the
+  program silently losing an access. A node resolving two ways is refused, not
+  chosen between; a wide (8-byte) element *store* is refused during
+  verification, since the dialect has no `sd` yet.
 - Emits `.data`: the runtime **type descriptors** read via `#&`, as records of
   `[u64 type-number, u64 subtypes-ptr, u64 length, u8 locality]` (the source
   layout §4.5 builds in `set_type`, 25 bytes/record), **minus the bytes the
@@ -759,8 +793,9 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 | `t1 = t1 + 1` / `t1 = t1 - 8`                    | `addi t1, t1, 1` / `addi t1, t1, -8` (immediate `+`/`-` only)                    |
 | `t3 = t1 + t2` / `t3 = t1 - t2`                  | `add t3, t1, t2` / `sub t3, t1, t2` (register-register)                          |
 | `t3 = t1 * t2` / `t3 = t1 / t2` / `t3 = t1 % t2` | `mul` / `div` / `rem t3, t1, t2` (register-register; no immediate forms)         |
-| `t0[0:4] = t1`                                   | `sw t1, 0(t0)` (store; width 1 = `sb`, 2 = `sh`, 4 = `sw`)                       |
-| `t1 = t0[8:16]`                                  | `ld t1, 8(t0)` (load; width 1 = `lb`, 2 = `lh`, 4 = `lw`, 8 = `ld`)              |
+| `t0[0] = t1` / `t1 = t0[2]`                      | `#] t1, 0(t0)` / `#[ t1, 2(t0)` (element store/load; see below)                  |
+| `t0[0:4] = t1`                                   | `sw t1, 0(t0)` (raw store; width 1 = `sb`, 2 = `sh`, 4 = `sw`)                   |
+| `t1 = t0[8:16]`                                  | `ld t1, 8(t0)` (raw load; width 1 = `lb`, 2 = `lh`, 4 = `lw`, 8 = `ld`)          |
 | `forget t0`                                      | `#~ t0` (havoc: `t0` becomes *any* value; emits nothing)                         |
 | `section 0x100 0x200 rw`                         | `#@ 0x100 0x200 rw`                                                              |
 | `fail` / `unreachable`                           | `#!` / `#?`                                                                      |
@@ -800,20 +835,59 @@ branch guarding each `#!`/loop is taken on the _success_ path, a proven
 output (the verifier records it in `jumped`, so `remove_branches` keeps it):
 the deliberate, accepted cost of dropping `goto`.
 
-Loads and stores are byte slices off a register (`reg[offset : offset+len]`),
-so the access width is visible at the call site. `#` starts a comment exactly
-as in Python; comments and blank lines do not appear in the output. Output
+**Indexing is element-based.** `t0[k]` is element `k` of whatever `t0` points
+at: `counter: thread [u32]*1` is written to with `t0[0] = t1` and an array's
+third element is `t0[2]`, with no widths in the source. The front-end is
+stateless and does not track what a register points at, so it lowers the access
+to the `#[` / `#]` directives ([§5.2](#52-the-risc-v-dialect-as-actually-parsed))
+and the **verifier** resolves each one: it alone knows every pointer's pointee
+type, per state and (for an inferred variable) per type configuration. The
+resolution is `(byte offset from the pointer, element type)`, the bounds check
+is the existing access-past-the-label check applied to it, and codegen expands
+the directive into the sized instruction it stands for
+([§4.8](#48-code-generation--emit_executable-srccodegenrs)). A *runtime* index
+is refused for now: compute the address (`t = i * <element size>`,
+`p = base + t`) and index that with `p[0]`.
+
+`reg[a:b]` is the **raw byte slice**, kept for memory that has no element type
+of its own: a memory-mapped address, a `#@` region, or a variable whose type
+the verifier is still inferring (there the access width is exactly what drives
+the inference, so stating it is the point). It lowers directly to one sized
+instruction, the width visible at the call site.
+
+The two forms differ in what they can prove and what they emit. An element
+access is bounds-checked at element granularity (`arr[2]` on a two-element
+array is `Invalid`, at compile time, never a runtime check), it needs no width
+in the source (so type inference is free to pick the narrowest type under which
+the program is *provable*, see `element_inference` in
+[§6](#6-integration-tests-tests)), and it knows the element's **type**, so its
+load extends the way the verifier modelled the value (`lbu` for a `u8`, `lb`
+for an `i8`). A byte slice knows none of that; it states a width and gets it.
+
+`#` starts a comment exactly as in Python; comments and blank lines do not
+appear in the output. Output
 formatting matches `print_ast`'s canonical form ([§4.7](#47-serialization--print_ast-srclibrs65)):
 instructions/directives indented four spaces, labels at column zero, platform
 line ending (`\r\n` on Windows, which the dialect parser requires there).
 Errors are `TranslateError { line, message }` (1-based line; no panics).
 
-**Indexed array access** is *not* a surface form; it falls out of the
-register-register multiply and add as `base + i*elem`, then a slice. So
-`arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0:4] = v`
-(see the `indexed` test). Keeping the 1:1 model means the cost (a `mul` + an
-`add`) is visible, and a *concrete* index lowers to a concrete address (the
-verifier's symbolic-index array writes are still unsupported, [§10](#10-known-limitations--todo-map)).
+**A runtime index** is still built from the register-register multiply and add:
+`arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0] = v` (see
+the `indexed` test). Keeping that explicit means the cost (a `mul` + an `add`)
+stays visible in the source, and the element access at the end costs nothing
+extra: for a pointee of uniform element width the resolution does not depend on
+where in the variable the pointer sits, so `p[0]` resolves the same on every
+path, including when `p`'s offset is only known as a range (`runtime_input`).
+Folding that address arithmetic into `arr[i]` is the next step and needs a
+decision the language has not made (which register the expansion may clobber,
+[§11](#11-design-notes--roadmap)).
+
+Resolving against a **mixed** shape (`[u8*2, u16*2]`, a descriptor record) does
+depend on where the pointer sits: which element `k` steps on differs, so the
+pointer's offset must be exact and on an element boundary, and the refusal says
+so when it is not. `uart_hello` walks a descriptor record that way: after
+`t0 = t0 + 16`, `t0[0]` is the record's length field (element 2), because
+element 0 is always the element *at* the pointer.
 
 **`forget <reg>`** (`#~`) and **`assume:`** are the two verifier-only directives
 for reasoning about a value the program reads at runtime. `forget t0` *havocs*
@@ -843,9 +917,10 @@ without a separate `print_int`.
 `if`/`while` bodies are the **indented block** below the header (Python-style,
 matched on indentation depth, no explicit terminator); `asm:` works the same
 way. Dispatch order inside `statement` matters: assignment statements are
-matched **before** the `name: <locality> <type>` define form because a slice
-store like `t0[0:4] = t1` contains a `:` and would otherwise parse as a
-definition.
+matched **before** the `name: <locality> <type>` define form because a raw
+slice store like `t0[0:4] = t1` contains a `:` and would otherwise parse as a
+definition. (An element store, `t0[0] = t1`, has no colon and is not ambiguous;
+the ordering is load-bearing only while the raw form exists.)
 
 [examples/translate.rs](examples/translate.rs) is the CLI
 (`cargo run --example translate -- <input.hl> [output.s]`); each test pins
@@ -902,9 +977,15 @@ and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly)
   allocator can declare each allocation as it makes it), `#~ <reg>` `Forget`
   (havoc a register to *any* value; verifier-only, codegen drops it), and
   `#(` / `#)` `Assume` (bracket a block the verifier executes to narrow state and
-  codegen drops; the `assume:` escape hatch). Plain `#…` comments and inline
-  `# …` comments are stripped.
-- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 36
+  codegen drops; the `assume:` escape hatch), and the element-indexed access pair
+  `#[ <rd>, <k>(<rs>)` `Lidx` / `#] <rs2>, <k>(<rs1>)` `Sidx` (`rd = rs[k]` /
+  `rs1[k] = rs2`, where `k` counts **elements** of the pointee's type). The
+  index pair is the one directive that becomes a real instruction chosen by the
+  *proof*: the verifier resolves `k` against the pointee's type to a byte offset
+  and an element type, and codegen emits the sized load/store
+  ([§4.8](#48-code-generation--emit_executable-srccodegenrs)). Plain `#…`
+  comments and inline `# …` comments are stripped.
+- **Instructions** (`Instruction` enum, [src/ast.rs:260](src/ast.rs#L260), 42
   variants): `csrr`, `bnez`, `j`, `wfi`, `ecall`, labels (`foo:`), `.global`,
   `.data`, `.ascii` (parser is `todo!()`), `la`, `li`, `sw`, `lw`, `sh`, `lh`
   (2-byte halfword store/load, for `u16`/`i16`), `addi`,
@@ -1128,9 +1209,38 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   then booting under `qemu-riscv64`. Cover the `add`/`sub`/`mul`/`div`/`rem`
   lowering, the verifier's interval arithmetic, and codegen end to end.
 - `indexed` ([tests/indexed/](tests/indexed/)): computed-index array access
-  (`arr[i]` as `&arr + i*4`, then a slice) -- the point of adding multiply +
+  (`arr[i]` as `&arr + i*4`, then `p[0]`) -- the point of adding multiply +
   register-register add; writes/reads `arr[1]` and `arr[3]` at computed addresses
-  and proves their sum.
+  and proves their sum. The element access at the end of the address arithmetic
+  is what a `[u32]` pointee makes free: element 0 of a uniform-width pointee is
+  the same offset and width wherever the pointer sits.
+- `element_inference` ([tests/element_inference/](tests/element_inference/)):
+  element indexing an **inferred** variable. `t0[0]` states no width, so the
+  access is as wide as the type inference settles on, and inference settles on
+  the narrowest type under which the program is *provable*: storing 300 and
+  proving it reads back rejects `u8`/`i8` (they truncate it to 44, so the
+  `require` fails) and lands on `u16`, emitted as `sh`/`lhu` over 2 bytes of
+  `.bss` (the load unsigned, because the element's type says so). Pins the
+  inferred configuration and the `accessed` union, which still carries the
+  rejected `u8` candidate's byte while the lowering does not; boots and exits 0.
+  The contrast with `inferred_widening` is deliberate: there a byte slice tells
+  the verifier the width up front.
+- `element_mixed` ([tests/element_mixed/](tests/element_mixed/)): a **mixed-shape**
+  list, `[u8*2, i16*1, u32*1, i32*1]`, whose five elements sit at bytes 0, 1, 2,
+  4 and 8. Which element `k` names depends on where the pointer sits, so the
+  resolution walks the type from the pointer's exact offset instead of
+  multiplying by a stride, and it carries each element's *type*, so the loads
+  come out `lbu`/`lh`/`lwu`/`lw`: 200 stored in the `u8` reads back as 200 and
+  not as the -56 a sign-extending load would give, and the signed elements keep
+  their negatives. The `require`s prove that of the model and the boot proves it
+  of the machine. Its emitted layout is also the compaction case: the unread
+  second `u8` is removed, so every later element's immediate is re-pointed.
+- `element_refusals` ([tests/element_refusals/](tests/element_refusals/)): the
+  two ways an element index is refused. `out_of_bounds.hl` indexes past the end
+  of a two-element array (`Invalid`, the element-granular form of an access past
+  a label); `raw_address.hl` indexes a raw `#@` address, which has no element
+  type to count (a `CompilerError::Unsupported` naming the byte-slice form to
+  use instead). Neither executes.
 - `sieve` ([tests/sieve/](tests/sieve/)): the Sieve of Eratosthenes counting the
   primes below 30, with the count (10) **proven** by the closing `require`. A
   small real program -- a `[u8]` flag array cleared then crossed out over
@@ -1162,7 +1272,9 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   introduced mid-program each rejected candidate backtracks through its
   *mid-program* first encounter (`invalid_path`'s re-attach-after-the-predecessor
   arm, which the inference tests that declare their variable first never reach);
-  the search lands on `u32` (asserted). Boots and exits 0.
+  the search lands on `u32` (asserted). Boots and exits 0. It keeps the raw
+  byte-slice form deliberately: stating the width is what drives this search
+  (see `element_inference` for the same variable indexed by element).
 - `gcd` ([tests/gcd/](tests/gcd/)): Euclid's algorithm, `require gcd(48,36) == 12`
   -- a `while b != 0` remainder loop whose result feeds back as the next divisor.
 - `binary_search` ([tests/binary_search/](tests/binary_search/)): searches the
@@ -1325,7 +1437,7 @@ prefix):
   keeps `sb t3, 4(t1)` and full-size storage (compaction backs off rather than
   silently re-point the raw store). The two iterations are a `while` loop. 68
   steps; boots.
-- `partial_variable_access`: accesses only bytes 0 and 2 of a `[u8 u8 u8 u8]`;
+- `partial_variable_access`: accesses only elements 0 and 2 of a `[u8*4]`;
   `accessed` records exactly `(0,1)`/`(2,3)` and `.bss` compacts to those two
   bytes, the byte-2 access re-pointed to offset 1. 14 steps; boots.
 - `descriptor_read_union`: hart 0 reads a descriptor's type-number, hart 1 its
@@ -1521,6 +1633,25 @@ through a DOM parser, so a redesign has to preserve its exact shape (§6.1):
 | The static defaults                                      | the `hello` program, `formal` left and `rust` right, matching the tabs    |
 | `.compare pre.asm` with `#lang-code` its direct child    | the height equaliser measures `parentElement.scrollHeight`                |
 | The `*-wrap` spans                                       | each encloses its own leading `<br />`, so hiding it hides the break      |
+
+**The three selectors.** The comparison carries three tab groups, each a
+`.tabs` row of equal-width buttons sitting over the panel it drives:
+`.prog-tabs` spans the section and swaps both columns, `.level-tabs` sits over
+the left column and switches the formal panel between the surface source and
+the RISC-V dialect the verifier proves, and `.lang-tabs` sits over the right
+column and swaps the language. The selected tab is marked by
+`aria-selected="true"` and nothing else, so the CSS indicator and the script's
+state cannot disagree. The panels carry no name headers: the selectors already
+say what is shown.
+
+**Hand-copied samples, and the drift they invite.** `FK_FORMAL`,
+`HELLO_DIALECT` and `FK_DIALECT` are copies of `tests/fannkuch_v2/input.hl`,
+`tests/linux_hello/dialect.s` and `tests/fannkuch_v2/dialect.s`, and the
+end-to-end section copies `tests/uart_hello/`. Nothing checks any of them, so
+they go stale silently whenever the language or the lowering changes. The fix
+that would match the metrics pipeline ([§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons))
+is to generate them into their own marked block from the fixtures in
+`update_html`, which makes the `comparisons` test fail when they drift.
 
 **Syntax highlighting.** Prism arrives as one pinned, integrity-checked
 request to jsDelivr's `combine` endpoint (core plus the `clike`, `c`, `cpp`,
@@ -1979,8 +2110,16 @@ Self>, CompilerError>` (continue / terminal-outcome in `Ok`, error in `Err`).
     `lb`/`lw`. The 2-byte `lh`/`sh` later landed (`halfword_sum`/`signed_halfwords`),
     filling the matching `u16`/`i16` arms the same mirror way (`set`
     `(I64,U16)`/`(I64,I16)`, `Add` for the `U16`/`I16` pairs, and the
-    `From<MemoryValueU16/I16> for MemoryValueI64` widenings). The same class of
-    gap will resurface for any new type pairing a future program exercises.
+    `From<MemoryValueU16/I16> for MemoryValueI64` widenings). Element indexing
+    then reached the arms no program had: a *scalar* variable of any width can
+    now be written and read whole (`p[0]` of a scalar is the whole scalar,
+    whatever type inference picks), so `MemoryValue::set`/`get` gained a
+    whole-scalar fast path (`narrow_scalar` keeps the register's low
+    native-endian bytes, and a value known only as a range havocs the slot, the
+    sound over-approximation) and `compare` gained a generic fallback that
+    compares any two scalars as `i64` ranges, subsuming the hand-written mixed
+    pairs. The same class of gap will resurface for any new type pairing a
+    future program exercises.
 - **Parser fragility.** Operands are sliced at fixed offsets (2-char registers,
   single space after commas); only 8 register names parse; `Span::row`/`column`
   re-read the whole source file from disk on every call and `.unwrap()` the IO.
@@ -1995,11 +2134,19 @@ Self>, CompilerError>` (continue / terminal-outcome in `Ok`, error in `Err`).
   On Windows the generated file is CRLF (the dialect parser requires the
   platform newline); keep it that way when committing.
 - **`hl` dispatch order.** In `statement`, assignments are matched _before_
-  the `name: <locality> <type>` define form: a slice store (`t0[0:4] = t1`)
+  the `name: <locality> <type>` define form: a raw slice store (`t0[0:4] = t1`)
   contains a `:` and would otherwise be taken for a definition. Preserve this
-  order when adding statement forms. The surface language has **no `goto` and
+  order when adding statement forms (an element store, `t0[0] = t1`, has no
+  colon, so the ambiguity is the raw form's alone). The surface language has **no `goto` and
   no bare labels** (control flow is `if`/`while` blocks plus `require`); the
   dialect's labels are generated (`_l0`, …).
+- **An element access must resolve the same way on every path.** One `#[`/`#]`
+  directive becomes one instruction, so the `(element type, offset)` recorded
+  per node must be unanimous; a mixed-shape pointee reached at two different
+  element boundaries has no single instruction to stand for it and is refused
+  (codegen emits `.err`, failing the assembler, rather than picking one). This
+  is also why the lowering record is pruned on backtracking rather than unioned
+  like `accessed` ([§4.3](#43-verification--explorerer)).
 - **Tests pin exact incremental behaviour (brittle by design).** `racy_store_inferred`/`racy_store_annotated`
   assert the full per-step trace; `racy_increment`/`uart_hello` assert the exact step count and
   type-inference timeline; all assert the exact `TypeConfiguration` and optimized
@@ -2075,6 +2222,15 @@ The most impactful in-code TODOs/limitations (search the files for the rest):
   (`forget a0; a1 = a0 % 4; t4 = a1 * 4; p = &arr + t4`) hits this since the
   signed-rem fix made `a1` span `[-3, 3]`. The double-rem idiom avoids it;
   the clean fix is a fallible pointer-add that rejects the path.
+- **Element indexing is constant-index only.** `p[k]` needs a literal `k`: a
+  runtime index (`arr[i]`) is refused by the front-end with the address
+  arithmetic to write instead, because the affine expansion needs a scratch
+  register and the language has not decided which one it may clobber
+  ([§11](#11-design-notes--roadmap)). Two further refusals, both with a message
+  naming the byte-slice form: indexing a **raw address** (no element type to
+  count) and indexing a pointee whose elements are not scalars (a nested list,
+  such as the descriptor *subtypes* array, whose element is a whole 25-byte
+  record). An 8-byte element **store** is refused too: the dialect has no `sd`.
 - Multi-element list slice **get** returns `ListMultiple` (unimplemented;
   `covers` is collected but never applied). **Set** now distinguishes: a
   **ranged** offset applies the sound flank-preserving weak update
@@ -2220,8 +2376,8 @@ is ever out of reach. The language's name is still undecided.
 
 The goal sourcing all of this: simplify how users write code and bring the
 surface closer to a **systems-programming dialect of Python**. Decisions made
-(the run-length type syntax below has landed; the rest is the agreed
-direction):
+(the run-length type syntax and constant-index element access below have
+landed; the rest is the agreed direction):
 
 - **The cost contract is a guiding principle, not a strict rule.**
   One-simple-statement-one-instruction stays the documented default, but a
@@ -2237,10 +2393,20 @@ direction):
 - **Run-length list types** (landed): `[u8*13]`, `[u8*2, u16*2, u8*3]`;
   comma-separated runs, `*` binding tightly, legacy `[t, t]*n` retained as
   cycling sugar ([§5.1](#51-the-hl-front-end)).
-- **Indexing is a function on the list type, not pointer arithmetic.** A
-  constant index `x[k]` resolves at translate time through a compile-time
-  dictionary to `(byte offset, width, element type)` and lowers to one sized
-  load/store (the LLVM-GEP-struct / Wasm-`struct.get` model). A runtime index
+- **Indexing is a function on the list type, not pointer arithmetic** (landed
+  for a constant index, [§5.1](#51-the-hl-front-end)). A
+  constant index `x[k]` resolves to `(byte offset, element type)` and lowers to
+  one sized load/store (the LLVM-GEP-struct / Wasm-`struct.get` model). It
+  resolves in the *verifier* rather than at translate time as first sketched:
+  the front-end is stateless and does not know what a register points at, and
+  for an inferred variable the pointee's type is not a fact about the source at
+  all but about the configuration being proven. Which turned out to be the
+  better half of the bargain, since an access that states no width lets
+  inference pick the narrowest type under which the program is **provable**
+  (`element_inference`), and knowing the element's type lets the load extend
+  the way the value was modelled (`lbu` vs `lb`). The **byte slice survives**
+  as the raw form, for memory with no element type of its own; it is not a
+  transitional spelling. A runtime index
   `x[i]` carries the implicit obligation `0 <= i < len(x)` **verified at
   compile time** (never a runtime check): interval containment at the access
   site, `check_load_at`'s byte-bounds check lifted to element granularity.
@@ -2286,25 +2452,32 @@ direction):
 
 **Sequencing.** Phase 0 (soundness, landed on this branch): signed-`rem`
 interval transfer, flank-preserving weak update for ranged list stores,
-`ecall` havocs `a0`. Phase 0.5 (instruction batch, next): `lbu`/`lhu` (u8/u16
-field loads are currently sign-extending), `sd` (8-byte stores), `andi` plus
-register `and` (the one-instruction mask idiom `x[i & 15]`; note 12-bit
-immediates cap `andi` at 2047), optionally `slli`/`remu`, plus
-`forget <label>` (region havoc, required for hosted input through typed
-buffers). Phase 1: the index directive with constant + affine + refusal, and
-run-length representation inside `Type`/`MemoryValue`/descriptors. Phase 2:
+`ecall` havocs `a0`. Phase 1a (**landed**): the index directive (`#[` / `#]`)
+with the constant index and both refusals, resolved by the verifier and
+expanded by codegen. Phase 0.5 (instruction batch, next): `sd` (8-byte stores,
+which an element store of a `u64` needs), `andi` plus register `and` (the
+one-instruction mask idiom `x[i & 15]`; note 12-bit immediates cap `andi` at
+2047), optionally `slli`/`remu`, plus `forget <label>` (region havoc, required
+for hosted input through typed buffers). `lbu`/`lhu`/`lwu` are already emitted
+for *element* loads (the element's type says how to extend it); adding them to
+the **dialect** is what a byte slice would need to close the same gap. Phase
+1b: the affine (runtime) index, whose only open question is scratch-register
+ownership, and run-length representation inside
+`Type`/`MemoryValue`/descriptors. Phase 2:
 fork-on-indeterminate (item 3 below), which turns `if i < n:` guards into the
 primary narrowing idiom and can make `require` a trap-backed check. Phase 3:
 relational facts, widening for beyond-threshold loops, arena `alloc`.
 Era-1 honesty: a runtime-indexed load's value can be stored and computed
 with, but not branched on, until Phase 2.
 
-**Still open (author decisions):** whether the verified artifact is the exact
-instruction stream or the directive model (this note assumes the latter);
-`require`'s Phase-2 semantics (silent upgrade vs a new keyword); scratch
-ownership for indexed stores (user-named `via` vs a reserved register); the
-signedness doctrine for narrow loads (`lbu`/`lhu` emission vs modeling `lb`
-sign-extension).
+**Still open (author decisions):** `require`'s Phase-2 semantics (silent
+upgrade vs a new keyword); scratch ownership for indexed stores (user-named
+`via` vs a reserved register), the one thing blocking the runtime index.
+Settled by Phase 1a: the verified artifact is the **directive model** (codegen's
+expansion is trusted, as with the TLS `la`), and the signedness doctrine is
+**emit the load that matches the model** wherever the type is known, which is
+exactly where element indexing applies; a byte slice keeps the documented
+`lb`/`lh` sign-extension mismatch until the dialect has `lbu`/`lhu`.
 
 ### Parallelism & SIMD (landed, and the next steps)
 

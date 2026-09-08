@@ -36,6 +36,7 @@ fn int_output() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -50,6 +51,7 @@ fn int_output() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "int_output/emitted.s",

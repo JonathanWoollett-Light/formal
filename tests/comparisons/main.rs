@@ -585,6 +585,7 @@ fn build_formal(program: &str, dir: &str) -> (f64, u64) {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
     unsafe {
         remove_untouched(&mut ast, &touched);
@@ -598,6 +599,7 @@ fn build_formal(program: &str, dir: &str) -> (f64, u64) {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     } else {
         emit_executable_hosted(
@@ -607,6 +609,7 @@ fn build_formal(program: &str, dir: &str) -> (f64, u64) {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     fs::write(format!("{dir}/prog.s"), &asm).expect("write the emitted assembly");

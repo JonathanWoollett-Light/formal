@@ -41,6 +41,7 @@ fn linux_hello() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -56,6 +57,7 @@ fn linux_hello() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "linux_hello/emitted.s",

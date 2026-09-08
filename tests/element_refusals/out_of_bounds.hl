@@ -1,0 +1,8 @@
+# An element index past the end of the pointee. `arr` has two elements, so
+# `arr[2]` is out of bounds: the same rejection an access past a label gets,
+# checked at compile time and at element granularity (never a runtime check).
+arr: thread [u32]*2
+t0 = &arr
+t1 = 7
+t0[2] = t1
+unreachable

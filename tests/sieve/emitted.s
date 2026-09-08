@@ -8,7 +8,7 @@ _l0:
     la t0, flags
     add t0, t0, a0
     li t3, 0
-    sb t3, 0(t0)
+    sb t3, 0(t0)  # #] t3, 0(t0)
     addi a0, a0, 1
     j _l0
 _l1:
@@ -17,7 +17,7 @@ _l2:
     bge a0, a1, _l3
     la t0, flags
     add t0, t0, a0
-    lb t1, 0(t0)
+    lbu t1, 0(t0)  # #[ t1, 0(t0)
     bnez t1, _l4
     add t2, a0, a0
 _l5:
@@ -25,7 +25,7 @@ _l5:
     la t4, flags
     add t4, t4, t2
     li t3, 1
-    sb t3, 0(t4)
+    sb t3, 0(t4)  # #] t3, 0(t4)
     add t2, t2, a0
     j _l5
 _l6:
@@ -39,7 +39,7 @@ _l7:
     bge a0, a1, _l8
     la t0, flags
     add t0, t0, a0
-    lb t1, 0(t0)
+    lbu t1, 0(t0)  # #[ t1, 0(t0)
     bnez t1, _l9
     addi a2, a2, 1
 _l9:

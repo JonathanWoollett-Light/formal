@@ -1,0 +1,8 @@
+# An element index through a raw address. A `#@` region is bytes with no
+# element type, so there is nothing to count elements of: the verifier refuses
+# the program with a message naming the byte-slice form to use instead.
+section 0x80100000 0x80100008 rw
+t0 = 0x80100000
+t1 = 7
+t0[0] = t1
+unreachable

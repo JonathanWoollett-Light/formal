@@ -42,6 +42,7 @@ fn assume() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -56,6 +57,7 @@ fn assume() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     // The `forget` and `assume` directives are verified but never emitted.
     assert!(

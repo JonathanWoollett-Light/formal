@@ -8,7 +8,7 @@ _start:
     li t1, 0
 _l0:
     beq t1, a2, _l1
-    sw t1, 0(t0)
+    sw t1, 0(t0)  # #] t1, 0(t0)
     addi t0, t0, 4
     addi t1, t1, 1
     j _l0
@@ -18,7 +18,7 @@ _l1:
     li t3, 0
 _l2:
     beq t1, a2, _l3
-    sw t3, 0(t0)
+    sw t3, 0(t0)  # #] t3, 0(t0)
     addi t0, t0, 4
     addi t1, t1, 1
     j _l2
@@ -34,8 +34,8 @@ _l4:
     li t2, 0
 _l6:
     beq t2, a2, _l7
-    lw t4, 0(t0)
-    sw t4, 0(t1)
+    lwu t4, 0(t0)  # #[ t4, 0(t0)
+    sw t4, 0(t1)  # #] t4, 0(t1)
     addi t0, t0, 4
     addi t1, t1, 4
     addi t2, t2, 1
@@ -43,7 +43,7 @@ _l6:
 _l7:
     li a0, 0
     la t0, work
-    lw t1, 0(t0)
+    lwu t1, 0(t0)  # #[ t1, 0(t0)
 _l8:
     beqz t1, _l9
     la t2, work
@@ -54,10 +54,10 @@ _l8:
     addi t5, t1, 0
 _l10:
     bge t4, t5, _l11
-    lw t1, 0(t2)
-    lw a1, 0(t3)
-    sw a1, 0(t2)
-    sw t1, 0(t3)
+    lwu t1, 0(t2)  # #[ t1, 0(t2)
+    lwu a1, 0(t3)  # #[ a1, 0(t3)
+    sw a1, 0(t2)  # #] a1, 0(t2)
+    sw t1, 0(t3)  # #] t1, 0(t3)
     addi t2, t2, 4
     addi t3, t3, -4
     addi t4, t4, 1
@@ -65,7 +65,7 @@ _l10:
     j _l10
 _l11:
     addi a0, a0, 1
-    lw t1, 0(t0)
+    lwu t1, 0(t0)  # #[ t1, 0(t0)
     j _l8
 _l9:
     bge a5, a0, _l12
@@ -98,18 +98,18 @@ _l19:
 _l20:
     bge a3, a2, _l21
     la t0, perm
-    lw t1, 0(t0)
+    lwu t1, 0(t0)  # #[ t1, 0(t0)
     la t2, perm
     li t3, 0
 _l22:
     bge t3, a3, _l23
-    lw t4, 4(t2)
-    sw t4, 0(t2)
+    lwu t4, 4(t2)  # #[ t4, 1(t2)
+    sw t4, 0(t2)  # #] t4, 0(t2)
     addi t2, t2, 4
     addi t3, t3, 1
     j _l22
 _l23:
-    sw t1, 0(t2)
+    sw t1, 0(t2)  # #] t1, 0(t2)
     la t2, cnt
     li t3, 0
 _l24:
@@ -118,9 +118,9 @@ _l24:
     addi t3, t3, 1
     j _l24
 _l25:
-    lw t4, 0(t2)
+    lwu t4, 0(t2)  # #[ t4, 0(t2)
     addi t4, t4, 1
-    sw t4, 0(t2)
+    sw t4, 0(t2)  # #] t4, 0(t2)
     li t5, 1
     blt a3, t4, _l26
     li a4, 0
@@ -129,7 +129,7 @@ _l25:
 _l26:
     beqz t5, _l27
     li t3, 0
-    sw t3, 0(t2)
+    sw t3, 0(t2)  # #] t3, 0(t2)
     addi a3, a3, 1
 _l27:
     j _l20
@@ -149,7 +149,7 @@ _l28:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l28
 _l29:
@@ -189,12 +189,12 @@ _l29:
     sb t1, 13(t0)
     la a1, __str0
     li a2, 0
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
 _l30:
     beqz t0, _l31
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
     j _l30
 _l31:
     li a0, 1
@@ -213,7 +213,7 @@ _l32:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l32
 _l33:
@@ -235,12 +235,12 @@ _l33:
     sb t1, 4(t0)
     la a1, __str1
     li a2, 0
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
 _l34:
     beqz t0, _l35
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
     j _l34
 _l35:
     li a0, 1
@@ -259,7 +259,7 @@ _l36:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
     j _l36
 _l37:
@@ -275,12 +275,12 @@ _l37:
     sb t1, 1(t0)
     la a1, __str2
     li a2, 0
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
 _l38:
     beqz t0, _l39
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    lbu t0, 0(a1)  # #[ t0, 0(a1)
     j _l38
 _l39:
     li a0, 1

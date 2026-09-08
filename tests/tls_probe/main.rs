@@ -52,6 +52,7 @@ fn tls_probe() {
             &v.transitions,
             &v.uncompactable,
             &v.pinned_nodes,
+            &v.indexed,
         )
     };
     assert_eq!(serial, "3", "per-hart thread-local sum (1+2)");

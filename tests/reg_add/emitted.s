@@ -8,8 +8,8 @@ _start:
     add t4, t3, t3
     add t5, t4, t1
     addi a1, t5, 100
-    sw a1, 0(t0)
-    lw t1, 0(t0)
+    sw a1, 0(t0)  # #] a1, 0(t0)
+    lwu t1, 0(t0)  # #[ t1, 0(t0)
     li a0, 121
     beq t1, a0, _l0
 _l0:

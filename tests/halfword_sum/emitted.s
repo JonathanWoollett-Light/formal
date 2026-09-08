@@ -3,14 +3,14 @@ _start:
     #$ vals global [u16 u16 u16]
     la t0, vals
     li t1, 1000
-    sh t1, 0(t0)
+    sh t1, 0(t0)  # #] t1, 0(t0)
     li t1, 2000
-    sh t1, 2(t0)
+    sh t1, 2(t0)  # #] t1, 1(t0)
     li t1, 3000
-    sh t1, 4(t0)
-    lh a0, 0(t0)
-    lh a1, 2(t0)
-    lh a2, 4(t0)
+    sh t1, 4(t0)  # #] t1, 2(t0)
+    lhu a0, 0(t0)  # #[ a0, 0(t0)
+    lhu a1, 2(t0)  # #[ a1, 1(t0)
+    lhu a2, 4(t0)  # #[ a2, 2(t0)
     add a0, a0, a1
     add a0, a0, a2
     li a3, 6000

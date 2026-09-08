@@ -17,7 +17,7 @@
     li t3, 12
 _l0:
     beq t1, t3, _l1
-    sw t1, 0(t0)
+    #] t1, 0(t0)
     addi t0, t0, 4
     addi t1, t1, 1
     j _l0
@@ -27,7 +27,7 @@ _l1:
     li t2, 0
 _l2:
     beq t1, t3, _l3
-    sw t2, 0(t0)
+    #] t2, 0(t0)
     addi t0, t0, 4
     addi t1, t1, 1
     j _l2
@@ -36,7 +36,7 @@ _l3:
     li t1, 0
 _l4:
     beq t1, t3, _l5
-    sw t2, 0(t0)
+    #] t2, 0(t0)
     addi t0, t0, 4
     addi t1, t1, 1
     j _l4
@@ -45,24 +45,24 @@ _l5:
     li t1, 1
     amoadd.w a3, t1, (t0)
     la t0, myrank
-    sw a3, 0(t0)
+    #] a3, 0(t0)
     la t0, blockc
-    sw a3, 0(t0)
+    #] a3, 0(t0)
     li a5, 0
     li a6, 0
     la t0, blockc
-    lw t0, 0(t0)
+    #[ t0, 0(t0)
 _l6:
     bge t0, a2, _l7
     la t1, blockc
-    lw t1, 0(t1)
+    #[ t1, 0(t1)
     la t0, perm
     li t2, 0
 _l8:
     beq t2, a2, _l9
     add t3, t1, t2
     rem t4, t3, a2
-    sw t4, 0(t0)
+    #] t4, 0(t0)
     addi t0, t0, 4
     addi t2, t2, 1
     j _l8
@@ -72,7 +72,7 @@ _l9:
     li t3, 0
 _l10:
     beq t2, a2, _l11
-    sw t3, 0(t0)
+    #] t3, 0(t0)
     addi t0, t0, 4
     addi t2, t2, 1
     j _l10
@@ -86,8 +86,8 @@ _l12:
     li t2, 0
 _l14:
     beq t2, a2, _l15
-    lw t4, 0(t0)
-    sw t4, 0(t1)
+    #[ t4, 0(t0)
+    #] t4, 0(t1)
     addi t0, t0, 4
     addi t1, t1, 4
     addi t2, t2, 1
@@ -95,7 +95,7 @@ _l14:
 _l15:
     li a0, 0
     la t0, work
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
 _l16:
     beqz t1, _l17
     la t2, work
@@ -106,10 +106,10 @@ _l16:
     addi t5, t1, 0
 _l18:
     bge t4, t5, _l19
-    lw t1, 0(t2)
-    lw a1, 0(t3)
-    sw a1, 0(t2)
-    sw t1, 0(t3)
+    #[ t1, 0(t2)
+    #[ a1, 0(t3)
+    #] a1, 0(t2)
+    #] t1, 0(t3)
     addi t2, t2, 4
     addi t3, t3, -4
     addi t4, t4, 1
@@ -117,7 +117,7 @@ _l18:
     j _l18
 _l19:
     addi a0, a0, 1
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
     j _l16
 _l17:
     bge a5, a0, _l20
@@ -151,18 +151,18 @@ _l27:
 _l28:
     bge a3, a1, _l29
     la t0, perm
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
     la t2, perm
     li t3, 0
 _l30:
     bge t3, a3, _l31
-    lw t4, 4(t2)
-    sw t4, 0(t2)
+    #[ t4, 1(t2)
+    #] t4, 0(t2)
     addi t2, t2, 4
     addi t3, t3, 1
     j _l30
 _l31:
-    sw t1, 0(t2)
+    #] t1, 0(t2)
     la t2, cnt
     li t3, 0
 _l32:
@@ -171,9 +171,9 @@ _l32:
     addi t3, t3, 1
     j _l32
 _l33:
-    lw t4, 0(t2)
+    #[ t4, 0(t2)
     addi t4, t4, 1
-    sw t4, 0(t2)
+    #] t4, 0(t2)
     li t5, 1
     blt a3, t4, _l34
     li a4, 0
@@ -182,7 +182,7 @@ _l33:
 _l34:
     beqz t5, _l35
     li t3, 0
-    sw t3, 0(t2)
+    #] t3, 0(t2)
     addi a3, a3, 1
 _l35:
     j _l28
@@ -190,19 +190,19 @@ _l29:
     j _l12
 _l13:
     la t0, blockc
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
     addi t1, t1, 2
-    sw t1, 0(t0)
+    #] t1, 0(t0)
     addi t0, t1, 0
     j _l6
 _l7:
     la t0, myrank
-    lw t1, 0(t0)
+    #[ t1, 0(t0)
     li t2, 4
     mul t3, t1, t2
     la t0, cs_slots
     add t0, t0, t3
-    sw a6, 0(t0)
+    #] a6, 0(t0)
     la t0, max_global
     amomax.w t1, a5, (t0)
     la t0, done_counter
@@ -213,12 +213,12 @@ _l7:
     bne t2, a0, _l36
     fence rw, rw
     la t0, cs_slots
-    lw a5, 0(t0)
+    #[ a5, 0(t0)
     addi t0, t0, 4
-    lw a6, 0(t0)
+    #[ a6, 0(t0)
     add a5, a5, a6
     la t0, max_global
-    lw a6, 0(t0)
+    #[ a6, 0(t0)
     addi a3, a2, 0
     addi t5, a5, 0
     #$ __local0 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
@@ -232,7 +232,7 @@ _l37:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    #] t2, 0(t0)
     addi a2, a2, 1
     j _l37
 _l38:
@@ -272,12 +272,12 @@ _l38:
     sb t1, 13(t0)
     la a1, __str0
     li a2, 0
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
 _l39:
     beqz t0, _l40
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
     j _l39
 _l40:
     li a0, 1
@@ -296,7 +296,7 @@ _l41:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    #] t2, 0(t0)
     addi a2, a2, 1
     j _l41
 _l42:
@@ -318,12 +318,12 @@ _l42:
     sb t1, 4(t0)
     la a1, __str1
     li a2, 0
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
 _l43:
     beqz t0, _l44
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
     j _l43
 _l44:
     li a0, 1
@@ -342,7 +342,7 @@ _l45:
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
-    sb t2, 0(t0)
+    #] t2, 0(t0)
     addi a2, a2, 1
     j _l45
 _l46:
@@ -358,12 +358,12 @@ _l46:
     sb t1, 1(t0)
     la a1, __str2
     li a2, 0
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
 _l47:
     beqz t0, _l48
     addi a2, a2, 1
     addi a1, a1, 1
-    lb t0, 0(a1)
+    #[ t0, 0(a1)
     j _l47
 _l48:
     li a0, 1

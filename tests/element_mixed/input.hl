@@ -1,0 +1,39 @@
+# A **mixed-shape** list: `[u8*2, i16*1, u32*1, i32*1]`, five elements of three
+# widths and both signednesses, laid out at byte offsets 0, 1, 2, 4 and 8.
+#
+# Which element `k` names depends on where the pointer sits, so the verifier
+# walks the type from the pointer's (exact) offset rather than multiplying: the
+# offsets here are 0, 2, 4 and 8, not 0, 2, 3, 4. And because it resolves the
+# element's *type*, not just its width, each load extends the way the value was
+# modelled: `rec[0]` is a `u8`, so 200 reads back as 200 (`lbu`) rather than as
+# -56, and `rec[2]`/`rec[4]` are signed, so their negatives survive (`lh`/`lw`).
+# A byte slice could state none of this.
+rec: global [u8*2, i16*1, u32*1, i32*1]
+t0 = &rec
+
+t1 = 200
+t0[0] = t1        # u8 at byte 0
+t1 = -300
+t0[2] = t1        # i16 at byte 2
+t1 = 7
+t0[3] = t1        # u32 at byte 4
+t1 = -9
+t0[4] = t1        # i32 at byte 8
+
+a0 = t0[0]
+a1 = 200
+require a0 == a1  # unsigned: 200, not the -56 a sign-extending load would give
+
+a2 = t0[2]
+a3 = -300
+require a2 == a3  # signed halfword
+
+a4 = t0[3]
+a5 = 7
+require a4 == a5  # unsigned word
+
+a6 = t0[4]
+a7 = -9
+require a6 == a7  # signed word
+
+exit(0)

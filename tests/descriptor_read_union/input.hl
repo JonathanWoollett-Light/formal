@@ -6,11 +6,11 @@ t0 = csr(mhartid)
 if t0 == 0:
     t1 = type(welcome)
     t5 = 0
-    t2 = t1[0:8]
+    t2 = t1[0]
 if t0 != 0:
     t1 = type(welcome)
     t5 = 0
-    t2 = t1[16:24]
+    t2 = t1[2]
 asm:
     wfi
 unreachable

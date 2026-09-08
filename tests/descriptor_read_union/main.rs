@@ -45,6 +45,7 @@ fn descriptor_reads_union_across_harts() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     // Exact number of state-machine steps.
@@ -95,6 +96,7 @@ fn descriptor_reads_union_across_harts() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     bless_asm(
         "descriptor_read_union/emitted.s",
@@ -113,6 +115,7 @@ fn descriptor_reads_union_across_harts() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "descriptor_read_union produces no UART output");

@@ -41,6 +41,7 @@ fn runtime_input() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     unsafe {
@@ -55,6 +56,7 @@ fn runtime_input() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
     // `forget` is verifier-only: the havoc directive must not appear in the binary.
     assert!(

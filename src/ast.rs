@@ -213,6 +213,8 @@ fn alloc_node(mut src: &[char], front_opt: &mut Option<NonNull<AstNode>>, span: 
         ['#', '('] => Instruction::Assume(Assume { open: true }),
         ['#', ')'] => Instruction::Assume(Assume { open: false }),
         ['#', '~', ' ', rem @ ..] => Instruction::Forget(new_forget(rem)),
+        ['#', '[', ' ', rem @ ..] => Instruction::Lidx(new_lidx(rem)),
+        ['#', ']', ' ', rem @ ..] => Instruction::Sidx(new_sidx(rem)),
         ['#', ..] => return,
         _ => {
             let mut out = None;
@@ -300,6 +302,8 @@ pub enum Instruction {
     Region(Region),
     Assume(Assume),
     Forget(Forget),
+    Lidx(Lidx),
+    Sidx(Sidx),
 }
 
 impl Instruction {
@@ -407,6 +411,8 @@ impl fmt::Display for Instruction {
             Region(region) => write!(f, "{region}"),
             Assume(assume) => write!(f, "{assume}"),
             Forget(forget) => write!(f, "{forget}"),
+            Lidx(lidx) => write!(f, "{lidx}"),
+            Sidx(sidx) => write!(f, "{sidx}"),
         }
     }
 }
@@ -1409,6 +1415,74 @@ fn new_sw(src: &[char]) -> Sw {
     }
 }
 
+/// The element-indexed load `#[ rd, k(rs)`: `rd = rs[k]`, where `k` counts
+/// **elements** of the pointee's type, not bytes.
+///
+/// It is a directive, not a RISC-V instruction: the byte offset and the access
+/// width follow from the pointee's type, which only the verifier knows (per
+/// state, and for an inferred variable per type configuration). The verifier
+/// resolves it against that type, checks the index is in bounds, and records
+/// the lowering per node; codegen then emits the sized `lb`/`lh`/`lw`/`ld`
+/// (see `emit_with_target`). The operand shape mirrors [`Lw`] so the index sits
+/// exactly where a byte offset would.
+#[derive(Debug, Clone)]
+pub struct Lidx {
+    pub to: Register,
+    pub from: Register,
+    pub index: Offset,
+}
+
+impl fmt::Display for Lidx {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#[ {}, {}({})", self.to, self.index, self.from)
+    }
+}
+
+fn new_lidx(src: &[char]) -> Lidx {
+    let to = new_register(&src[..2]).unwrap();
+    for i in 4..src.len() {
+        if src[i] == '(' {
+            let from = src
+                .iter()
+                .skip(i + 1)
+                .take_while(|&&c| c != ')')
+                .copied()
+                .collect::<Vec<_>>();
+            return Lidx {
+                to,
+                from: new_register(&from).unwrap(),
+                index: new_offset(&src[4..i]).unwrap(),
+            };
+        }
+    }
+    unreachable!()
+}
+
+/// The element-indexed store `#] rs2, k(rs1)`: `rs1[k] = rs2`. The store
+/// counterpart of [`Lidx`]; codegen emits the sized `sb`/`sh`/`sw`.
+#[derive(Debug, Clone)]
+pub struct Sidx {
+    pub to: Register,
+    pub from: Register,
+    pub index: Offset,
+}
+
+impl fmt::Display for Sidx {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "#] {}, {}({})", self.from, self.index, self.to)
+    }
+}
+
+fn new_sidx(src: &[char]) -> Sidx {
+    let from = new_register(&src[..2]).unwrap();
+    let (i, j) = parse_store(src);
+    Sidx {
+        from,
+        to: new_register(&src[i + 1..j]).unwrap(),
+        index: new_offset(&src[4..i]).unwrap(),
+    }
+}
+
 /// 2-byte halfword load/store, mirroring [`Lw`]/[`Sw`] (the only difference is
 /// the access width, which the verifier and codegen carry as a `len`/mnemonic).
 #[derive(Debug, Clone)]
@@ -1483,6 +1557,16 @@ fn parse_store(src: &[char]) -> (usize, usize) {
 #[derive(Debug, Clone)]
 pub struct Offset {
     pub value: Immediate,
+}
+
+/// A computed offset (an element index resolved to bytes, a compacted layout's
+/// rewritten immediate): decimal, since no source text is being preserved.
+impl From<i64> for Offset {
+    fn from(value: i64) -> Self {
+        Offset {
+            value: Immediate { radix: 10, value },
+        }
+    }
 }
 
 impl fmt::Display for Offset {

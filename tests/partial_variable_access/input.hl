@@ -5,6 +5,6 @@
 data: _ [u8]*4
 t0 = &data
 t1 = 7
-t0[0:1] = t1
-t2 = t0[2:3]
+t0[0] = t1
+t2 = t0[2]
 unreachable

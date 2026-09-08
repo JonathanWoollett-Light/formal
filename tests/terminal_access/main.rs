@@ -42,13 +42,14 @@ fn path_terminal_access_is_recorded() {
         transitions,
         uncompactable,
         pinned_nodes,
+        indexed,
     } = expect_valid(&trace, result);
 
     let expected_trace = [
         "h0/1 | #$ value global u32 | Config: [value:Gu32,] | q1 t1 j0",
         "h0/1 | #& t0, value | Config: [value:Gu32,] | q1 t2 j0",
         "h0/1 | li t5, 0 | Config: [value:Gu32,] | q1 t3 j0",
-        "h0/1 | ld t1, 0(t0) | Config: [value:Gu32,] | q0 t4 j0",
+        "h0/1 | #[ t1, 0(t0) | Config: [value:Gu32,] | q0 t4 j0",
     ];
     assert_trace(&trace, &expected_trace);
 
@@ -84,9 +85,13 @@ fn path_terminal_access_is_recorded() {
         &transitions,
         &uncompactable,
         &pinned_nodes,
+        &indexed,
     );
-    let expected = normalize(include_str!("emitted.s"));
-    assert_eq!(normalize(asm), expected);
+    bless_asm(
+        "terminal_access/emitted.s",
+        asm.clone(),
+        include_str!("emitted.s"),
+    );
 
     // Boot it in QEMU (requires the toolchain + QEMU): the load reads the
     // emitted descriptor bytes and the program halts: no output, no fault.
@@ -99,6 +104,7 @@ fn path_terminal_access_is_recorded() {
             &transitions,
             &uncompactable,
             &pinned_nodes,
+            &indexed,
         )
     };
     assert_eq!(serial, "", "terminal_access produces no UART output");
