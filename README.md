@@ -167,4 +167,5 @@ A few terms show up in those reports:
   and the design notes. Start here to contribute.
 - **[comparison.md](comparison.md)**: how `formal` relates to Python, C, C++,
   Rust, Zig, Lean, and Ada/SPARK.
-- **[index.html](index.html)**: the project page.
+- **[index.html](index.html)**: the project page, one static file with no
+  build step.

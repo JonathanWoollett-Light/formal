@@ -5,20 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="formal: a verifying compiler for bare-metal RISC-V with Python-like syntax. Every hart interleaving, every admissible type, proven at compile time."
+      content="formal: a verifying compiler for bare-metal RISC-V. A Python-like language that lowers one statement to one instruction, accepted only once the compiler has proven it safe on every hart interleaving and every admissible type."
     />
     <title>formal</title>
-    <!-- Material 3: Roboto / Roboto Mono type and Material Symbols icons. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&family=Material+Symbols+Outlined&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap"
     />
+    <!-- Syntax highlighting: Prism core plus the grammars for the languages the
+         comparison panels show, as one pinned, integrity-checked request. The
+         `formal`, RISC-V and shell grammars are defined below. If this request
+         fails the panels stay plain monospace, which is styled the same way. -->
+    <script
+      defer
+      data-manual
+      crossorigin="anonymous"
+      src="https://cdn.jsdelivr.net/combine/npm/prismjs@1.30.0/components/prism-core.min.js,npm/prismjs@1.30.0/components/prism-clike.min.js,npm/prismjs@1.30.0/components/prism-c.min.js,npm/prismjs@1.30.0/components/prism-cpp.min.js,npm/prismjs@1.30.0/components/prism-rust.min.js,npm/prismjs@1.30.0/components/prism-zig.min.js,npm/prismjs@1.30.0/components/prism-ada.min.js"
+      integrity="sha384-1PmSchHWx/F61dCJtrWbDlpXWfKTDmwx0kSYTnnlSXj1P9DdD83xNYgVrbRLDODn"
+    ></script>
     <script>
       // Apply the saved (or system) color scheme before first paint, so the
       // page never flashes the wrong theme. The toggle keeps `colorScheme` in
-      // sync; the M3 color tokens swap under [data-theme="dark"].
+      // sync; the color tokens swap under [data-theme="dark"].
       (function () {
         try {
           var scheme = localStorage.getItem("colorScheme");
@@ -32,61 +42,84 @@
       })();
     </script>
     <style>
-      /* ---- Material 3 baseline color tokens (purple seed). The page and the
-         Material Web components both read these `--md-sys-color-*` roles; dark
-         mode just swaps the values under [data-theme="dark"]. ---- */
+      /* ---- Tokens. Light on bare :root, dark swapped under [data-theme].
+         The neutral ramp is cool blue-grey in light and pure grey in dark; the
+         accent ramp is the same in both, so a single ember hue anchors the
+         page either way. ---- */
       :root {
-        --md-sys-color-primary: #6750a4;
-        --md-sys-color-on-primary: #ffffff;
-        --md-sys-color-primary-container: #eaddff;
-        --md-sys-color-on-primary-container: #21005d;
-        --md-sys-color-secondary: #625b71;
-        --md-sys-color-on-secondary: #ffffff;
-        --md-sys-color-secondary-container: #e8def8;
-        --md-sys-color-on-secondary-container: #1d192b;
-        --md-sys-color-tertiary: #7d5260;
-        --md-sys-color-error: #b3261e;
-        --md-sys-color-surface: #fef7ff;
-        --md-sys-color-on-surface: #1d1b20;
-        --md-sys-color-surface-variant: #e7e0ec;
-        --md-sys-color-on-surface-variant: #49454f;
-        --md-sys-color-surface-container-lowest: #ffffff;
-        --md-sys-color-surface-container-low: #f7f2fa;
-        --md-sys-color-surface-container: #f3edf7;
-        --md-sys-color-surface-container-high: #ece6f0;
-        --md-sys-color-surface-container-highest: #e6e0e9;
-        --md-sys-color-outline: #79747e;
-        --md-sys-color-outline-variant: #cac4d0;
-        --md-sys-color-inverse-surface: #322f35;
-        --md-sys-color-inverse-on-surface: #f5eff7;
-        --md-ref-typeface-plain: "Roboto", system-ui, sans-serif;
-        --md-ref-typeface-code: "Roboto Mono", ui-monospace, monospace;
+        --page: #ffffff;
+        --surface: #ffffff;
+        --text: #000000;
+        --text-2: #676d71;
+        --text-3: #9a9eaa;
+        --line: #e5e9ef;
+        --line-strong: #d4dae4;
+        --rule: rgba(154, 158, 170, 0.2);
+        --accent: #ff552a;
+        --wash: #ffefdc;
+        --code-bg: #fff7ee;
+        --code-fg: #654735;
+        --code-line: #ff552a;
+        --code-line-width: 0.5px;
+        --ok-fg: #407d1c;
+        --ok-bg: #eafad5;
+        --next-fg: #ed810c;
+        --next-bg: #fff4cc;
+        --idea-fg: #676d71;
+        --idea-bg: #eef0f4;
+        /* Syntax tokens, from the same palette. */
+        --t-keyword: #637bff;
+        --t-operator: #637bff;
+        --t-string: #9570ff;
+        --t-function: #f44771;
+        --t-constant: #676d86;
+        --t-comment: #9a9eaf;
+        --t-register: #676d86;
+        --t-number: #ae92ff;
+        --t-directive: #ff552a;
+
+        --grad-ember: linear-gradient(105deg, #fd2b01 5%, #ed810c 100%);
+        --grad-band: radial-gradient(
+          166.98% 106.79% at 14.34% 19.59%,
+          #ff552a 0%,
+          #ff8500 100%
+        );
+        --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: "Roboto Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+        --wrap: 60rem;
+        --pad: 1.5rem;
+        --sec: 7.5rem;
         color-scheme: light;
       }
       [data-theme="dark"] {
-        --md-sys-color-primary: #d0bcff;
-        --md-sys-color-on-primary: #381e72;
-        --md-sys-color-primary-container: #4f378b;
-        --md-sys-color-on-primary-container: #eaddff;
-        --md-sys-color-secondary: #ccc2dc;
-        --md-sys-color-on-secondary: #332d41;
-        --md-sys-color-secondary-container: #4a4458;
-        --md-sys-color-on-secondary-container: #e8def8;
-        --md-sys-color-tertiary: #efb8c8;
-        --md-sys-color-error: #f2b8b5;
-        --md-sys-color-surface: #141218;
-        --md-sys-color-on-surface: #e6e0e9;
-        --md-sys-color-surface-variant: #49454f;
-        --md-sys-color-on-surface-variant: #cac4d0;
-        --md-sys-color-surface-container-lowest: #0f0d13;
-        --md-sys-color-surface-container-low: #1d1b20;
-        --md-sys-color-surface-container: #211f26;
-        --md-sys-color-surface-container-high: #2b2930;
-        --md-sys-color-surface-container-highest: #36343b;
-        --md-sys-color-outline: #938f99;
-        --md-sys-color-outline-variant: #49454f;
-        --md-sys-color-inverse-surface: #e6e0e9;
-        --md-sys-color-inverse-on-surface: #322f35;
+        --page: #1a1a1a;
+        --surface: #111111;
+        --text: #ffffff;
+        --text-2: #9a9a9a;
+        --text-3: #9a9a9a;
+        --line: #3a3a3a;
+        --line-strong: #3a3a3a;
+        --accent: #ff552a;
+        --wash: rgba(255, 85, 42, 0.15);
+        --code-bg: #292828;
+        --code-fg: #ffffff;
+        --code-line: rgba(255, 156, 69, 0.28);
+        --code-line-width: 1px;
+        --ok-fg: #95e72c;
+        --ok-bg: rgba(149, 231, 44, 0.15);
+        --next-fg: #ffc700;
+        --next-bg: rgba(255, 199, 0, 0.15);
+        --idea-fg: #9a9a9a;
+        --idea-bg: rgba(154, 158, 170, 0.15);
+        --t-keyword: #b5c0f6;
+        --t-operator: #b5c0f6;
+        --t-string: #ae92ff;
+        --t-function: #f44771;
+        --t-constant: #93dbc1;
+        --t-comment: #9a9ea1;
+        --t-register: #9a9eaf;
+        --t-number: #ae92ff;
+        --t-directive: #f09b3d;
         color-scheme: dark;
       }
 
@@ -94,155 +127,454 @@
       * {
         box-sizing: border-box;
       }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 5rem;
+      }
       body {
         margin: 0;
-        background: var(--md-sys-color-surface);
-        color: var(--md-sys-color-on-surface);
-        font-family: var(--md-ref-typeface-plain);
-        font-size: 16px;
+        background: var(--page);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 1rem;
         line-height: 1.5;
+        letter-spacing: -0.02rem;
+        font-feature-settings: "salt" off;
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
       }
-      .container {
-        max-width: 760px;
-        margin: 0 auto;
-        padding: 0 1.25rem;
-      }
-      /* Material 3 type scale (Roboto). */
-      h1 {
-        font: 500 1.75rem/2.25rem var(--md-ref-typeface-plain);
+      h1,
+      h2,
+      h3,
+      h4,
+      h5 {
+        font-weight: 500;
         margin: 0;
       }
-      h3 {
-        font: 400 1.5rem/2rem var(--md-ref-typeface-plain);
-        margin: 0 0 0.75rem;
-      }
-      h4 {
-        font: 500 1.25rem/1.75rem var(--md-ref-typeface-plain);
-        color: var(--md-sys-color-tertiary);
-      }
-      h5 {
-        font: 500 0.95rem/1.5rem var(--md-ref-typeface-plain);
-        margin: 0 0 0.5rem;
-        color: var(--md-sys-color-on-surface-variant);
-      }
       p {
-        margin: 0.6rem 0 0;
+        margin: 0;
       }
       a {
-        color: var(--md-sys-color-primary);
+        color: inherit;
         text-decoration: none;
-      }
-      a:hover {
-        text-decoration: underline;
-      }
-      small {
-        font-size: 0.8rem;
-        color: var(--md-sys-color-on-surface-variant);
       }
       b {
         font-weight: 500;
       }
-      ul {
-        padding-left: 1.25rem;
-        margin: 0.5rem 0 0;
+      /* One container width for everything; coloured bands break out around it. */
+      .sec {
+        max-width: var(--wrap);
+        margin: 0 auto;
+        padding: 0 var(--pad);
       }
-      li {
-        margin: 0.4rem 0;
+      main > .sec,
+      main > .band {
+        margin-top: var(--sec);
       }
-      section {
-        margin: 2.75rem 0;
+      .band {
+        padding: 6.25rem 0;
+      }
+      .band > .sec {
+        padding: 0 var(--pad);
       }
 
-      /* ---- Header / nav ---- */
-      header.container {
-        padding-top: 1.5rem;
+      /* Section heading: centred, 48px, nothing above it. */
+      .h-sec {
+        font-size: 3rem;
+        line-height: 1.15;
+        letter-spacing: -0.025em;
+        text-align: center;
       }
-      header nav {
+      .h-sub {
+        margin: 1rem auto 0;
+        max-width: 40rem;
+        text-align: center;
+        color: var(--text-2);
+      }
+      .h-sec + .grid,
+      .h-sub + .grid,
+      .h-sec + .tabs,
+      .h-sub + .tabs,
+      .h-sec + .stack,
+      .h-sub + .stack,
+      .h-sec + .timeline-card,
+      .h-sub + .timeline-card {
+        margin-top: 2.5rem;
+      }
+
+      /* ---- Status strip ---- */
+      .strip {
+        background: var(--accent);
+        color: #fff;
+        text-align: center;
+        padding: 0.4rem var(--pad);
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+      .strip a {
+        text-decoration: underline;
+      }
+
+      /* ---- Nav ---- */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: var(--surface);
+        border-bottom: 1px solid var(--line-strong);
+      }
+      .nav-in {
+        max-width: 82.5rem;
+        margin: 0 auto;
+        height: 4rem;
+        padding: 0 var(--pad);
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem 1rem;
-        flex-wrap: wrap;
+        gap: 2rem;
       }
-      .nav-actions {
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-        flex-wrap: wrap;
-      }
-      /* Nav links styled as M3 text buttons; the theme toggle as an M3 icon
-         button (Material Symbols glyph rendered from the icon font). */
-      .nav-actions a {
+      .brand {
+        font-size: 1.125rem;
+        font-weight: 500;
+        letter-spacing: -0.03em;
         display: inline-flex;
+        align-items: baseline;
+      }
+      .nav-links {
+        display: flex;
+        gap: 2rem;
+        margin-right: auto;
+      }
+      .nav-right {
+        display: flex;
         align-items: center;
-        padding: 0.4rem 0.75rem;
-        border-radius: 20px;
-        font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain);
-        color: var(--md-sys-color-primary);
-        text-decoration: none;
+        gap: 1rem;
+        margin-left: auto;
       }
-      .nav-actions a:hover {
-        background: color-mix(
-          in srgb,
-          var(--md-sys-color-primary) 10%,
-          transparent
-        );
-        text-decoration: none;
+      .nav a:not(.brand) {
+        font-size: 0.875rem;
+        font-weight: 400;
+        color: var(--text-2);
+        border-bottom: 1px solid transparent;
+        padding-bottom: 2px;
       }
-      #theme-toggle {
+      .nav a:not(.brand):hover {
+        color: var(--text);
+      }
+      .icon-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 40px;
-        height: 40px;
+        width: 1.5rem;
+        height: 1.5rem;
         padding: 0;
         border: none;
-        border-radius: 50%;
-        background: transparent;
-        color: var(--md-sys-color-on-surface-variant);
+        background: none;
+        color: var(--text-2);
         cursor: pointer;
       }
-      #theme-toggle:hover {
-        background: color-mix(
-          in srgb,
-          var(--md-sys-color-on-surface) 8%,
-          transparent
+      .icon-btn:hover {
+        color: var(--text);
+      }
+
+      /* ---- Hero: copy left, a ruled link list right. No picture. ---- */
+      .hero {
+        background: linear-gradient(
+          130deg,
+          var(--wash) 0,
+          var(--wash) 100px,
+          transparent 900px
         );
       }
-      .material-symbols-outlined {
-        font-family: "Material Symbols Outlined";
-        font-weight: normal;
-        font-size: 24px;
-        line-height: 1;
-        font-feature-settings: "liga";
+      .hero-in {
+        max-width: var(--wrap);
+        margin: 0 auto;
+        padding: 3.75rem var(--pad) 0;
+        display: grid;
+        grid-template-columns: 3fr 1fr;
+        gap: 2rem;
+        align-items: center;
       }
-      header > p {
+      .hero-copy {
+        max-width: 33.125rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .wordmark {
+        font-size: 5.5rem;
+        line-height: 1;
+        letter-spacing: -0.045em;
+        margin-bottom: 0.5rem;
+      }
+      /* The end-of-proof mark, drawn rather than typeset so it needs no glyph. */
+      .qed {
+        display: inline-block;
+        width: 0.3em;
+        height: 0.3em;
+        margin-left: 0.16em;
+        vertical-align: 0.05em;
+        border-radius: 2px;
+        background: var(--grad-ember);
+      }
+      .hero-copy p {
+        font-size: 1.125rem;
+        line-height: 1.35;
+        letter-spacing: -0.045rem;
+      }
+      .hero-copy .meta {
+        font-size: 0.75rem;
+        line-height: 1.25rem;
+        letter-spacing: -0.019rem;
+        color: var(--text-2);
+      }
+      .hero-copy .meta a {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 0.5rem;
+      }
+      .quicklinks {
+        display: flex;
+        flex-direction: column;
+      }
+      .ql {
+        display: flex;
+        gap: 1rem;
+        padding: 1rem 0;
+        border-bottom: 1px solid var(--rule);
+        color: var(--text-2);
+      }
+      .quicklinks .ql:last-child {
+        border-bottom: none;
+      }
+      .ql b {
+        display: block;
+        color: var(--text);
+        font-size: 1rem;
+      }
+      .ql span {
+        display: block;
+        font-size: 0.75rem;
+        line-height: 1.25rem;
+      }
+      .ql:hover b {
+        color: var(--accent);
+      }
+      .ql svg {
+        flex: none;
+        margin-top: 2px;
+      }
+
+      /* ---- Buttons ---- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 12.25rem;
+        padding: 0.5rem 1.25rem;
+        border-radius: 2px;
+        font-size: 0.9375rem;
+        line-height: 1.5rem;
+        white-space: nowrap;
+        transition: opacity 0.15s;
+      }
+      .btn-cta {
+        background: var(--grad-ember);
+        color: #fff;
+        font-weight: 500;
+      }
+      .btn-outline {
+        border: 1px solid var(--text-2);
+        color: var(--text);
+        font-weight: 400;
+      }
+      .btn:hover {
+        opacity: 0.9;
+      }
+
+      /* ---- Cards: hairline outlines on a transparent fill, never elevated ---- */
+      .grid {
+        display: grid;
+        gap: 1rem;
+      }
+      .grid-3 {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        padding: 1.5rem;
+        min-height: 12.5rem;
+        border: 0.5px solid var(--line);
+        border-radius: 2px;
+        background: transparent;
+        box-shadow: none;
+        transition: border-color 0.2s ease-in-out;
+      }
+      .card:hover {
+        border-color: var(--line-strong);
+      }
+      .card svg {
+        color: var(--accent);
+        margin-bottom: 0.25rem;
+      }
+      .card h3 {
+        font-size: 1.125rem;
+        line-height: 1.5rem;
+        letter-spacing: -0.045rem;
+      }
+      .card p,
+      .card ul {
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+        letter-spacing: -0.022rem;
+        color: var(--text-2);
+      }
+      a.card:hover h3 {
+        color: var(--accent);
+      }
+      .card-min {
+        min-height: 6.75rem;
+      }
+
+      /* ---- Feature row: copy left, a code specimen right ---- */
+      .feature {
+        display: grid;
+        grid-template-columns: 5fr 7fr;
+        gap: 1rem;
+        margin-top: var(--sec);
+      }
+      .feature > div:first-child {
+        max-width: 22rem;
+      }
+      .h-feat {
+        font-size: 2rem;
+        line-height: 1.1;
+        letter-spacing: -0.025em;
+        padding: 1rem 0;
+      }
+      .feature p {
+        color: var(--text-2);
+      }
+      .feature p + p {
+        margin-top: 0.75rem;
+      }
+      .feature svg {
+        color: var(--accent);
+      }
+      /* The code column keeps a fixed offset, so every specimen lines up with
+         the first line of body copy however the heading wraps. */
+      .feature > div:last-child {
+        min-width: 0;
+        padding-top: 9.5rem;
+      }
+
+      /* ---- Code panels ---- */
+      pre.asm,
+      pre.cmd {
+        margin: 0;
+        padding: 0;
+        overflow: auto;
+        background: var(--code-bg);
+        border: var(--code-line-width) solid var(--code-line);
+        border-radius: 4px;
+        color: var(--code-fg);
+        font-family: var(--mono);
+        letter-spacing: 0;
+        box-shadow: none;
+      }
+      pre.asm {
+        max-height: 420px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      pre.asm > code,
+      pre.cmd > code {
+        display: block;
+        padding: 1rem;
+        font: inherit;
+        color: inherit;
+        background: none;
+      }
+      /* Reproduction-command box under each comparison panel: four lines,
+         scrolling for anything longer or wider. */
+      .compare pre.cmd {
+        margin-top: 0.5rem;
+        font-size: 11px;
+        line-height: 1.5;
+        height: calc(4 * 1.5em + 2rem);
+        white-space: pre;
+      }
+      .code {
+        font-family: var(--mono);
+        font-size: 0.85em;
+        letter-spacing: 0;
+        color: var(--text);
+        background: var(--code-bg);
+        border: 0.5px solid var(--line);
+        border-radius: 2px;
+        padding: 0.05rem 0.3rem;
+        white-space: nowrap;
+      }
+      /* For a chip too long to sit on one line in a narrow column. */
+      .code.wrap {
+        white-space: normal;
+      }
+      .stack {
         margin-top: 1rem;
       }
 
-      /* ---- Inline code ---- */
-      .code {
-        font-family: var(--md-ref-typeface-code);
-        font-size: 0.875em;
-        background: var(--md-sys-color-surface-container-high);
-        color: var(--md-sys-color-on-surface);
-        padding: 0.1rem 0.35rem;
-        border-radius: 4px;
-        white-space: nowrap;
+      /* Prism token colours. Everything degrades to --code-fg without it. */
+      .token.keyword,
+      .token.variable {
+        color: var(--t-keyword);
+      }
+      .token.operator,
+      .token.punctuation {
+        color: var(--t-operator);
+      }
+      .token.string,
+      .token.char,
+      .token.attr-name {
+        color: var(--t-string);
+      }
+      .token.function,
+      .token.label {
+        color: var(--t-function);
+      }
+      .token.constant,
+      .token.builtin,
+      .token.boolean,
+      .token.prolog {
+        color: var(--t-constant);
+      }
+      .token.special-vars {
+        color: var(--t-register);
+      }
+      .token.number {
+        color: var(--t-number);
+      }
+      .token.comment {
+        color: var(--t-comment);
+        font-style: normal;
+      }
+      /* The project's own #$ #& #@ #! #? directives: the point of highlighting
+         the assembly at all, so they are the one accented token. */
+      .token.annotation {
+        color: var(--t-directive);
+        font-weight: 500;
       }
 
-      /* ---- Two-column grids (comparison + the end-to-end source/emitted) ---- */
+      /* ---- Two-column code grids (comparison + source/emitted) ---- */
       .cols {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 1rem;
-      }
-      @media (max-width: 640px) {
-        .cols {
-          grid-template-columns: 1fr;
-        }
       }
       /* Let `1fr` columns shrink below their content's intrinsic min-width, so a
          long line in a code/command box scrolls inside the panel instead of
@@ -250,162 +582,335 @@
       .cols > div {
         min-width: 0;
       }
-      .cols > div > h5 {
+      .cols h5 {
+        font-size: 0.875rem;
+        line-height: 1.25rem;
         margin-bottom: 0.5rem;
       }
 
-      /* ---- Code blocks (M3 surface cards) ---- */
-      pre.asm {
-        font-family: var(--md-ref-typeface-code);
-        font-size: 12px;
-        max-height: 420px;
-        overflow: auto;
-        margin: 0;
-        padding: 0;
-        background: var(--md-sys-color-surface-container);
-        border: 1px solid var(--md-sys-color-outline-variant);
-        border-radius: 12px;
-      }
-      pre.asm > code {
-        display: block;
-        padding: 0.6rem 0.75rem;
-        font-family: inherit;
-      }
-      /* Reproduction-command box under each comparison panel: a fixed four-line
-         box, scrolling for longer or wider commands. */
-      .compare pre.cmd {
-        font-family: var(--md-ref-typeface-code);
-        font-size: 11px;
-        line-height: 1.5;
-        height: calc(4 * 1.5em + 1.2rem);
-        overflow: auto;
-        white-space: pre;
-        margin: 0.5rem 0 0;
-        background: var(--md-sys-color-surface-container-high);
-        color: var(--md-sys-color-on-surface-variant);
-        border: 1px solid var(--md-sys-color-outline-variant);
-        border-radius: 12px;
-      }
-      .compare pre.cmd > code {
-        display: block;
-        padding: 0.6rem 0.75rem;
-        font-family: inherit;
-      }
-
-      /* ---- Comparison tabs: native buttons styled as M3 primary tabs (an
-         active underline indicator), so they work without any component JS. ---- */
+      /* ---- Comparison tabs ---- */
       .tabs {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.25rem;
-        border-bottom: 1px solid var(--md-sys-color-outline-variant);
+        gap: 1.5rem;
+        border-bottom: 1px solid var(--rule);
       }
       .tabs button {
-        flex: 1 1 0;
         appearance: none;
         margin: 0;
-        padding: 0.55rem 0.5rem;
-        background: transparent;
+        padding: 0 0 0.5rem;
+        background: none;
         border: none;
-        border-bottom: 2px solid transparent;
-        border-radius: 8px 8px 0 0;
-        font: 500 0.85rem/1.25rem var(--md-ref-typeface-plain);
-        color: var(--md-sys-color-on-surface-variant);
+        border-bottom: 1px solid transparent;
+        font-family: inherit;
+        font-size: 0.875rem;
+        font-weight: 400;
+        letter-spacing: inherit;
+        color: var(--text-2);
         cursor: pointer;
       }
       .tabs button:hover {
-        background: color-mix(
-          in srgb,
-          var(--md-sys-color-primary) 8%,
-          transparent
-        );
+        color: var(--text);
       }
       .tabs button[aria-selected="true"] {
-        color: var(--md-sys-color-primary);
-        border-bottom-color: var(--md-sys-color-primary);
-      }
-      .lang-tabs {
-        margin-bottom: 0.25rem;
+        color: var(--text);
+        border-bottom-color: var(--accent);
       }
       .prog-tabs {
-        margin-bottom: 1rem;
-      }
-
-      .pipeline {
-        text-align: center;
-        color: var(--md-sys-color-on-surface-variant);
         margin: 0.75rem 0 1.5rem;
       }
       .instr-count {
-        margin: 0.6rem 0 0;
-        color: var(--md-sys-color-on-surface-variant);
+        margin-top: 0.75rem;
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+        color: var(--text-2);
       }
       .instr-count b {
-        font-size: 1.1em;
-        color: var(--md-sys-color-on-surface);
+        font-size: 1rem;
+        color: var(--text);
       }
-      /* Runtime measurements (formal column only): instructions executed, memory
-         working set, and execution time, measured by booting the program under
-         QEMU with a TCG instrumentation plugin. */
+      /* Runtime measurements: instructions executed, memory working set and
+         execution time, measured by running the program under QEMU. */
       .runtime-stats {
-        margin: 0.5rem 0 0;
-        padding-top: 0.5rem;
-        border-top: 1px solid var(--md-sys-color-outline-variant);
-        font-size: 0.92rem;
-        line-height: 1.55;
-        color: var(--md-sys-color-on-surface-variant);
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--rule);
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+        color: var(--text-2);
       }
       .runtime-stats b {
-        color: var(--md-sys-color-on-surface);
+        color: var(--text);
       }
       .runtime-stats .head {
         display: block;
-        font-size: 0.72rem;
+        font-size: 0.75rem;
         text-transform: uppercase;
         letter-spacing: 0.06em;
-        opacity: 0.7;
-        margin-bottom: 0.2rem;
+        color: var(--text-3);
+        margin-bottom: 0.25rem;
       }
-      /* Execution-time value carries a native tooltip (set in JS) with the host
-         specs + QEMU setup the time was measured under. */
+      /* The execution time carries a native tooltip (set in JS) with the host
+         and QEMU setup it was measured under. */
       .runtime-stats b.tip {
         cursor: help;
-        border-bottom: 1px dotted var(--md-sys-color-outline-variant);
+        border-bottom: 1px dotted var(--text-2);
+      }
+      .note {
+        margin-top: 1.5rem;
+        font-size: 0.75rem;
+        line-height: 1.25rem;
+        color: var(--text-3);
+      }
+
+      /* ---- End to end ---- */
+      .pipeline {
+        margin: 1.5rem auto 0;
+        max-width: 46rem;
+        text-align: center;
+        font-size: 0.875rem;
+        line-height: 1.5rem;
+        color: var(--text-2);
+      }
+      .prose {
+        max-width: 37.5rem;
+        margin-inline: auto;
+      }
+      .prose p + p,
+      .prose ul {
+        margin-top: 1.5rem;
+      }
+      .prose a {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .prose ul {
+        padding-left: 1.1rem;
+      }
+      .prose li + li {
+        margin-top: 0.75rem;
       }
 
       /* ---- Directives table ---- */
+      /* The first two columns never wrap, so on a narrow screen the table
+         scrolls inside its own box rather than widening the page. */
+      .table-wrap {
+        margin-top: 2.5rem;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+      }
       table.directives {
         width: 100%;
+        min-width: 34rem;
         border-collapse: collapse;
-        margin-top: 0.5rem;
+        font-size: 0.875rem;
+        line-height: 1.25rem;
       }
       table.directives th,
       table.directives td {
         text-align: left;
-        padding: 0.5rem 0.6rem;
-        border-bottom: 1px solid var(--md-sys-color-outline-variant);
+        padding: 0.75rem 0.6rem;
+        border-bottom: 1px solid var(--rule);
         vertical-align: top;
       }
       table.directives th {
-        color: var(--md-sys-color-on-surface-variant);
-        font-weight: 500;
+        color: var(--text-3);
+        font-weight: 400;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.06em;
+      }
+      table.directives td {
+        color: var(--text-2);
       }
       table.directives td:first-child,
       table.directives td:nth-child(2) {
         white-space: nowrap;
       }
 
-      footer.container {
-        margin: 3rem auto;
-        padding-top: 1.5rem;
-        border-top: 1px solid var(--md-sys-color-outline-variant);
+      /* ---- Roadmap: the page's one saturated band, with a near-black card
+         floating on it so the content stays in the same monochrome language ---- */
+      /* The saturated stops are the brand gradient; the flat overlay darkens
+         them to the tone the band is meant to read at, and keeps the white
+         headings on it legible. */
+      .band-roadmap {
+        background:
+          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)),
+          var(--grad-band);
+      }
+      [data-theme="dark"] .band-roadmap {
+        background:
+          linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)),
+          var(--grad-band);
+      }
+      .band-roadmap .h-sec,
+      .band-roadmap .h-sub,
+      .band-roadmap .after {
+        color: #fff;
+      }
+      .band-roadmap .h-sub {
+        opacity: 0.92;
+      }
+      .after {
+        margin-top: 3rem;
+        text-align: center;
+        font-size: 1rem;
+      }
+      .after a {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .timeline-card {
+        max-width: 37.5rem;
+        margin: 2.5rem auto 0;
+        padding: 3.75rem;
+        border-radius: 8px;
+        background: #111;
+        color: #fff;
+      }
+      .tl {
+        position: relative;
+        padding-left: 3.5rem;
+      }
+      .tl::before {
+        content: "";
+        position: absolute;
+        left: 1.25rem;
+        top: 2.5rem;
+        bottom: 1rem;
+        width: 1px;
+        background: repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.35) 0 2.5px,
+          transparent 2.5px 5.5px
+        );
+      }
+      .tl-item {
+        position: relative;
+        padding-bottom: 2.5rem;
+      }
+      .tl-item:last-child {
+        padding-bottom: 0;
+      }
+      .tl-item::before {
+        content: "";
+        position: absolute;
+        left: -3.5rem;
+        top: -0.25rem;
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        background: #111;
+      }
+      .tl-item .dot {
+        position: absolute;
+        left: -3.5rem;
+        top: -0.25rem;
+        width: 2.5rem;
+        height: 2.5rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+      }
+      .tl-head {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+      }
+      .tl-phase {
+        font-size: 0.75rem;
+        line-height: 1.25rem;
+        text-transform: uppercase;
+        color: #9a9a9a;
+      }
+      .pill {
+        display: inline-grid;
+        place-items: center;
+        height: 22px;
+        padding: 0 6px;
+        border: 1px solid transparent;
+        border-radius: 2px;
+        font-size: 0.75rem;
+        line-height: 14px;
+        letter-spacing: 0.25px;
+        white-space: nowrap;
+      }
+      .pill-ok {
+        color: var(--ok-fg);
+        background: var(--ok-bg);
+      }
+      .pill-next {
+        color: var(--next-fg);
+        background: var(--next-bg);
+      }
+      .pill-idea {
+        color: var(--idea-fg);
+        background: var(--idea-bg);
+      }
+      .tl-item h3 {
+        font-size: 1rem;
+        line-height: 1.5rem;
+      }
+      .tl-item p {
+        margin-top: 0.25rem;
+        font-size: 0.75rem;
+        line-height: 1.25rem;
+        color: #9a9a9a;
+      }
+
+      /* ---- Get started band ---- */
+      .band-start {
+        background: linear-gradient(90deg, var(--wash), transparent);
+      }
+      .h-side {
+        font-size: 2rem;
+        line-height: 1.1;
+        letter-spacing: -0.025em;
+        margin: 3.75rem 0 1.5rem;
+      }
+      .band-start .cta-row {
+        justify-content: center;
+        margin-top: 1.125rem;
+      }
+
+      /* ---- Footer ---- */
+      footer {
+        margin-top: var(--sec);
+        border-top: 1px solid var(--wash);
+        background: linear-gradient(90deg, transparent, var(--wash));
+      }
+      .foot-in {
+        max-width: 82.5rem;
+        margin: 0 auto;
+        min-height: 4rem;
+        padding: 1rem var(--pad);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 1rem 2.5rem;
+        font-size: 0.875rem;
+        color: var(--text-2);
+      }
+      .foot-in .brand {
+        color: var(--text);
+      }
+      .foot-in a:not(.brand):hover {
+        color: var(--text);
+      }
+      .foot-in .btn {
+        margin-left: auto;
+        min-width: 0;
       }
 
       /* ---- Slim, theme-aware scrollbars on the scrollable code boxes ---- */
       pre.asm,
       pre.cmd {
         scrollbar-width: thin;
-        scrollbar-color: var(--md-sys-color-outline-variant) transparent;
+        scrollbar-color: var(--line-strong) transparent;
       }
       pre.asm::-webkit-scrollbar,
       pre.cmd::-webkit-scrollbar {
@@ -414,71 +919,350 @@
       }
       pre.asm::-webkit-scrollbar-thumb,
       pre.cmd::-webkit-scrollbar-thumb {
-        background: var(--md-sys-color-outline-variant);
+        background: var(--line-strong);
         border-radius: 4px;
-      }
-      pre.asm::-webkit-scrollbar-thumb:hover,
-      pre.cmd::-webkit-scrollbar-thumb:hover {
-        background: var(--md-sys-color-outline);
       }
       pre.asm::-webkit-scrollbar-track,
       pre.cmd::-webkit-scrollbar-track {
         background: transparent;
       }
+
+      @media (max-width: 900px) {
+        :root {
+          --sec: 5rem;
+        }
+        .nav-links {
+          display: none;
+        }
+        .wordmark {
+          font-size: 3.5rem;
+        }
+        .h-sec {
+          font-size: 2.25rem;
+        }
+        .hero-in,
+        .feature {
+          grid-template-columns: 1fr;
+        }
+        .feature > div:last-child {
+          padding-top: 1.5rem;
+        }
+        .grid-3 {
+          grid-template-columns: 1fr 1fr;
+        }
+        .timeline-card {
+          padding: 2rem 1.5rem 2rem 1.5rem;
+        }
+      }
+      @media (max-width: 640px) {
+        .cols,
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+        .btn {
+          min-width: 0;
+          flex: 1 1 auto;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        * {
+          transition: none !important;
+        }
+      }
     </style>
   </head>
   <body>
-    <header class="container">
-      <nav>
-        <h1>formal</h1>
-        <div class="nav-actions">
-          <a
-            href="https://github.com/JonathanWoollett-Light/formal"
-            target="_blank"
-            >GitHub</a
-          >
+    <p class="strip">
+      Status: experimental. Much is unimplemented and things may break.
+      <a
+        href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
+        >Start with DEVELOPMENT.md</a
+      >
+    </p>
+
+    <header class="nav">
+      <div class="nav-in">
+        <a class="brand" href="#top">formal<span class="qed"></span></a>
+        <nav class="nav-links">
+          <a href="#proven">Why</a>
+          <a href="#compare">Compare</a>
+          <a href="#language">Language</a>
+          <a href="#roadmap">Roadmap</a>
+        </nav>
+        <div class="nav-right">
           <a
             href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
-            target="_blank"
             >README</a
           >
           <a
             href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
-            target="_blank"
             >Comparisons</a
           >
-          <button id="theme-toggle" type="button" aria-label="Toggle dark mode">
-            <span class="material-symbols-outlined" aria-hidden="true"
-              >light_mode</span
+          <a
+            class="icon-btn"
+            href="https://github.com/JonathanWoollett-Light/formal"
+            aria-label="formal on GitHub"
+            ><svg
+              width="18"
+              height="18"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              aria-hidden="true"
             >
+              <path
+                d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38l-.01-1.49c-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+              /></svg
+          ></a>
+          <button
+            class="icon-btn"
+            id="theme-toggle"
+            type="button"
+            aria-label="Switch to dark mode"
+          >
+            <svg
+              class="i-sun"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="4.2" />
+              <path
+                d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4"
+              />
+            </svg>
+            <svg
+              class="i-moon"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              hidden
+            >
+              <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+            </svg>
           </button>
         </div>
-      </nav>
-      <p>
-        <b
-          >A verifiable Python-like language, and a compiler to verify RISC-V.</b
-        >
-        A Python-like language that map nearly one-to-one onto RISC-V
-        instructions, with the memory layout left implicit; the compiler accepts
-        the program only if it can <i>prove</i>, by symbolically executing the
-        machine code itself, that no assertion fails and no memory access is
-        unsafe on <i>any</i> hardware-thread interleaving, for <i>any</i> input,
-        under the types it infers for you. The proof's by-products then build
-        the binary able to apply optimizations based on verified conditions.
-      </p>
-      <h4>
-        🚧 Experimental: anything and everything might not work and much isn't
-        yet implemented 🚧
-      </h4>
+      </div>
     </header>
 
-    <main class="container">
-      <section>
-        <h3>The same program, every language</h3>
-        <p>
-          <span class="code">formal</span> usualy compiles to fewer instructions
-          because it ships no runtime, no libc, and no garbage collector beneath
-          it.
+    <main id="top">
+      <section class="hero">
+        <div class="hero-in">
+          <div class="hero-copy">
+            <h1 class="wordmark">formal<span class="qed"></span></h1>
+            <p>A verifying compiler for bare-metal RISC-V.</p>
+            <p>
+              You write a small Python-like language whose simple statements map
+              one-to-one onto RISC-V instructions, with the memory layout left
+              implicit. The compiler accepts your program only if it can
+              <i>prove</i>, by symbolically executing the machine code itself,
+              that no assertion can fail and no memory access is unsafe, on
+              <i>every</i> hardware-thread interleaving and under
+              <i>every</i> admissible type it infers for you.
+            </p>
+            <p>
+              The by-products of that proof then build the binary and shrink it.
+            </p>
+            <div class="cta-row">
+              <a class="btn btn-cta" href="#get-started">Get started</a>
+              <a
+                class="btn btn-outline"
+                href="https://github.com/JonathanWoollett-Light/formal"
+                >View on GitHub</a
+              >
+            </div>
+            <p class="meta">
+              Supports <a href="https://riscv.org/">RISC-V</a> ✓ &nbsp;·&nbsp;
+              Doesn't support
+              <a href="https://en.wikipedia.org/wiki/AArch64">aarch64</a> ?
+              &nbsp;·&nbsp; Won't support
+              <a href="https://en.wikipedia.org/wiki/X86-64">x86-64</a> ✗<br />
+              Needs only Rust (stable) and Cargo.
+            </p>
+          </div>
+          <nav class="quicklinks">
+            <a class="ql" href="#get-started"
+              ><svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M5 4.5 19 12 5 19.5V4.5Z" /></svg
+              ><span
+                ><b>Get started</b>Install, scaffold, run under QEMU</span
+              ></a
+            >
+            <a class="ql" href="#proven"
+              ><svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 3.5 20 7v5.5c0 4.5-3.4 7-8 8.5-4.6-1.5-8-4-8-8.5V7l8-3.5Z"
+                />
+                <path d="m8.5 12 2.5 2.5 4.5-4.5" /></svg
+              ><span
+                ><b>Why formal</b>What it proves, and what it costs</span
+              ></a
+            >
+            <a class="ql" href="#roadmap"
+              ><svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 4.5 3.5 6.5v13L9 17.5l6 2 5.5-2v-13l-5.5 2-6-2Z" />
+                <path d="M9 4.5v13M15 6.5v13" /></svg
+              ><span><b>Roadmap</b>Landed, next, and designed</span></a
+            >
+            <a
+              class="ql"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
+              ><svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="m8.5 8.5-5 3.5 5 3.5M15.5 8.5l5 3.5-5 3.5M13.5 5l-3 14"
+                /></svg
+              ><span
+                ><b>Contribute</b>The pipeline and the design notes</span
+              ></a
+            >
+          </nav>
+        </div>
+      </section>
+
+      <section class="sec" id="proven">
+        <h2 class="h-sec">Proven at compile time</h2>
+        <p class="h-sub">
+          The compiler is not a checker you can argue with. It rejects the
+          program unless it has a proof.
+        </p>
+        <div class="grid grid-3">
+          <div class="card">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 7h4l10 10h4M3 17h4L17 7h4" />
+              <path d="m18 4 3 3-3 3M18 14l3 3-3 3" />
+            </svg>
+            <h3>Every interleaving</h3>
+            <p>
+              A <span class="code">fail</span> marker is a theorem. The compiler
+              enumerates every hart interleaving and rejects the program unless
+              the marker is unreachable on all of them. Provably-correct
+              <i>racy</i> code, which Rust's borrow checker forbids and SPARK's
+              tasking model excludes, verifies here.
+            </p>
+          </div>
+          <div class="card">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M9 4H7a3 3 0 0 0-3 3v3a2 2 0 0 1-2 2 2 2 0 0 1 2 2v3a3 3 0 0 0 3 3h2"
+              />
+              <path
+                d="M15 4h2a3 3 0 0 1 3 3v3a2 2 0 0 0 2 2 2 2 0 0 0-2 2v3a3 3 0 0 1-3 3h-2"
+              />
+            </svg>
+            <h3>Every typing</h3>
+            <p>
+              Leave a type as <span class="code">_</span> and the compiler
+              searches type and locality assignments, accepting one
+              <i>iff it makes the whole program verify</i>. Inference and
+              verification are the same search, so there is no "couldn't infer,
+              add an annotation" failure mode.
+            </p>
+          </div>
+          <div class="card">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4" y="10.5" width="16" height="10" rx="2" />
+              <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5M12 14.5v2" />
+            </svg>
+            <h3>Every access</h3>
+            <p>
+              An access is safe inside its variable's inferred type, or inside a
+              raw region with the right permissions: one the target system
+              describes, or one the program declares with
+              <span class="code">section</span>. An access nothing describes
+              makes the program invalid.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="compare">
+        <h2 class="h-sec">The same program, every language</h2>
+        <p class="h-sub">
+          <span class="code">formal</span> usually compiles to fewer
+          instructions because it ships no runtime, no libc, and no garbage
+          collector beneath it.
         </p>
         <div
           class="tabs lang-tabs"
@@ -546,11 +1330,13 @@
         <div class="grid cols compare">
           <div>
             <h5>formal</h5>
-            <pre class="asm"><code id="formal-code">print("Hello World!\n")
+            <pre
+              class="asm"
+            ><code id="formal-code" class="language-formal">print("Hello World!\n")
 exit(0)</code></pre>
             <pre
               class="cmd"
-            ><code id="formal-cmd">formal new hello_world &amp;&amp; cd hello_world
+            ><code id="formal-cmd" class="language-shell">formal new hello_world &amp;&amp; cd hello_world
 cargo run
 grep -cE '^    [a-z]' build/main.s</code></pre>
             <p class="instr-count">
@@ -573,10 +1359,14 @@ grep -cE '^    [a-z]' build/main.s</code></pre>
           </div>
           <div>
             <h5 id="lang-name">Rust</h5>
-            <pre class="asm"><code id="lang-code">fn main() {
+            <pre
+              class="asm"
+            ><code id="lang-code" class="language-rust">fn main() {
     println!("Hello World!");
 }</code></pre>
-            <pre class="cmd"><code id="lang-cmd">cargo new hw &amp;&amp; cd hw
+            <pre
+              class="cmd"
+            ><code id="lang-cmd" class="language-shell">cargo new hw &amp;&amp; cd hw
 echo 'fn main() { println!("Hello World!"); }' &gt; src/main.rs
 CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_STRIP=true RUSTFLAGS='-Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort' cargo +nightly build --release --target x86_64-unknown-linux-musl -Zbuild-std=std,panic_abort -Zbuild-std-features=
 objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+[0-9a-f]+:'</code></pre>
@@ -599,79 +1389,165 @@ objdump -d target/x86_64-unknown-linux-musl/release/hw | grep -cE '^[[:space:]]+
             </p>
           </div>
         </div>
-      </section>
-
-      <section>
-        <h3>Why</h3>
-        <ul>
-          <li>
-            <b>Proves your assertions, doesn't trust you.</b> A
-            <span class="code">fail</span> marker is a theorem: the compiler
-            enumerates every hart interleaving and rejects the program unless
-            the marker is unreachable on all of them. Provably-correct
-            <i>racy</i> code, which Rust's borrow checker forbids and SPARK's
-            tasking model excludes, verifies here.
-          </li>
-          <li>
-            <b>Infallible type inference.</b> Leave a type as
-            <span class="code">_</span> and the compiler searches type and
-            locality assignments, accepting one
-            <i>iff it makes the whole program verify</i>. If any typing works,
-            it is found: inference and verification are the same search, so
-            there is no "couldn't infer, add an annotation" failure mode.
-            (Scalar types are searched; list/union types are infinite, so they
-            are written explicitly.)
-          </li>
-          <li>
-            <b>The memory layout is an output, not an input.</b> No
-            <span class="code">.data</span>/<span class="code">.bss</span> in
-            the source: the verifier discovers each variable's type and locality
-            and emits the sections for you.
-          </li>
-          <li>
-            <b>Every memory access must be provably safe</b>: inside its
-            variable's inferred type, or inside a raw region with the right
-            permissions: one the target system describes (e.g. MMIO, like the
-            UART below) or one the program declares with
-            <span class="code">section</span>. An allocator declares each
-            allocation as it hands it out; an access nothing describes makes the
-            program invalid.
-          </li>
-          <li>
-            <b>The proof shrinks the binary.</b> Dead-<i>data</i> elimination:
-            bytes the proof shows no runtime path can touch are deleted from the
-            output, with the program's address arithmetic rewritten in lockstep,
-            so information consumed only at compile time simply doesn't exist at
-            runtime.
-          </li>
-        </ul>
-        <p>
-          Supports <a href="https://riscv.org/">RISC-V</a> ✓ &nbsp;·&nbsp;
-          Doesn't support
-          <a href="https://en.wikipedia.org/wiki/AArch64">aarch64</a> ?
-          &nbsp;·&nbsp; Won't support
-          <a href="https://en.wikipedia.org/wiki/X86-64">x86-64</a> ✗
+        <p class="note">
+          Every figure is measured by the project's own comparison test against
+          pinned toolchains. Hover an execution time for the host and QEMU setup
+          it was measured under.
         </p>
       </section>
 
-      <section>
-        <h3>End to end: source to booted RISC-V</h3>
-        <p>
-          This is the project's real end-to-end test (<a
+      <section class="sec" id="language">
+        <h2 class="h-sec">One statement, one instruction</h2>
+        <p class="h-sub">
+          Two layers, kept deliberately close. Every simple statement lowers to
+          exactly one RISC-V instruction or directive, and
+          <span class="code">if</span>, <span class="code">while</span> and
+          <span class="code">require</span> each lower to a small fixed pattern
+          of branches plus generated labels. No register allocation, no hidden
+          control flow, the C-like cost model where the price of a line is
+          visible at the call site, and inline assembly always one
+          <span class="code">asm:</span> block away.
+        </p>
+        <div class="stack">
+          <pre
+            class="asm"
+          ><code class="language-riscv">value: global _              -&gt;  #$ value global _        define (locality/type; _ = infer)
+welcome: _ [u8*13]           -&gt;  #$ welcome _ [u8 ... u8]  list types: runs, [u8*13] or [u8*2, u16*2]
+t0 = &amp;value                  -&gt;  la t0, value              address of a variable
+t0 = type(welcome)           -&gt;  #&amp; t0, welcome            address of the runtime type descriptor
+t0 = csr(mhartid)            -&gt;  csrr t0, mhartid          which hart am I?
+t1 = 0x10000000              -&gt;  li t1, 0x10000000         load immediate
+t1 = t1 + 1                  -&gt;  addi t1, t1, 1            register +/- immediate
+t0[0:4] = t1                 -&gt;  sw t1, 0(t0)              store a byte slice (1 = sb, 4 = sw)
+t1 = t0[8:16]                -&gt;  ld t1, 8(t0)              load a byte slice (1 = lb, 4 = lw, 8 = ld)
+section 0x100 0x200 rw       -&gt;  #@ 0x100 0x200 rw         declare an accessible region
+fail                         -&gt;  #!                        must be proven unreachable
+unreachable                  -&gt;  #?                        end of execution
+asm:                         -&gt;  (each indented line       inline assembly
+    wfi                          emitted verbatim)
+
+require t1 &lt; t2              # fail unless t1 &lt; t2  (one-line `if not cond: fail`)
+if t0 == 0:                 # run the block when the condition holds
+    t1 = t0[0:8]
+while t5 != t2:             # top-tested loop
+    t5 = t5 + 1</code></pre>
+        </div>
+
+        <div class="feature">
+          <div>
+            <svg
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m12 3 9 4.5-9 4.5-9-4.5L12 3Z" />
+              <path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5" />
+            </svg>
+            <h3 class="h-feat">The memory layout is an output, not an input</h3>
+            <p>
+              There is no <span class="code">.data</span> or
+              <span class="code">.bss</span> in the source, and no entry point:
+              execution starts at the first line, like Python.
+            </p>
+            <p>
+              The verifier discovers each variable's type and locality and emits
+              the sections for you, so the program describes behaviour and the
+              compiler discovers the representation that makes it correct.
+            </p>
+          </div>
+          <div>
+            <pre class="asm"><code class="language-formal"># you write
+value: global _
+welcome: _ [u8*13]</code></pre>
+            <pre
+              class="asm stack"
+            ><code class="language-riscv"># the compiler emits
+.section .data
+__welcome_type:
+    .dword 8                # List
+    .dword __welcome_subtypes
+    .dword 13               # length
+
+.section .bss
+    .balign 8
+value:
+    .zero 4
+    .balign 8
+welcome:
+    .zero 13</code></pre>
+          </div>
+        </div>
+
+        <div class="feature">
+          <div>
+            <svg
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 12h6M14 12h6" />
+              <path d="m7 9-3 3 3 3M17 9l3 3-3 3" />
+              <path d="M12 3v4M12 17v4" />
+            </svg>
+            <h3 class="h-feat">The proof shrinks the binary</h3>
+            <p>
+              Dead-<i>data</i> elimination: bytes the proof shows no runtime
+              path can touch are deleted from the output, with the program's
+              address arithmetic rewritten in lockstep.
+            </p>
+            <p>
+              The verifier models a type record as
+              <span class="code wrap"
+                >[u64 type, u64 subtypes-ptr, u64 length, u8 locality]</span
+              >. The program only ever <i>reads</i> the type number, so the
+              emitted descriptors carry the type words alone and the stride is
+              rewritten to match. The locality byte, read only by the verifier,
+              exists nowhere in the binary.
+            </p>
+          </div>
+          <div>
+            <pre
+              class="asm"
+            ><code class="language-formal"># you write: a 25-byte record stride
+t0 = t0 + 25</code></pre>
+            <pre
+              class="asm stack"
+            ><code class="language-riscv"># the compiler emits: 8, the bytes the
+# program can actually reach
+    addi t0, t0, 8</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="end-to-end">
+        <h2 class="h-sec">End to end: source to booted RISC-V</h2>
+        <p class="h-sub">
+          The project's real end-to-end test,
+          <a
             href="https://github.com/JonathanWoollett-Light/formal/tree/master/tests/uart_hello"
             ><span class="code">tests/uart_hello/</span></a
-          >). The source races two harts on an inferred global, has hart 0 check
+          >. The source races two harts on an inferred global, has hart 0 check
           the message's <i>runtime type descriptor</i> (the program inspects its
-          own inferred types), then prints over the UART. Note what the source
-          does <i>not</i> contain: an entry point (execution starts at the first
-          line, like Python), a data section, or most of the types.
+          own inferred types), then prints over the UART.
         </p>
         <div class="grid cols">
           <div>
             <h5>You write <span class="code">input.hl</span></h5>
             <pre
               class="asm"
-            ><code># Do racy arithmetic with an undefined variable.
+            ><code class="language-formal"># Do racy arithmetic with an undefined variable.
 # Use global locality so the load/stores are racy.
 value: global _
 t0 = &amp;value
@@ -772,7 +1648,7 @@ unreachable</code></pre>
           </div>
           <div>
             <h5>It proves, optimizes &amp; emits</h5>
-            <pre class="asm"><code>.global _start
+            <pre class="asm"><code class="language-riscv">.global _start
 _start:
     #$ value global _
     la t0, value
@@ -891,169 +1767,416 @@ welcome:
           <span class="code">welcome: thread [u8 × 13]</span> → remove dead code
           &amp; never-taken branches → compact the layout → emit
         </p>
-        <p>
-          The emitted program assembles with the RISC-V GNU toolchain, boots
-          under <span class="code">qemu-system-riscv64 -machine virt</span>, and
-          prints <span class="code">Hello World!</span>. Two things to notice in
-          the output:
-        </p>
-        <ul>
-          <li>
-            <b>The descriptor records shrank.</b> In memory the verifier models
-            each type record as 25 bytes (<span class="code"
-              >[u64 type, u64 subtypes-ptr, u64 length, u8 locality]</span
-            >), and the source walks them with
-            <span class="code">t0 = t0 + 25</span>. The program only ever
-            <i>reads</i> each record's type number, so the emitted
-            <span class="code">__welcome_subtypes</span> is 13
-            <span class="code">.dword</span>s (104 bytes, not 325), and the
-            stride was rewritten to <span class="code">addi t0, t0, 8</span> to
-            match. The locality byte, read only by the verifier, exists nowhere
-            in the binary.
-          </li>
-          <li>
-            <b>The race was proven, not forbidden.</b> Both harts run the
-            non-atomic increment of <span class="code">value</span>; the proof
-            covers every interleaving and shows the
-            <span class="code">value &lt; 4</span> assertion holds in all of
-            them.
-          </li>
-        </ul>
-        <pre class="asm"><code>$ cargo nt uart_hello
+        <div class="prose">
+          <p>
+            The emitted program assembles with the RISC-V GNU toolchain, boots
+            under <span class="code">qemu-system-riscv64 -machine virt</span>,
+            and prints <span class="code">Hello World!</span>. Two things to
+            notice in the output:
+          </p>
+          <ul>
+            <li>
+              <b>The descriptor records shrank.</b> The source walks 25-byte
+              records with <span class="code">t0 = t0 + 25</span>, but the
+              program only ever reads each record's type number, so the emitted
+              <span class="code">__welcome_subtypes</span> carries the type
+              words alone and the stride became
+              <span class="code">addi t0, t0, 8</span>.
+            </li>
+            <li>
+              <b>The race was proven, not forbidden.</b> Both harts run the
+              non-atomic increment of <span class="code">value</span>; the proof
+              covers every interleaving and shows the
+              <span class="code">value &lt; 4</span> assertion holds in all of
+              them.
+            </li>
+          </ul>
+        </div>
+        <pre class="asm"><code class="language-shell">$ cargo nt uart_hello
 PASS [25.001s] formal::uart_hello uart_hello</code></pre>
       </section>
 
-      <section>
-        <h3>The language</h3>
-        <p>
-          Two layers, kept deliberately close. You write a Python-like surface
-          language in which
-          <b
-            >every simple statement lowers to exactly one RISC-V instruction or
-            directive</b
-          >, and <span class="code">if</span>/<span class="code">while</span
-          >/<span class="code">require</span> each lower to a small fixed
-          pattern of branches plus generated labels (no register allocation, no
-          hidden control flow, the C-like cost model where the price of a line
-          is visible at the call site), with inline assembly always one
-          <span class="code">asm:</span> block away:
-        </p>
-        <pre
-          class="asm"
-        ><code>value: global _              -&gt;  #$ value global _        define (locality/type; _ = infer)
-welcome: _ [u8*13]           -&gt;  #$ welcome _ [u8 ... u8]  list types: runs, [u8*13] or [u8*2, u16*2]
-t0 = &amp;value                  -&gt;  la t0, value              address of a variable
-t0 = type(welcome)           -&gt;  #&amp; t0, welcome            address of the runtime type descriptor
-t0 = csr(mhartid)            -&gt;  csrr t0, mhartid          which hart am I?
-t1 = 0x10000000              -&gt;  li t1, 0x10000000         load immediate
-t1 = t1 + 1                  -&gt;  addi t1, t1, 1            register +/- immediate
-t0[0:4] = t1                 -&gt;  sw t1, 0(t0)              store a byte slice (1 = sb, 4 = sw)
-t1 = t0[8:16]                -&gt;  ld t1, 8(t0)              load a byte slice (1 = lb, 4 = lw, 8 = ld)
-section 0x100 0x200 rw       -&gt;  #@ 0x100 0x200 rw         declare an accessible region
-fail                         -&gt;  #!                        must be proven unreachable
-unreachable                  -&gt;  #?                        end of execution
-asm:                         -&gt;  (each indented line       inline assembly
-    wfi                          emitted verbatim)
-
-require t1 &lt; t2              # fail unless t1 &lt; t2  (one-line `if not cond: fail`)
-if t0 == 0:                 # run the block when the condition holds
-    t1 = t0[0:8]
-while t5 != t2:             # top-tested loop
-    t5 = t5 + 1</code></pre>
-        <p>
-          Underneath sits the verification target: RISC-V assembly plus five
-          directives; every directive starts with
+      <section class="sec" id="dialect">
+        <h2 class="h-sec">The dialect underneath</h2>
+        <p class="h-sub">
+          Under the surface language sits the verification target: RISC-V
+          assembly plus five directives. Every directive starts with
           <span class="code">#</span>, the RISC-V comment character, so any
           <span class="code">formal</span> program is also a plain assembly
-          file:
+          file.
         </p>
-        <table class="directives">
-          <thead>
-            <tr>
-              <th>Directive</th>
-              <th>Surface form</th>
-              <th>Meaning</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><span class="code">#!</span></td>
-              <td><span class="code">fail</span></td>
-              <td>
-                An assertion the compiler must prove unreachable on every
-                interleaving.
-              </td>
-            </tr>
-            <tr>
-              <td><span class="code">#?</span></td>
-              <td><span class="code">unreachable</span></td>
-              <td>End of execution: the hart that reaches this point halts.</td>
-            </tr>
-            <tr>
-              <td><span class="code">#$ x global u32</span></td>
-              <td><span class="code">x: global u32</span></td>
-              <td>
-                Declare a variable's locality and/or type;
-                <span class="code">_</span> means "infer it for me".
-              </td>
-            </tr>
-            <tr>
-              <td><span class="code">#&amp; t0, x</span></td>
-              <td><span class="code">t0 = type(x)</span></td>
-              <td>
-                Load the address of a variable's <i>runtime type descriptor</i>.
-                Programs can inspect their own inferred types.
-              </td>
-            </tr>
-            <tr>
-              <td><span class="code">#@ 100 200 rw</span></td>
-              <td><span class="code">section 100 200 rw</span></td>
-              <td>
-                Declare a memory region the program may access (bounds may be
-                registers: an allocator declares each allocation as it makes
-                it).
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="directives">
+            <thead>
+              <tr>
+                <th>Directive</th>
+                <th>Surface form</th>
+                <th>Meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="code">#!</span></td>
+                <td><span class="code">fail</span></td>
+                <td>
+                  An assertion the compiler must prove unreachable on every
+                  interleaving.
+                </td>
+              </tr>
+              <tr>
+                <td><span class="code">#?</span></td>
+                <td><span class="code">unreachable</span></td>
+                <td>
+                  End of execution: the hart that reaches this point halts.
+                </td>
+              </tr>
+              <tr>
+                <td><span class="code">#$ x global u32</span></td>
+                <td><span class="code">x: global u32</span></td>
+                <td>
+                  Declare a variable's locality and/or type;
+                  <span class="code">_</span> means "infer it for me".
+                </td>
+              </tr>
+              <tr>
+                <td><span class="code">#&amp; t0, x</span></td>
+                <td><span class="code">t0 = type(x)</span></td>
+                <td>
+                  Load the address of a variable's
+                  <i>runtime type descriptor</i>. Programs can inspect their own
+                  inferred types.
+                </td>
+              </tr>
+              <tr>
+                <td><span class="code">#@ 100 200 rw</span></td>
+                <td><span class="code">section 100 200 rw</span></td>
+                <td>
+                  Declare a memory region the program may access (bounds may be
+                  registers: an allocator declares each allocation as it makes
+                  it).
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="band band-roadmap" id="roadmap">
+        <div class="sec">
+          <h2 class="h-sec">Roadmap</h2>
+          <p class="h-sub">
+            formal is early. This is what has landed, what is next, and what is
+            designed but not yet implemented.
+          </p>
+          <div class="timeline-card">
+            <div class="tl">
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Parallelism</span>
+                  <span class="pill pill-ok">landed</span>
+                </div>
+                <h3>Verified parallelism, and a first SIMD subset</h3>
+                <p>
+                  Real multi-hart work-sharing: block decomposition, per-hart
+                  thread-local arrays and a lock-free
+                  <span class="code">amoadd</span>/<span class="code"
+                    >amomax</span
+                  >
+                  reduction. Per-hart thread-local storage in codegen, the
+                  <span class="code">amomax</span> and
+                  <span class="code">fence</span> instructions, and the
+                  register-only RISC-V V subset, verified and booted.
+                </p>
+              </div>
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Soundness, phase 0</span>
+                  <span class="pill pill-ok">landed</span>
+                </div>
+                <h3>The transfer functions the proof leaned on</h3>
+                <p>
+                  The signed-<span class="code">rem</span> interval transfer,
+                  the flank-preserving weak update for ranged list stores, and
+                  <span class="code">ecall</span> havocking
+                  <span class="code">a0</span>. The run-length list type syntax
+                  (<span class="code">[u8*13]</span>,
+                  <span class="code">[u8*2, u16*2]</span>) landed alongside.
+                </p>
+              </div>
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M5 12h14M13 6l6 6-6 6" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Phase 0.5</span>
+                  <span class="pill pill-next">next</span>
+                </div>
+                <h3>The instruction batch</h3>
+                <p>
+                  <span class="code">lbu</span> and
+                  <span class="code">lhu</span> (u8 and u16 field loads
+                  sign-extend today), <span class="code">sd</span> for 8-byte
+                  stores, <span class="code">andi</span> plus register
+                  <span class="code">and</span> for the one-instruction mask
+                  idiom, and <span class="code">forget &lt;label&gt;</span> for
+                  region havoc.
+                </p>
+              </div>
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M5 12h14M13 6l6 6-6 6" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Phase 0.5</span>
+                  <span class="pill pill-next">next</span>
+                </div>
+                <h3>Vectorise the flip</h3>
+                <p>
+                  <span class="code">vle32.v</span>/<span class="code"
+                    >vse32.v</span
+                  >
+                  and <span class="code">vrgather.vv</span>, the SIMD
+                  pancake-flip primitive, modelled per lane in the verifier.
+                </p>
+              </div>
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Phases 1 to 3</span>
+                  <span class="pill pill-idea">designed</span>
+                </div>
+                <h3>Typed indexing, and beyond</h3>
+                <p>
+                  A constant index resolves to one sized load or store; a
+                  runtime index carries the bound
+                  <span class="code">0 &lt;= i &lt; len(x)</span>, verified at
+                  compile time and never checked at runtime. Then forking on
+                  indeterminate comparisons, relational facts, and arena
+                  <span class="code">alloc</span>.
+                </p>
+              </div>
+            </div>
+          </div>
+          <p class="after">
+            For the full roadmap, see
+            <a
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md#11-design-notes--roadmap"
+              >DEVELOPMENT.md §11</a
+            >.
+          </p>
+        </div>
+      </section>
+
+      <section class="sec" id="open-source">
+        <h2 class="h-sec">Open source</h2>
+        <div class="prose" style="margin-top: 5rem">
+          <p>
+            formal is developed in the open at
+            <a href="https://github.com/JonathanWoollett-Light/formal"
+              >github.com/JonathanWoollett-Light/formal</a
+            >.
+            <a
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
+              >DEVELOPMENT.md</a
+            >
+            is the technical reference: the language and the dialect in full,
+            the compilation and verification pipeline, the
+            <a
+              href="https://github.com/JonathanWoollett-Light/formal/tree/master/tests"
+              >integration test suite</a
+            >, and the design notes. Start there to work on the compiler.
+          </p>
+          <p>
+            It is experimental. Much is unimplemented, and things may break.
+          </p>
+        </div>
+      </section>
+
+      <section class="band band-start" id="get-started">
+        <div class="sec">
+          <h2 class="h-sec">Get started</h2>
+          <div class="cta-row">
+            <a
+              class="btn btn-cta"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#install"
+              >Install</a
+            >
+            <a
+              class="btn btn-outline"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#hello-world"
+              >Hello World</a
+            >
+          </div>
+          <p class="h-sub">Needs only Rust (stable) and Cargo.</p>
+
+          <h3 class="h-side">Three commands</h3>
+          <div class="grid grid-3">
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#install"
+            >
+              <h3>Install</h3>
+              <p>
+                Clone the repository and
+                <span class="code">cargo install --path .</span>. The build
+                script provisions everything else.
+              </p>
+            </a>
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#hello-world"
+            >
+              <h3>Scaffold</h3>
+              <p>
+                <span class="code">formal new hello_world</span>, then
+                <span class="code">cargo run</span> inside it. In a scaffolded
+                project <span class="code">cargo run</span> is the build.
+              </p>
+            </a>
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#hello-world"
+            >
+              <h3>Run</h3>
+              <p>
+                <span class="code">qemu-riscv64 build/main</span>.
+                <span class="code">build/</span> also holds the combined source,
+                the verified dialect and the assembly.
+              </p>
+            </a>
+          </div>
+
+          <h3 class="h-side">Read further</h3>
+          <div class="grid grid-3">
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
+            >
+              <h3>Internals</h3>
+              <p>
+                The language and the dialect in full, the pipeline, the test
+                suite, and the design notes.
+              </p>
+            </a>
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
+            >
+              <h3>Comparisons</h3>
+              <p>
+                How formal relates to Python, C, C++, Rust, Zig, Lean, and
+                Ada/SPARK.
+              </p>
+            </a>
+            <a
+              class="card card-min"
+              href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md#watching-verification-progress"
+            >
+              <h3>Watch a verification</h3>
+              <p>
+                Waves, frontier and per-node core utilisation, streamed to a
+                tail-able log.
+              </p>
+            </a>
+          </div>
+        </div>
       </section>
     </main>
 
-    <footer class="container">
-      <small>
-        <a href="https://github.com/JonathanWoollett-Light/formal"
-          >github.com/JonathanWoollett-Light/formal</a
-        >
-        ·
+    <footer>
+      <div class="foot-in">
+        <a class="brand" href="#top">formal<span class="qed"></span></a>
+        <a href="https://github.com/JonathanWoollett-Light/formal">GitHub</a>
         <a
           href="https://github.com/JonathanWoollett-Light/formal/blob/master/README.md"
-          >usage</a
+          >Usage</a
         >
-        ·
         <a
           href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
-          >internals &amp; design notes</a
+          >Internals &amp; design notes</a
         >
-        ·
         <a
           href="https://github.com/JonathanWoollett-Light/formal/blob/master/comparison.md"
-          >comparisons</a
+          >Comparisons</a
         >
-      </small>
+        <a class="btn btn-cta" href="#get-started">Get started</a>
+      </div>
     </footer>
+
     <script>
-      // Wires the theme toggle (an M3 icon button): it flips `data-theme` on
-      // <html> so the M3 color tokens swap, swaps the Material Symbols glyph,
-      // persists the choice under `colorScheme`, and follows the system scheme
-      // until the user makes an explicit choice.
+      // Theme toggle: flips `data-theme` on <html> so the color tokens swap,
+      // swaps the sun/moon glyph, persists the choice under `colorScheme`, and
+      // follows the system scheme until the user makes an explicit choice.
       (function () {
         var root = document.documentElement;
         var KEY = "colorScheme";
         var prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
         var toggle = document.getElementById("theme-toggle");
-        var icon = toggle
-          ? toggle.querySelector(".material-symbols-outlined")
-          : null;
+        var sun = toggle ? toggle.querySelector(".i-sun") : null;
+        var moon = toggle ? toggle.querySelector(".i-moon") : null;
 
         function stored() {
           try {
@@ -1067,7 +2190,8 @@ while t5 != t2:             # top-tested loop
         function apply(scheme) {
           root.setAttribute("data-theme", scheme);
           var dark = scheme === "dark";
-          if (icon) icon.textContent = dark ? "dark_mode" : "light_mode";
+          if (sun) sun.hidden = dark;
+          if (moon) moon.hidden = !dark;
           if (toggle) {
             toggle.setAttribute(
               "aria-label",
@@ -1097,6 +2221,95 @@ while t5 != t2:             # top-tested loop
         });
       })();
 
+      // Syntax highlighting. `paintCode` is the one entry point the comparison
+      // panels use; until (or unless) Prism arrives from the CDN it is a plain
+      // `textContent` write, so the page is correct with no network and the
+      // source text is never interpreted as markup. Prism escapes every token
+      // it emits, so highlighting the same text afterwards stays safe.
+      window.paintCode = function (el, text, lang) {
+        el.className = lang ? "language-" + lang : "";
+        el.textContent = text;
+        if (window.Prism && Prism.languages[lang]) Prism.highlightElement(el);
+      };
+
+      // The deferred CDN script runs after this one, so the grammars are
+      // registered on DOMContentLoaded and everything already on the page is
+      // repainted then.
+      document.addEventListener("DOMContentLoaded", function () {
+        if (!window.Prism) return;
+
+        // Registers are their own token so they read differently from the
+        // mnemonics around them.
+        var REG =
+          "\\b(?:x(?:[12]?\\d|3[01])|zero|ra|sp|gp|tp|fp|a[0-7]" +
+          "|s(?:[0-9]|1[0-1])|t[0-6]|v(?:[12]?\\d|3[01]))\\b";
+        function registers() {
+          return { pattern: new RegExp(REG), alias: "special-vars" };
+        }
+
+        Prism.languages.formal = {
+          comment: { pattern: /#.*/, greedy: true },
+          string: { pattern: /"(?:\\.|[^"\\\r\n])*"/, greedy: true },
+          keyword:
+            /\b(?:asm|assume|csr|exit|fail|forget|global|if|print|require|section|thread|type|unreachable|while)\b/,
+          number: /\b(?:0x[\da-fA-F_]+|0b[01_]+|\d[\d_]*)\b/,
+          register: registers(),
+          function: /\b[A-Za-z_]\w*(?=\s*\()/,
+          // multi-character operators first, or `!=` splits into two tokens
+          operator: /&(?=[A-Za-z_])|[!=<>]=|&&|\|\||<<|>>|[-+*/%!~^&|=<>]/,
+          punctuation: /[{}[\];(),.:]/,
+        };
+
+        Prism.languages.riscv = {
+          // before `comment`, or the five directives are swallowed as comments
+          annotation: { pattern: /#[$&@!?].*/, greedy: true },
+          comment: { pattern: /#.*/, greedy: true },
+          string: { pattern: /"(?:\\.|[^"\\\r\n])*"/, greedy: true },
+          label: { pattern: /^[ \t]*[.\w$]+(?=:)/m, alias: "function" },
+          // an explicit mnemonic list, not "the first word on the line": Prism
+          // re-anchors ^ on every leftover chunk, so a positional rule re-fires
+          // on the operands
+          instruction: {
+            pattern:
+              /\b(?:add|addi|addiw|addw|amoadd|amoand|amomax|amomaxu|amomin|amominu|amoor|amoswap|amoxor|and|andi|auipc|beq|beqz|bge|bgeu|bgez|bgt|bgtz|ble|blez|blt|bltu|bltz|bne|bnez|call|csrc|csrci|csrr|csrrc|csrrci|csrrs|csrrsi|csrrw|csrrwi|csrs|csrsi|csrw|csrwi|div|divu|divuw|divw|ebreak|ecall|fence|j|jal|jalr|jr|la|lb|lbu|ld|lh|lhu|li|lla|lr|lui|lw|lwu|mul|mulh|mulhsu|mulhu|mulw|mv|neg|negw|nop|not|or|ori|rem|remu|remuw|remw|ret|sb|sc|sd|seqz|sext|sgtz|sh|sll|slli|slliw|sllw|slt|slti|sltiu|sltu|sltz|snez|sra|srai|sraiw|sraw|sret|srl|srli|srliw|srlw|sub|subw|sw|tail|vsetivli|vsetvli|wfi|xor|xori)(?:\.[a-z0-9.]+)?\b|\b[a-z][a-z0-9]*\.[a-z0-9.]+\b/,
+            alias: "keyword",
+          },
+          register: registers(),
+          directive: { pattern: /\.[a-z][\w.]*/i, alias: "keyword" },
+          number: /\b0x[\da-fA-F]+\b|-?\b\d+\b/,
+          operator: /[-+*/%=<>&|^~]/,
+          punctuation: /[(),:]/,
+        };
+
+        Prism.languages.shell = {
+          comment: { pattern: /(^|\s)#.*/, lookbehind: true, greedy: true },
+          string: { pattern: /"(?:\\.|[^"\\])*"|'[^']*'/, greedy: true },
+          // the prompt is part of the lookbehind, so this cannot re-fire on the
+          // rest of the line and colour every argument as a command
+          command: {
+            pattern: /((?:^|\n)[ \t]*[$>][ \t]+)[\w./-]+/,
+            lookbehind: true,
+            alias: "function",
+          },
+          prompt: { pattern: /^[ \t]*[$>](?=[ \t])/m, alias: "punctuation" },
+          option: {
+            pattern: /(^|\s)--?[\w-]+/,
+            lookbehind: true,
+            alias: "keyword",
+          },
+          operator: /[|&><]+/,
+        };
+
+        document
+          .querySelectorAll('pre > code[class*="language-"]')
+          .forEach(function (el) {
+            Prism.highlightElement(el);
+          });
+        if (window.repaintPanels) window.repaintPanels();
+      });
+    </script>
+
+    <script>
       // Comparison: two programs (Hello World, fannkuch-redux) x six
       // implementations. The program tabs swap the whole row (both the formal
       // panel on the left and the language panel on the right); the language
@@ -1104,7 +2317,8 @@ while t5 != t2:             # top-tested loop
       // tests/comparisons/main.rs and injected here from
       // tests/comparisons/metrics.prom (the COMPARISON-DATA block below);
       // the code/cmd strings are the sources and reproduction commands.
-      // `textContent` keeps the embedded source safe to inject.
+      // Panels paint through `paintCode`, which writes `textContent` first,
+      // so the embedded source is never interpreted as markup.
       (function () {
         // COMPARISON-DATA-BEGIN -- generated from tests/comparisons/metrics.prom
         // by the comparisons test (BLESS mode) / `cargo run --example
@@ -1684,6 +2898,14 @@ end Fannkuch;`;
         var langTimeEl = document.getElementById("lang-time");
         var curProg = "hello";
         var curLang = "rust";
+        // Which Prism grammar each language tab paints with.
+        // prettier-ignore
+        var PRISM_LANG = { rust: "rust", c: "c", cpp: "cpp", zig: "zig", ada: "ada" };
+        var paint =
+          window.paintCode ||
+          function (el, text) {
+            el.textContent = text;
+          };
 
         // Tooltip on each "execution time": the host + QEMU setup it was measured
         // under (TIP_HOST/TIP_USER live in the generated COMPARISON-DATA block:
@@ -1714,8 +2936,8 @@ end Fannkuch;`;
 
         function renderFormal() {
           var f = programs[curProg].formal;
-          formalCode.textContent = f.code;
-          formalCmd.textContent = f.cmd;
+          paint(formalCode, f.code, "formal");
+          paint(formalCmd, f.cmd, "shell");
           formalCount.textContent = f.count;
           formalBytes.textContent = f.bytes;
           formalExec.textContent = f.exec;
@@ -1733,8 +2955,8 @@ end Fannkuch;`;
           var d = programs[curProg][curLang];
           if (!d) return;
           nameEl.textContent = d.name;
-          codeEl.textContent = d.code;
-          cmdEl.textContent = d.cmd;
+          paint(codeEl, d.code, PRISM_LANG[curLang]);
+          paint(cmdEl, d.cmd, "shell");
           countEl.textContent = d.count;
           bytesEl.textContent = d.bytes || "";
           bytesWrapEl.style.display = d.bytes ? "" : "none";
@@ -1811,6 +3033,12 @@ end Fannkuch;`;
           renderFormal();
           renderLang();
         }
+        // The highlighter calls this once its grammars are registered, so
+        // the panels painted before the CDN script ran get repainted.
+        window.repaintPanels = function () {
+          renderFormal();
+          renderLang();
+        };
         renderFormal();
         equalizeHeights();
         // Re-measure once the web fonts (Roboto Mono) have loaded, since the

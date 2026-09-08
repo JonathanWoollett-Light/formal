@@ -201,8 +201,8 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 ├── assets/                    # scratch inputs (`one.s`, `two.s`)
 ├── deploy/                    # k8s + Kubeflow MPI Operator target for `hpc` (§7)
 ├── comparison.md              # vs Python/C/C++/Rust/Zig/Lean/Ada-SPARK
-├── index.html                 # the website; `COMPARISON-DATA` is generated (§6.1)
-├── website.md                 # how to format `index.html`
+├── index.html                 # the website (§6.3); `COMPARISON-DATA` is generated (§6.1)
+├── website.md                 # the edit/verify loop for `index.html` (§6.3)
 ├── TODO.md                    # short/medium/long-term TODOs
 ├── README.md                  # user instructions: setup, install, hello world
 ├── CLAUDE.md                  # generic rules + the documentation separation
@@ -1481,6 +1481,75 @@ Linux/KVM box was not available. If such a box materialises, recover
 everything with `git log -- tests/setup_e2e/windows` (the recipe, the
 autounattend answer file, the import ladder, and the per-platform findings
 are all in those commit messages and DEVELOPMENT.md revisions).
+
+### 6.3 The website ([index.html](index.html))
+
+One hand-written static file: no build step, no framework, no npm package.
+Everything except the fonts and the syntax highlighter is inline. It is styled
+after [mojolang.org](https://mojolang.org/), and the parts of that style worth
+knowing before editing it are:
+
+- **Dark-first, one accent.** Every colour is a custom property: the light
+  values sit on bare `:root`, and `[data-theme="dark"]` redefines the same
+  names. The single accent is `#ff552a`, with the gradient
+  `linear-gradient(105deg, #fd2b01 5%, #ed810c 100%)` on the primary buttons.
+  The accent is allowed on the status strip, the buttons, the section icons,
+  the code-panel hairline and the `#$ #& #@ #! #?` directives, and nowhere
+  else.
+- **Hairlines, never elevation.** Cards are a `0.5px` border and a `2px`
+  radius on a transparent fill, with `box-shadow: none`. Depth comes from
+  surfaces one step darker or lighter than their parent (nav `#111`, page
+  `#1a1a1a`, code panel `#292828` in dark), not from shadows.
+- **Two weights, six sizes.** Inter at 400 and 500 only, at 48/32/18/16/14/12
+  px, with negative tracking that grows with size. Roboto Mono at 12px inside
+  the panels. Section headings are centred with nothing above them; everything
+  under a heading is left-aligned.
+- **Backgrounds break out, content does not.** Coloured bands span the
+  viewport; their content stays in the 60rem container, and long prose narrows
+  to 37.5rem.
+
+**The machine-written parts.** The comparison section's DOM is written by
+[tests/comparisons/support.rs](tests/comparisons/support.rs) as raw text, not
+through a DOM parser, so a redesign has to preserve its exact shape (§6.1):
+
+| Thing                                                    | Rule                                                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `// COMPARISON-DATA-BEGIN` / `-END`                      | JavaScript line comments, once each, in order, inline in `index.html`     |
+| The generated block's indentation                        | 8 spaces; its `<script>` stays a direct child of `<body>`, one brace deep |
+| The three `// prettier-ignore` lines                     | kept, or prettier and the generator rewrite each other forever            |
+| `formal-{compile,count,bytes,exec,mem,time}` and `lang-` | one `id="name"` each, on an inline `<b>`, value as the whole text node    |
+| The static defaults                                      | the `hello` program, `formal` left and `rust` right, matching the tabs    |
+| `.compare pre.asm` with `#lang-code` its direct child    | the height equaliser measures `parentElement.scrollHeight`                |
+| The `*-wrap` spans                                       | each encloses its own leading `<br />`, so hiding it hides the break      |
+
+**Syntax highlighting.** Prism arrives as one pinned, integrity-checked
+request to jsDelivr's `combine` endpoint (core plus the `clike`, `c`, `cpp`,
+`rust`, `zig` and `ada` grammars, 19 KB). The `formal`, RISC-V and shell
+grammars are defined inline; the RISC-V one gives the five directives their
+own `annotation` token, which is the reason to highlight the assembly at all.
+Rules that keep it safe and cheap:
+
+- Panels paint through `window.paintCode(el, text, lang)`, which sets
+  `textContent` first and only then highlights. Source text is never
+  interpreted as markup.
+- If the request fails (offline, blocked, or an integrity mismatch after a
+  version bump) `window.Prism` is undefined, `paintCode` degrades to a plain
+  `textContent` write, and the panels keep their background, border and
+  monospace font. Re-derive the hash with
+  `curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A` after
+  changing the pinned version.
+- `equalizeHeights` measures with plain `textContent`. Highlighting inside its
+  six-language measurement loop would tokenise a fannkuch-sized source on
+  every resize tick.
+
+**After editing**, in this order (prettier first: it normalises the line
+endings the generator assumes):
+
+```sh
+npx prettier ./index.html --write
+cargo run --example update_website   # must print "already in sync"
+git diff --exit-code index.html
+```
 
 ## 7. Verification complexity
 
