@@ -2424,15 +2424,44 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
           "-target riscv64-linux-musl -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections";
         var OBJDUMP =
           "riscv64-unknown-elf-strip %s\nriscv64-unknown-elf-objdump -d %s | grep -cE '^[[:space:]]+[0-9a-f]+:'";
-        var FK_FORMAL = `# fannkuch-redux: REAL 2-hart parallel work-sharing, hosted Linux (tests/fannkuch_v2).
-# Runs in user mode: the hosted codegen spawns the second hart as an OS thread
-# (clone + CLONE_SETTLS per-hart tp), so the two harts run on two cores in parallel.
-# The n! permutations split into n contiguous blocks under the rotation enumeration;
-# each hart claims a rank (amoadd) and walks alternating blocks into its OWN per-hart
-# perm/work/cnt thread-local arrays, then combines lock-free (amoadd into per-rank
-# checksum slots, amomax into a shared max word); the last finisher prints with the
-# std print (Linux write) and every thread exits. n is read at runtime (= 12), hidden
-# from the verifier (forget) and narrowed to 3 (assume) so verification is bounded.
+        var FK_FORMAL = `# fannkuch-redux V2: REAL parallel work-sharing across 2 harts, hosted Linux.
+#
+# Runs in **user mode** (qemu-riscv64): the hosted codegen spawns one OS thread
+# per extra hart with \`clone\`, so the two harts run on two cores in parallel (not
+# -smp round-robin) -- the fastest way to run it. Every hart computes a disjoint
+# slice of the permutation space into its OWN per-hart \`thread\` arrays, and the
+# partial results are combined lock-free. This is the optimal shape -- unlike a
+# leader/worker split (one hart works, the rest park), the work is genuinely
+# shared. It relies on per-hart thread-local storage (each hart's perm/work/cnt
+# is a distinct copy), which \`clone\`'s CLONE_SETTLS gives each thread its own \`tp\`
+# for; the original single-copy thread-local codegen could not express this.
+#
+# Work split (no enumeration of another hart's permutations):
+#   The n! permutations form n contiguous BLOCKS under the fannkuch rotation
+#   enumeration, indexed by the top odometer digit cnt[n-1]. Block c is the (n-1)!
+#   permutations whose whole array has been rotated left c times; its first
+#   permutation is [c, c+1, ..., n-1, 0, ..., c-1] (perm[j] = (c+j) % n), and the
+#   block is walked by the ordinary next-permutation rotation BOUNDED to the lower
+#   digits (a3 < n-1). Block c spans global indices [c*(n-1)!, (c+1)*(n-1)!); since
+#   (n-1)! is even for n >= 3, every block starts at global parity 0, so a hart's
+#   per-block checksums (local parity also starting at 0) simply ADD to the global
+#   checksum. Each hart h (rank claimed via amoadd) takes blocks h, h+2, h+4, ...
+#   (2-hart stride; 3 harts is verification-infeasible).
+#
+# Combine (lock-free): each hart writes its partial checksum to a per-rank slot and
+# atomic-maxes (amomax) its partial max-flips into a shared word, then bumps a done
+# counter; the last finisher sums the checksum slots, reads the global max, writes
+# the result with the std \`print\` (Linux \`write\`), then every thread exits. The
+# max uses amomax (not a finisher compare-and-select) because at the small verified
+# n the two partials are equal, so a compare branch would be pruned by
+# remove_branches and the runtime n would lose the larger value.
+#
+# n is read at runtime (= 12) but the verifier is blind to it (forget) and an
+# assume narrows it to 3 so verification is bounded.
+
+# Output uses the std \`print\` (Linux \`write\` syscall), so the program is a hosted
+# program with no UART poking; the std \`print\` is polymorphic over an integer and
+# a string, exactly what the result line needs.
 
 # shared globals (zero-init .bss)
 rank_counter: global u32
