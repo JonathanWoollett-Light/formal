@@ -92,9 +92,10 @@ Edit `main.hl`, `cargo run` again, and you have a new binary.
 
 ## A taste of the language
 
-Every _simple_ statement maps to one RISC-V instruction, the memory layout is
-left implicit (the compiler infers each variable's type and where it lives), and
-a `fail` marker is an assertion the compiler must prove can never be reached:
+Every _simple_ statement maps to one RISC-V instruction or directive, the memory
+layout is left implicit (the compiler infers each variable's type and where it
+lives), and a `fail` marker is an assertion the compiler must prove can never be
+reached:
 
 ```python
 value: global _      # a global variable; let the compiler infer the type
@@ -111,14 +112,14 @@ unreachable
 ```
 
 Control flow is `if` / `while` / `require` blocks (there is no `goto`).
-Arithmetic is register-register (`+`, `-`, `*`, `/`, `%`) or immediate.
-Indexing is by **element**: `t0[k]` is element `k` of whatever `t0` points at,
-so the width comes from the type rather than the call site, and an index past
-the end is rejected at compile time. A runtime index is still written out
-(`t = i * 4`, `p = &arr + t`, then `p[0]`), so its cost stays visible. Memory
-with no type of its own (a device address, a raw region) is read and written
-with the byte slice `t0[a:b]`, which states its own width. The standard
-library provides `exit` and a `print` that is **polymorphic over its argument** -- `print("hi")` writes a
+Arithmetic is register-register (`+`, `-`, `*`, `/`, `%`) or immediate. Indexing
+is by **element**: `t0[k]` is element `k` of whatever `t0` points at, so the
+width comes from the type rather than the call site, and an index past the end
+is rejected at compile time. A runtime index is still written out (`t = i * 4`,
+`p = &arr + t`, then `p[0]`), so its cost stays visible. Memory with no type of
+its own (a device address, a raw region) is read and written with the byte slice
+`t0[a:b]`, which states its own width. The standard library provides `exit` and
+a `print` that is **polymorphic over its argument** -- `print("hi")` writes a
 string, `print(42)` writes an integer, chosen at compile time with no runtime
 cost. Two verifier-only directives reason about runtime input: `forget x` makes
 the verifier blind to a value (proving the code for *every* value), and an

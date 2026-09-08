@@ -1809,8 +1809,8 @@ welcome:
           </div>
         </div>
         <p class="pipeline">
-          translate (one statement, one instruction) → parse → verify (2,026,160
-          machine states across 1- and 2-hart systems) → infer
+          translate (one statement, one instruction or directive) → parse →
+          verify (2,111,465 machine states across 1- and 2-hart systems) → infer
           <span class="code">value: u32</span>,
           <span class="code">welcome: thread [u8 × 13]</span> → remove dead code
           &amp; never-taken branches → compact the layout → emit
@@ -2010,6 +2010,42 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
                     stroke-linejoin="round"
                     aria-hidden="true"
                   >
+                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
+                ></span>
+                <div class="tl-head">
+                  <span class="tl-phase">Phase 1a</span>
+                  <span class="pill pill-ok">landed</span>
+                </div>
+                <h3>Indexing by element, resolved by the proof</h3>
+                <p>
+                  <span class="code">t0[k]</span> is element
+                  <span class="code">k</span> of whatever
+                  <span class="code">t0</span> points at, so the width comes
+                  from the type instead of the call site. The front-end emits
+                  <span class="code">#[</span>/<span class="code">#]</span> and
+                  the verifier resolves each against the pointee's type, bounds
+                  checked at element granularity. Two things follow: an
+                  unannotated variable infers the narrowest type that makes the
+                  program <i>provable</i>, and each load extends the way the
+                  value was modelled, so a <span class="code">u8</span> element
+                  loads with <span class="code">lbu</span> and an
+                  <span class="code">i8</span> with
+                  <span class="code">lb</span>.
+                </p>
+              </div>
+              <div class="tl-item">
+                <span class="dot"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
                     <path d="M5 12h14M13 6l6 6-6 6" /></svg
                 ></span>
                 <div class="tl-head">
@@ -2018,13 +2054,15 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
                 </div>
                 <h3>The instruction batch</h3>
                 <p>
-                  <span class="code">lbu</span> and
-                  <span class="code">lhu</span> (u8 and u16 field loads
-                  sign-extend today), <span class="code">sd</span> for 8-byte
-                  stores, <span class="code">andi</span> plus register
+                  <span class="code">sd</span> for 8-byte stores, which an
+                  element store of a <span class="code">u64</span> needs;
+                  <span class="code">andi</span> plus register
                   <span class="code">and</span> for the one-instruction mask
-                  idiom, and <span class="code">forget &lt;label&gt;</span> for
-                  region havoc.
+                  idiom; and <span class="code">forget &lt;label&gt;</span> for
+                  region havoc. <span class="code">lbu</span> and
+                  <span class="code">lhu</span> are already emitted for element
+                  loads, where the type says how to extend; adding them to the
+                  dialect is what a raw byte slice needs to close the same gap.
                 </p>
               </div>
               <div class="tl-item">
@@ -2071,17 +2109,19 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
                     <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" /></svg
                 ></span>
                 <div class="tl-head">
-                  <span class="tl-phase">Phases 1 to 3</span>
+                  <span class="tl-phase">Phases 1b to 3</span>
                   <span class="pill pill-idea">designed</span>
                 </div>
-                <h3>Typed indexing, and beyond</h3>
+                <h3>The runtime index, and beyond</h3>
                 <p>
-                  A constant index resolves to one sized load or store; a
-                  runtime index carries the bound
-                  <span class="code">0 &lt;= i &lt; len(x)</span>, verified at
-                  compile time and never checked at runtime. Then forking on
-                  indeterminate comparisons, relational facts, and arena
-                  <span class="code">alloc</span>.
+                  <span class="code">arr[i]</span> with
+                  <span class="code">i</span> in a register, carrying the bound
+                  <span class="code">0 &lt;= i &lt; len(x)</span> verified at
+                  compile time and never checked at runtime; today that address
+                  arithmetic is written out, since folding it in means deciding
+                  which register the expansion may clobber. Then run-length
+                  types inside the model, forking on indeterminate comparisons,
+                  relational facts, and arena <span class="code">alloc</span>.
                 </p>
               </div>
             </div>
