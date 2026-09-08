@@ -61,12 +61,6 @@
         --code-fg: #654735;
         --code-line: #ff552a;
         --code-line-width: 0.5px;
-        --ok-fg: #407d1c;
-        --ok-bg: #eafad5;
-        --next-fg: #ed810c;
-        --next-bg: #fff4cc;
-        --idea-fg: #676d71;
-        --idea-bg: #eef0f4;
         /* Syntax tokens, from the same palette. */
         --t-keyword: #637bff;
         --t-operator: #637bff;
@@ -79,11 +73,6 @@
         --t-directive: #ff552a;
 
         --grad-ember: linear-gradient(105deg, #fd2b01 5%, #ed810c 100%);
-        --grad-band: radial-gradient(
-          166.98% 106.79% at 14.34% 19.59%,
-          #ff552a 0%,
-          #ff8500 100%
-        );
         --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
         --mono: "Roboto Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
         --wrap: 60rem;
@@ -105,12 +94,6 @@
         --code-fg: #ffffff;
         --code-line: rgba(255, 156, 69, 0.28);
         --code-line-width: 1px;
-        --ok-fg: #95e72c;
-        --ok-bg: rgba(149, 231, 44, 0.15);
-        --next-fg: #ffc700;
-        --next-bg: rgba(255, 199, 0, 0.15);
-        --idea-fg: #9a9a9a;
-        --idea-bg: rgba(154, 158, 170, 0.15);
         --t-keyword: #b5c0f6;
         --t-operator: #b5c0f6;
         --t-string: #ae92ff;
@@ -196,9 +179,7 @@
       .h-sec + .tabs,
       .h-sub + .tabs,
       .h-sec + .stack,
-      .h-sub + .stack,
-      .h-sec + .timeline-card,
-      .h-sub + .timeline-card {
+      .h-sub + .stack {
         margin-top: 2.5rem;
       }
 
@@ -741,139 +722,6 @@
         white-space: nowrap;
       }
 
-      /* ---- Roadmap: the page's one saturated band, with a near-black card
-         floating on it so the content stays in the same monochrome language ---- */
-      /* The saturated stops are the brand gradient; the flat overlay darkens
-         them to the tone the band is meant to read at, and keeps the white
-         headings on it legible. */
-      .band-roadmap {
-        background:
-          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)),
-          var(--grad-band);
-      }
-      [data-theme="dark"] .band-roadmap {
-        background:
-          linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)),
-          var(--grad-band);
-      }
-      .band-roadmap .h-sec,
-      .band-roadmap .h-sub,
-      .band-roadmap .after {
-        color: #fff;
-      }
-      .band-roadmap .h-sub {
-        opacity: 0.92;
-      }
-      .after {
-        margin-top: 3rem;
-        text-align: center;
-        font-size: 1rem;
-      }
-      .after a {
-        text-decoration: underline;
-        text-underline-offset: 2px;
-      }
-      .timeline-card {
-        max-width: 37.5rem;
-        margin: 2.5rem auto 0;
-        padding: 3.75rem;
-        border-radius: 8px;
-        background: #111;
-        color: #fff;
-      }
-      .tl {
-        position: relative;
-        padding-left: 3.5rem;
-      }
-      .tl::before {
-        content: "";
-        position: absolute;
-        left: 1.25rem;
-        top: 2.5rem;
-        bottom: 1rem;
-        width: 1px;
-        background: repeating-linear-gradient(
-          to bottom,
-          rgba(255, 255, 255, 0.35) 0 2.5px,
-          transparent 2.5px 5.5px
-        );
-      }
-      .tl-item {
-        position: relative;
-        padding-bottom: 2.5rem;
-      }
-      .tl-item:last-child {
-        padding-bottom: 0;
-      }
-      .tl-item::before {
-        content: "";
-        position: absolute;
-        left: -3.5rem;
-        top: -0.25rem;
-        width: 2.5rem;
-        height: 2.5rem;
-        border-radius: 4px;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        background: #111;
-      }
-      .tl-item .dot {
-        position: absolute;
-        left: -3.5rem;
-        top: -0.25rem;
-        width: 2.5rem;
-        height: 2.5rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--accent);
-      }
-      .tl-head {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.25rem;
-      }
-      .tl-phase {
-        font-size: 0.75rem;
-        line-height: 1.25rem;
-        text-transform: uppercase;
-        color: #9a9a9a;
-      }
-      .pill {
-        display: inline-grid;
-        place-items: center;
-        height: 22px;
-        padding: 0 6px;
-        border: 1px solid transparent;
-        border-radius: 2px;
-        font-size: 0.75rem;
-        line-height: 14px;
-        letter-spacing: 0.25px;
-        white-space: nowrap;
-      }
-      .pill-ok {
-        color: var(--ok-fg);
-        background: var(--ok-bg);
-      }
-      .pill-next {
-        color: var(--next-fg);
-        background: var(--next-bg);
-      }
-      .pill-idea {
-        color: var(--idea-fg);
-        background: var(--idea-bg);
-      }
-      .tl-item h3 {
-        font-size: 1rem;
-        line-height: 1.5rem;
-      }
-      .tl-item p {
-        margin-top: 0.25rem;
-        font-size: 0.75rem;
-        line-height: 1.25rem;
-        color: #9a9a9a;
-      }
-
       /* ---- Get started band ---- */
       .band-start {
         background: linear-gradient(90deg, var(--wash), transparent);
@@ -962,9 +810,6 @@
         .grid-3 {
           grid-template-columns: 1fr 1fr;
         }
-        .timeline-card {
-          padding: 2rem 1.5rem 2rem 1.5rem;
-        }
       }
       @media (max-width: 640px) {
         .cols,
@@ -1002,7 +847,6 @@
           <a href="#proven">Why</a>
           <a href="#compare">Compare</a>
           <a href="#language">Language</a>
-          <a href="#roadmap">Roadmap</a>
         </nav>
         <div class="nav-right">
           <a
@@ -1141,22 +985,6 @@
               ><span
                 ><b>Why formal</b>What it proves, and what it costs</span
               ></a
-            >
-            <a class="ql" href="#roadmap"
-              ><svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M9 4.5 3.5 6.5v13L9 17.5l6 2 5.5-2v-13l-5.5 2-6-2Z" />
-                <path d="M9 4.5v13M15 6.5v13" /></svg
-              ><span><b>Roadmap</b>Landed, next, and designed</span></a
             >
             <a
               class="ql"
@@ -1924,240 +1752,6 @@ PASS [25.001s] formal::uart_hello uart_hello</code></pre>
               </tr>
             </tbody>
           </table>
-        </div>
-      </section>
-
-      <section class="band band-roadmap" id="roadmap">
-        <div class="sec">
-          <h2 class="h-sec">Roadmap</h2>
-          <p class="h-sub">
-            formal is early. This is what has landed, what is next, and what is
-            designed but not yet implemented.
-          </p>
-          <div class="timeline-card">
-            <div class="tl">
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Parallelism</span>
-                  <span class="pill pill-ok">landed</span>
-                </div>
-                <h3>Verified parallelism, and a first SIMD subset</h3>
-                <p>
-                  Real multi-hart work-sharing: block decomposition, per-hart
-                  thread-local arrays and a lock-free
-                  <span class="code">amoadd</span>/<span class="code"
-                    >amomax</span
-                  >
-                  reduction. Per-hart thread-local storage in codegen, the
-                  <span class="code">amomax</span> and
-                  <span class="code">fence</span> instructions, and the
-                  register-only RISC-V V subset, verified and booted.
-                </p>
-              </div>
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Soundness, phase 0</span>
-                  <span class="pill pill-ok">landed</span>
-                </div>
-                <h3>The transfer functions the proof leaned on</h3>
-                <p>
-                  The signed-<span class="code">rem</span> interval transfer,
-                  the flank-preserving weak update for ranged list stores, and
-                  <span class="code">ecall</span> havocking
-                  <span class="code">a0</span>. The run-length list type syntax
-                  (<span class="code">[u8*13]</span>,
-                  <span class="code">[u8*2, u16*2]</span>) landed alongside.
-                </p>
-              </div>
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="m5 12.5 4.5 4.5L19 7" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Phase 1a</span>
-                  <span class="pill pill-ok">landed</span>
-                </div>
-                <h3>Indexing by element, resolved by the proof</h3>
-                <p>
-                  <span class="code">t0[k]</span> is element
-                  <span class="code">k</span> of whatever
-                  <span class="code">t0</span> points at, so the width comes
-                  from the type instead of the call site. The front-end emits
-                  <span class="code">#[</span>/<span class="code">#]</span> and
-                  the verifier resolves each against the pointee's type, bounds
-                  checked at element granularity. Two things follow: an
-                  unannotated variable infers the narrowest type that makes the
-                  program <i>provable</i>, and each load extends the way the
-                  value was modelled, so a <span class="code">u8</span> element
-                  loads with <span class="code">lbu</span> and an
-                  <span class="code">i8</span> with
-                  <span class="code">lb</span>.
-                </p>
-              </div>
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M5 12h14M13 6l6 6-6 6" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Phase 0.5</span>
-                  <span class="pill pill-next">next</span>
-                </div>
-                <h3>The instruction batch</h3>
-                <p>
-                  <span class="code">sd</span> for 8-byte stores, which an
-                  element store of a <span class="code">u64</span> needs;
-                  <span class="code">andi</span> plus register
-                  <span class="code">and</span> for the one-instruction mask
-                  idiom; and <span class="code">forget &lt;label&gt;</span> for
-                  region havoc. <span class="code">lbu</span> and
-                  <span class="code">lhu</span> are already emitted for element
-                  loads, where the type says how to extend; adding them to the
-                  dialect is what a raw byte slice needs to close the same gap.
-                </p>
-              </div>
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M5 12h14M13 6l6 6-6 6" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Phase 0.5</span>
-                  <span class="pill pill-next">next</span>
-                </div>
-                <h3>Vectorise the flip</h3>
-                <p>
-                  <span class="code">vle32.v</span>/<span class="code"
-                    >vse32.v</span
-                  >
-                  and <span class="code">vrgather.vv</span>, the SIMD
-                  pancake-flip primitive, modelled per lane in the verifier.
-                </p>
-              </div>
-              <div class="tl-item">
-                <span class="dot"
-                  ><svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.8"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" /></svg
-                ></span>
-                <div class="tl-head">
-                  <span class="tl-phase">Phases 1b to 3</span>
-                  <span class="pill pill-idea">designed</span>
-                </div>
-                <h3>The runtime index, and beyond</h3>
-                <p>
-                  <span class="code">arr[i]</span> with
-                  <span class="code">i</span> in a register, carrying the bound
-                  <span class="code">0 &lt;= i &lt; len(x)</span> verified at
-                  compile time and never checked at runtime; today that address
-                  arithmetic is written out, since folding it in means deciding
-                  which register the expansion may clobber. Then run-length
-                  types inside the model, forking on indeterminate comparisons,
-                  relational facts, and arena <span class="code">alloc</span>.
-                </p>
-              </div>
-            </div>
-          </div>
-          <p class="after">
-            For the full roadmap, see
-            <a
-              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md#11-design-notes--roadmap"
-              >DEVELOPMENT.md §11</a
-            >.
-          </p>
-        </div>
-      </section>
-
-      <section class="sec" id="open-source">
-        <h2 class="h-sec">Open source</h2>
-        <div class="prose" style="margin-top: 5rem">
-          <p>
-            formal is developed in the open at
-            <a href="https://github.com/JonathanWoollett-Light/formal"
-              >github.com/JonathanWoollett-Light/formal</a
-            >.
-            <a
-              href="https://github.com/JonathanWoollett-Light/formal/blob/master/DEVELOPMENT.md"
-              >DEVELOPMENT.md</a
-            >
-            is the technical reference: the language and the dialect in full,
-            the compilation and verification pipeline, the
-            <a
-              href="https://github.com/JonathanWoollett-Light/formal/tree/master/tests"
-              >integration test suite</a
-            >, and the design notes. Start there to work on the compiler.
-          </p>
-          <p>
-            It is experimental. Much is unimplemented, and things may break.
-          </p>
         </div>
       </section>
 
@@ -3500,11 +3094,14 @@ _l36:
           formalMem.textContent = f.mem;
           formalTime.textContent = f.time;
           formalTime.title = timeTip(curProg, true);
+          // A figure a language does not have leaves its line blank
+          // rather than collapsing it, so the rule under these counts and the
+          // runtime block below it stay level with the other column.
           if (f.compile) {
             formalCompile.textContent = f.compile;
-            formalCompileWrap.style.display = "";
+            formalCompileWrap.style.visibility = "";
           } else {
-            formalCompileWrap.style.display = "none";
+            formalCompileWrap.style.visibility = "hidden";
           }
         }
         function renderLang() {
@@ -3514,12 +3111,12 @@ _l36:
           paint(cmdEl, d.cmd, "shell");
           countEl.textContent = d.count;
           bytesEl.textContent = d.bytes || "";
-          bytesWrapEl.style.display = d.bytes ? "" : "none";
+          bytesWrapEl.style.visibility = d.bytes ? "" : "hidden";
           if (d.compile) {
             langCompileEl.textContent = d.compile;
-            langCompileWrapEl.style.display = "";
+            langCompileWrapEl.style.visibility = "";
           } else {
-            langCompileWrapEl.style.display = "none";
+            langCompileWrapEl.style.visibility = "hidden";
           }
           // Runtime figures are present for every language except where the
           // toolchain to build + run it was unavailable (then `exec` is unset
