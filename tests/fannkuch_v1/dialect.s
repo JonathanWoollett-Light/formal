@@ -145,16 +145,22 @@ _l5:
     addi t0, t0, 20
     li t1, 10
     li a2, 0
+    bnez t5, _l28
+    li t2, 48
+    addi t0, t0, -1
+    #] t2, 0(t0)
+    addi a2, a2, 1
 _l28:
-    beqz t5, _l29
+_l29:
+    beqz t5, _l30
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     #] t2, 0(t0)
     addi a2, a2, 1
-    j _l28
-_l29:
+    j _l29
+_l30:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -192,13 +198,13 @@ _l29:
     la a1, __str0
     li a2, 0
     #[ t0, 0(a1)
-_l30:
-    beqz t0, _l31
+_l31:
+    beqz t0, _l32
     addi a2, a2, 1
     addi a1, a1, 1
     #[ t0, 0(a1)
-    j _l30
-_l31:
+    j _l31
+_l32:
     li a0, 1
     la a1, __str0
     li a7, 64
@@ -209,16 +215,22 @@ _l31:
     addi t0, t0, 20
     li t1, 10
     li a2, 0
-_l32:
-    beqz t5, _l33
+    bnez t5, _l33
+    li t2, 48
+    addi t0, t0, -1
+    #] t2, 0(t0)
+    addi a2, a2, 1
+_l33:
+_l34:
+    beqz t5, _l35
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     #] t2, 0(t0)
     addi a2, a2, 1
-    j _l32
-_l33:
+    j _l34
+_l35:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -238,13 +250,13 @@ _l33:
     la a1, __str1
     li a2, 0
     #[ t0, 0(a1)
-_l34:
-    beqz t0, _l35
+_l36:
+    beqz t0, _l37
     addi a2, a2, 1
     addi a1, a1, 1
     #[ t0, 0(a1)
-    j _l34
-_l35:
+    j _l36
+_l37:
     li a0, 1
     la a1, __str1
     li a7, 64
@@ -255,16 +267,22 @@ _l35:
     addi t0, t0, 20
     li t1, 10
     li a2, 0
-_l36:
-    beqz t5, _l37
+    bnez t5, _l38
+    li t2, 48
+    addi t0, t0, -1
+    #] t2, 0(t0)
+    addi a2, a2, 1
+_l38:
+_l39:
+    beqz t5, _l40
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     #] t2, 0(t0)
     addi a2, a2, 1
-    j _l36
-_l37:
+    j _l39
+_l40:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -278,13 +296,13 @@ _l37:
     la a1, __str2
     li a2, 0
     #[ t0, 0(a1)
-_l38:
-    beqz t0, _l39
+_l41:
+    beqz t0, _l42
     addi a2, a2, 1
     addi a1, a1, 1
     #[ t0, 0(a1)
-    j _l38
-_l39:
+    j _l41
+_l42:
     li a0, 1
     la a1, __str2
     li a7, 64

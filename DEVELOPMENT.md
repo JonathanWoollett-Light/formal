@@ -966,6 +966,17 @@ unmatched arm is never translated, so there is no runtime type check and no
 separate `print_int`. See `linux_hello` / `print_poly` ([§6](#6-integration-tests-tests))
 and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly).
 
+The integer arm lays a zero digit down before the peeling loop, because that
+loop never runs for a zero argument and `print(0)` would otherwise write an
+empty slice (`print_zero` pins this). It still **assumes a non-negative value**:
+RISC-V `rem` takes the dividend's sign, so a negative argument formats from a
+negative remainder and prints punctuation. Signed handling is future work, and
+would cost two more clobbered registers. The clobber lists are part of the
+contract, since a call is inlined into the caller's register file: the string
+arm clobbers `a0`, `a1`, `a2`, `a7` and `t0`; the integer arm those plus `t1`,
+`t2` and `t5`. `merge_intervals` ([§6](#6-integration-tests-tests)) is the
+worked example of a loop that prints from registers the call leaves alone.
+
 <a id="52-the-risc-v-dialect-as-actually-parsed"></a>
 
 ### 5.2 The RISC-V dialect (as actually parsed)
@@ -1307,6 +1318,52 @@ Gu32` (config resets to `[]` at each failing `sw`), then the 2-hart racy
   access width and the `u16`/`i16` value-model paths.
 - `int_output` ([tests/int_output/](tests/int_output/)): integer printing by
   digit extraction (`/10`/`%10` into a buffer, ASCII, `write`); prints `42`.
+- `print_zero` ([tests/print_zero/](tests/print_zero/)): `print(0)` writes a
+  single `0`. The integer arm peels digits with a loop a zero argument never
+  enters, so before `print` laid a zero digit down explicitly the call wrote an
+  empty slice. Prints `0 42 0`, and its `dialect.s` pins the inlined expansion,
+  so a change to `print` shows up here first.
+
+The five **LeetCode kernels** below were chosen to cover the algorithm families
+the rest of the catalogue does not reach (hashing, two pointers, graph
+traversal, dynamic programming, interval sweeping); `binary_search`,
+`bubble_sort`, `sieve` and `difference_array` already cover binary search,
+sorting, number theory and prefix arrays. Each runs over a small fixed input
+and ends in a `require` on the known answer, so a `Valid` outcome IS the proof,
+and each prints its answer so the language-comparison panels ([§6.1](#61-the-language-comparison-metrics-pipeline))
+can hold every language to the same output.
+
+- `two_sum` ([tests/two_sum/](tests/two_sum/)): Two Sum over `[2 7 11 15]` with
+  target 9, `require`ing the found flag and both indices of the answer (0, 1).
+  The O(n^2) scan rather than a hash map: `std` has no map, and at this size
+  building one costs more than the scan. Nested computed indexing, and the
+  program that prints index `0` (so it covers `print_zero`'s arm end to end).
+- `trapping_rain` ([tests/trapping_rain/](tests/trapping_rain/)): Trapping Rain
+  Water over `[0 1 0 2 1 0 1 3 2 1 2 1]`, `require`ing the total of 6. Two
+  pointers closing in from both ends with a running maximum on each side. The
+  clearest example of the **complementary-`if` idiom** that stands in for the
+  `else` the language does not have: `if t2 >= a4:` then `if t2 < a4:`, safe in
+  that order because the first arm leaves the two equal.
+- `coin_change` ([tests/coin_change/](tests/coin_change/)): Coin Change over
+  coins `[1 2 5]` and amount 11, `require`ing the optimum of 3. An
+  unbounded-knapsack table relaxed once per coin, with 99 standing in for
+  "unreachable" (a plain number, so a candidate built from it stays in range and
+  never wins a comparison). The inner loop starts at `v = coin`, so `v - coin`
+  never wraps.
+- `num_islands` ([tests/num_islands/](tests/num_islands/)): Number of Islands
+  over a 4x5 grid, `require`ing the count of 3. There is no recursion (a `def`
+  is inlined, so it cannot call itself), so the flood fill carries an explicit
+  stack; a cell is sunk as it is pushed, so no cell is ever queued twice and the
+  array cannot overflow. Its neighbour visit is a **program-local `def`** inlined
+  at four call sites, the one test that shows a `def` outside `std`. The grid is
+  written in full rather than relying on a zero fill, for the same reason `sieve`
+  clears its flags.
+- `merge_intervals` ([tests/merge_intervals/](tests/merge_intervals/)): Merge
+  Intervals over `[[2 6] [1 3] [15 18] [8 10]]`, `require`ing the count and all
+  three merged pairs. Two parallel arrays swapped in lockstep by the same bubble
+  sort as `bubble_sort`, then one sweep whose correctness rests on the sort's
+  ordering invariant. Its print loop is the worked example of surviving `print`'s
+  register clobbers: the count and cursor move to registers `print` leaves alone.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
   `print`** -- `print("Hi ")` + `print(42)` + `print(7)` -> `Hi 427`, the string
   arm and the integer arm of one `print` selected by the compile-time `if typeof`

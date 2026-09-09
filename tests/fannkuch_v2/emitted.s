@@ -253,16 +253,18 @@ _l7:
     addi t0, t0, 1
     li t1, 10
     li a2, 0
+    bnez t5, _l37
 _l37:
-    beqz t5, _l38
+_l38:
+    beqz t5, _l39
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
-    j _l37
-_l38:
+    j _l38
+_l39:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -302,13 +304,13 @@ _l38:
     add a1, a1, tp  # thread-local
     li a2, 0
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-_l39:
-    beqz t0, _l40
+_l40:
+    beqz t0, _l41
     addi a2, a2, 1
     addi a1, a1, 1
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-    j _l39
-_l40:
+    j _l40
+_l41:
     li a0, 1
     la a1, __str0
     add a1, a1, tp  # thread-local
@@ -321,16 +323,18 @@ _l40:
     addi t0, t0, 1
     li t1, 10
     li a2, 0
-_l41:
-    beqz t5, _l42
+    bnez t5, _l42
+_l42:
+_l43:
+    beqz t5, _l44
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
-    j _l41
-_l42:
+    j _l43
+_l44:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -352,13 +356,13 @@ _l42:
     add a1, a1, tp  # thread-local
     li a2, 0
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-_l43:
-    beqz t0, _l44
+_l45:
+    beqz t0, _l46
     addi a2, a2, 1
     addi a1, a1, 1
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-    j _l43
-_l44:
+    j _l45
+_l46:
     li a0, 1
     la a1, __str1
     add a1, a1, tp  # thread-local
@@ -371,16 +375,18 @@ _l44:
     addi t0, t0, 1
     li t1, 10
     li a2, 0
-_l45:
-    beqz t5, _l46
+    bnez t5, _l47
+_l47:
+_l48:
+    beqz t5, _l49
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     sb t2, 0(t0)  # #] t2, 0(t0)
     addi a2, a2, 1
-    j _l45
-_l46:
+    j _l48
+_l49:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -396,13 +402,13 @@ _l46:
     add a1, a1, tp  # thread-local
     li a2, 0
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-_l47:
-    beqz t0, _l48
+_l50:
+    beqz t0, _l51
     addi a2, a2, 1
     addi a1, a1, 1
     lbu t0, 0(a1)  # #[ t0, 0(a1)
-    j _l47
-_l48:
+    j _l50
+_l51:
     li a0, 1
     la a1, __str2
     add a1, a1, tp  # thread-local

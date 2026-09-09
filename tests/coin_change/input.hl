@@ -1,0 +1,85 @@
+# Coin Change over the canonical LeetCode fixture: coins `[1 2 5]` and amount
+# 11, whose answer is 3 coins (5 + 5 + 1). The unbounded-knapsack dynamic
+# program: `dp[v]` is the fewest coins summing to `v`, relaxed upward once per
+# coin, so each coin may be used any number of times. `require` pins
+# `dp[11] == 3`, so a `Valid` outcome IS the proof that 3 is optimal for this
+# input: the table was filled by the recurrence and the verifier followed every
+# relaxation.
+#
+# 99 stands in for "no way to make this amount". It only has to exceed the
+# largest real answer (11, all ones), and a candidate built from it is 100,
+# which never wins a comparison against a real entry. Making the sentinel a
+# plain number rather than a maximum keeps the arithmetic in range.
+#
+# The inner loop starts at `v = coin`, so `v - coin` is never negative and the
+# byte offset into `dp` never wraps.
+#
+# Registers: a0 = the amount, a1 = element size (4), a2 = the coin count,
+#            a3 = the sentinel then the answer, a4 = the coin index,
+#            a5 = the coin's value, a6 = v, t0 = an address,
+#            t1/t2 = byte offsets, t3 = the candidate, t4 = dp[v].
+
+coins: thread [u32]*3
+dp: thread [u32]*12
+
+t0 = &coins
+t1 = 1
+t0[0] = t1
+t1 = 2
+t0[1] = t1
+t1 = 5
+t0[2] = t1
+
+a0 = 11
+a1 = 4
+a2 = 3
+a3 = 99
+
+# --- dp[0] = 0, every other amount starts unreachable ---
+t0 = &dp
+t1 = 0
+t0[0] = t1
+t2 = 1
+while t2 <= a0:
+    t1 = t2 * a1
+    t0 = &dp
+    t0 = t0 + t1
+    t0[0] = a3
+    t2 = t2 + 1
+
+# --- relax the table once per coin, upward so a coin can repeat ---
+a4 = 0
+while a4 < a2:
+    t1 = a4 * a1
+    t0 = &coins
+    t0 = t0 + t1
+    a5 = t0[0]
+    a6 = a5
+    while a6 <= a0:
+        t1 = a6 - a5
+        t2 = t1 * a1
+        t0 = &dp
+        t0 = t0 + t2
+        t3 = t0[0]
+        t3 = t3 + 1
+        t2 = a6 * a1
+        t0 = &dp
+        t0 = t0 + t2
+        t4 = t0[0]
+        if t3 < t4:
+            t0[0] = t3
+        a6 = a6 + 1
+    a4 = a4 + 1
+
+# --- the proof: 11 takes exactly 3 coins from [1 2 5] ---
+t1 = a0 * a1
+t0 = &dp
+t0 = t0 + t1
+a3 = t0[0]
+t0 = 3
+require a3 == t0
+
+# `print` clobbers a0-a2/a7/t0-t2/t5; a3 survives it.
+print(a3)
+print("\n")
+exit(0)

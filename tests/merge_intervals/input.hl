@@ -1,0 +1,160 @@
+# Merge Intervals over the canonical LeetCode fixture, shuffled so the sort is
+# not a no-op: `[[2 6] [1 3] [15 18] [8 10]]` merges to
+# `[[1 6] [8 10] [15 18]]`. Sort by start, then sweep once, extending the open
+# interval while the next one still touches it. The `require`s pin the count
+# and all three merged pairs, so a `Valid` outcome IS the proof that the sweep
+# is correct for this input: the sort's ordering invariant is what makes one
+# pass enough, and the verifier followed both.
+#
+# An interval is two parallel arrays rather than one array of pairs, so a swap
+# during the sort moves both halves in lockstep. The sort is the same bubble
+# sort as `tests/bubble_sort`, over `starts` with `ends` following it.
+#
+# The sweep's two-way choice is a pair of complementary `if`s (the language has
+# no `else`). Extending the open interval only ever raises `a6`, so a start
+# that failed `a7 <= a6` still fails `a7 > a6` after the first arm runs, and
+# the two arms cannot both fire.
+#
+# Registers: a0 = the interval count, a1 = element size (4), a2 = the sort pass
+#            then the merged count, a3 = the inner index then the sweep cursor,
+#            a4 = the last sortable index, a5 = the open interval's start,
+#            a6 = the open interval's end, a7 = the candidate's start,
+#            t0/t2 = addresses, t1 = a byte offset, t3/t4 = the swapped ends,
+#            t5 = the candidate's end.
+
+starts: thread [u32]*4
+ends: thread [u32]*4
+outs: thread [u32]*4
+oute: thread [u32]*4
+
+t0 = &starts
+t1 = 2
+t0[0] = t1
+t1 = 1
+t0[1] = t1
+t1 = 15
+t0[2] = t1
+t1 = 8
+t0[3] = t1
+t0 = &ends
+t1 = 6
+t0[0] = t1
+t1 = 3
+t0[1] = t1
+t1 = 18
+t0[2] = t1
+t1 = 10
+t0[3] = t1
+
+a0 = 4
+a1 = 4
+a4 = a0 - 1
+
+# --- sort by start, carrying each interval's end with it ---
+a2 = 0
+while a2 < a0:
+    a3 = 0
+    while a3 < a4:
+        t1 = a3 * a1
+        t0 = &starts
+        t0 = t0 + t1
+        a5 = t0[0]
+        a6 = t0[1]
+        if a5 > a6:
+            t0[0] = a6
+            t0[1] = a5
+            t2 = &ends
+            t2 = t2 + t1
+            t3 = t2[0]
+            t4 = t2[1]
+            t2[0] = t4
+            t2[1] = t3
+        a3 = a3 + 1
+    a2 = a2 + 1
+
+# --- sweep: extend the open interval, or close it and open the next ---
+t0 = &starts
+a5 = t0[0]
+t0 = &ends
+a6 = t0[0]
+a2 = 0
+a3 = 1
+while a3 < a0:
+    t1 = a3 * a1
+    t0 = &starts
+    t0 = t0 + t1
+    a7 = t0[0]
+    t0 = &ends
+    t0 = t0 + t1
+    t5 = t0[0]
+    if a7 <= a6:
+        if t5 > a6:
+            a6 = t5
+    if a7 > a6:
+        t1 = a2 * a1
+        t0 = &outs
+        t0 = t0 + t1
+        t0[0] = a5
+        t0 = &oute
+        t0 = t0 + t1
+        t0[0] = a6
+        a2 = a2 + 1
+        a5 = a7
+        a6 = t5
+    a3 = a3 + 1
+
+# the interval still open when the sweep ends is the last one out
+t1 = a2 * a1
+t0 = &outs
+t0 = t0 + t1
+t0[0] = a5
+t0 = &oute
+t0 = t0 + t1
+t0[0] = a6
+a2 = a2 + 1
+
+# --- the proof: three intervals, [1 6] [8 10] [15 18] ---
+t0 = 3
+require a2 == t0
+t0 = &outs
+t1 = t0[0]
+t2 = 1
+require t1 == t2
+t1 = t0[1]
+t2 = 8
+require t1 == t2
+t1 = t0[2]
+t2 = 15
+require t1 == t2
+t0 = &oute
+t1 = t0[0]
+t2 = 6
+require t1 == t2
+t1 = t0[1]
+t2 = 10
+require t1 == t2
+t1 = t0[2]
+t2 = 18
+require t1 == t2
+
+# --- print the merged intervals, one pair per line ---
+# `print` clobbers a0-a2/a7/t0-t2/t5, so the count moves to a4 and the cursor
+# and the loaded values live in registers it leaves alone.
+a4 = a2
+a5 = 4
+a3 = 0
+while a3 < a4:
+    t3 = a3 * a5
+    t4 = &outs
+    t4 = t4 + t3
+    a6 = t4[0]
+    print(a6)
+    print(" ")
+    t3 = a3 * a5
+    t4 = &oute
+    t4 = t4 + t3
+    a6 = t4[0]
+    print(a6)
+    print("\n")
+    a3 = a3 + 1
+exit(0)

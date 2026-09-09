@@ -1,0 +1,10 @@
+# `print(0)` writes a single `0`. The integer arm peels digits with `/` and `%`,
+# a loop that a zero argument never enters, so without the explicit zero digit
+# the call would write an empty slice. Printing 0, then 42, then 0 again pins
+# both the new arm and the ordinary path either side of it.
+print(0)
+print(" ")
+print(42)
+print(" ")
+print(0)
+exit(0)

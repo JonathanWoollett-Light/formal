@@ -17,7 +17,7 @@
 # the `uart_hello` test, which pokes the QEMU UART with raw assembly).
 def print(msg):
     # A byte array (string): walk to the NUL the compiler appended, then write it.
-    # Clobbers a0, a1, a2, t0.
+    # Clobbers a0, a1, a2, a7, t0.
     if typeof msg == [u8]:
         a1 = &msg
         a2 = 0
@@ -32,8 +32,10 @@ def print(msg):
         asm:
             ecall
     # An integer: peel decimal digits off the back of a scratch buffer (div/rem),
-    # convert each to ASCII, and write the slice. Assumes a non-negative value;
-    # zero and signed handling are future work. Clobbers a0, a1, a2, t0, t1, t2, t5.
+    # convert each to ASCII, and write the slice. Assumes a non-negative value:
+    # a negative one formats its digits from a negative remainder and prints
+    # punctuation, so signed handling is still future work. Clobbers a0, a1, a2,
+    # a7, t0, t1, t2, t5.
     if typeof msg == i64:
         t5 = msg
         __print_buf: thread [u8]*20
@@ -41,6 +43,14 @@ def print(msg):
         t0 = t0 + 20
         t1 = 10
         a2 = 0
+        # Zero has no digits to peel, so the loop below would leave the slice
+        # empty and `print(0)` would write nothing at all. Lay its one digit
+        # down first; the loop then does not run.
+        if t5 == 0:
+            t2 = 48
+            t0 = t0 - 1
+            t0[0] = t2
+            a2 = a2 + 1
         while t5 != 0:
             t2 = t5 % t1
             t5 = t5 / t1

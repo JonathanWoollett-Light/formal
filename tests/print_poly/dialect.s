@@ -28,16 +28,22 @@ _l1:
     addi t0, t0, 20
     li t1, 10
     li a2, 0
+    bnez t5, _l2
+    li t2, 48
+    addi t0, t0, -1
+    #] t2, 0(t0)
+    addi a2, a2, 1
 _l2:
-    beqz t5, _l3
+_l3:
+    beqz t5, _l4
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     #] t2, 0(t0)
     addi a2, a2, 1
-    j _l2
-_l3:
+    j _l3
+_l4:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
@@ -48,16 +54,22 @@ _l3:
     addi t0, t0, 20
     li t1, 10
     li a2, 0
-_l4:
-    beqz t5, _l5
+    bnez t5, _l5
+    li t2, 48
+    addi t0, t0, -1
+    #] t2, 0(t0)
+    addi a2, a2, 1
+_l5:
+_l6:
+    beqz t5, _l7
     rem t2, t5, t1
     div t5, t5, t1
     addi t2, t2, 48
     addi t0, t0, -1
     #] t2, 0(t0)
     addi a2, a2, 1
-    j _l4
-_l5:
+    j _l6
+_l7:
     addi a1, t0, 0
     li a0, 1
     li a7, 64
