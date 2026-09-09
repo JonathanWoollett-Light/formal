@@ -19,16 +19,8 @@
 #            a5 = the coin's value, a6 = v, t0 = an address,
 #            t1/t2 = byte offsets, t3 = the candidate, t4 = dp[v].
 
-coins: thread [u32]*3
+coins: thread [u32]*3 = [1, 2, 5]
 dp: thread [u32]*12
-
-t0 = &coins
-t1 = 1
-t0[0] = t1
-t1 = 2
-t0[1] = t1
-t1 = 5
-t0[2] = t1
 
 a0 = 11
 a1 = 4

@@ -1,5 +1,4 @@
     #$ coins thread [u32 u32 u32]
-    #$ dp thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     la t0, coins
     li t1, 1
     #] t1, 0(t0)
@@ -7,6 +6,7 @@
     #] t1, 1(t0)
     li t1, 5
     #] t1, 2(t0)
+    #$ dp thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     li a0, 11
     li a1, 4
     li a2, 3

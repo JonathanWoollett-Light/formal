@@ -18,26 +18,10 @@ Short, medium and long terms things to do.
 - Add instructions executed during compilation to the language comparison panels.
 - Add more configuration to limit the verification space.
 - Add more of the programs from [https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html] as tests and benchmarks.
-- Add leetcode-style algorithm tests, picked to fill the families the suite
-  lacks rather than repeat it (`binary_search`, `bubble_sort`, `sieve`, `gcd`
-  and `difference_array` already cover binary search, sorting, number theory
-  and prefix arrays). Each runs over a small fixed input and ends in a
-  `require` on the known answer, so a `Valid` outcome is the proof:
-  - Two Sum (hashing). `std` has no hash map, so this is an O(n^2) scan or a
-    direct-address table over a bounded value range, with every index into
-    that table proven in bounds.
-  - Trapping Rain Water (two pointers). Three optimal forms in one problem:
-    two pointers, a monotonic stack, and prefix/suffix maxima.
-  - Number of Islands (graph traversal). A grid flood fill, so the graph is
-    implicit and no allocator is needed; with no recursion the traversal uses
-    an explicit worklist.
-  - Coin Change (dynamic programming). A 1D table and nested loops.
-  - Merge Intervals (sorting and greedy). Reuses `bubble_sort`, then one
-    sweep whose correctness rests on an ordering invariant worth proving.
-  Linked lists (Reverse Linked List, Merge Two Sorted Lists) and heaps (Top K
-  Frequent Elements) are the next uncovered families, but they need a memory
-  region and an allocator first, so they belong in a second wave.
-
+- The next uncovered algorithm families are linked lists (Reverse Linked List,
+  Merge Two Sorted Lists) and heaps (Top K Frequent Elements). Both need a
+  memory region and an allocator first, so they are a second wave after the
+  five kernels that landed.
 - Standard-library candidates, from an audit of every `tests/*/input.hl` for
   code that is repeated inline and should be shared. `print(0)` was the first
   finding and is fixed; the release fence missing from `parallel_probe` and
@@ -63,11 +47,20 @@ Short, medium and long terms things to do.
     call site is not a shared utility. `merge_intervals` looked like a second
     `cswap` site and is not, because it swaps a second array in lockstep on
     the first array's comparison.
-  The three biggest repetitions in the suite are not `def`-shaped at all and
-  are already designed in DEVELOPMENT.md 11: the runtime index `x[i]` (23
-  occurrences across 14 tests), an array-literal initialiser (69 occurrences
-  across 13 tests), and an immediate on the right of a condition (46
-  occurrences across 33 tests).
+  Of the three biggest repetitions in the suite, which are not `def`-shaped at
+  all, the array-literal initialiser has landed (`name: thread [u32]*4 =
+  [...]`). The other two are still open and designed in DEVELOPMENT.md 11: the
+  runtime index `x[i]` (23 occurrences across 14 tests) and an immediate on the
+  right of a condition (46 occurrences across 33 tests).
+- Roll the array-literal initialiser through the 13 tests that still lay their
+  fixtures down a store at a time. The five kernels use it; `bubble_sort`,
+  `sieve`, `binary_search`, `signed_bytes`, `dot_product` and the rest do not.
+- A list initialiser could emit into `.data` instead of a `la` plus a store per
+  element, which would cost **zero** instructions rather than 2n. It needs the
+  dialect to carry initial contents, the verifier to seed the variable's memory
+  from them, and codegen to emit `.data` for that variable rather than `.bss`.
+  Worth doing: `num_islands` spends 40 of its instructions writing a constant
+  grid.
 - `tests/int_output/input.hl` is a verbatim copy of `std/std.hl`'s integer arm
   that `print_poly` already covers end to end. Reduce it to `print(42)` so its
   `dialect.s` pins the inlined expansion instead.

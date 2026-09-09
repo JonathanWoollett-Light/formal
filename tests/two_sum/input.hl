@@ -1,71 +1,113 @@
 # Two Sum, the canonical LeetCode fixture: `nums = [2 7 11 15]` with target 9,
-# whose answer is the index pair (0, 1). The search is the O(n^2) scan rather
-# than the usual hash map: `std` has no map, and at this size building one would
-# cost more than the scan. What the verifier proves is not that the scan runs
-# but that it *finds* the pair: `require` pins the flag and both indices, so a
-# `Valid` outcome IS the proof that (0, 1) is the answer for this input. Every
-# load is `&nums + i*4`, bounds-checked at element granularity against the
-# array's inferred `u32` type. The program then prints `0 1` and exits.
+# whose answer is the index pair (0, 1). This is the optimal O(n) solution, the
+# hash map: walk the array once, and for each value look up its complement
+# among the values already seen. `require` pins the flag and both indices, so a
+# `Valid` outcome IS the proof that the table found (0, 1) for this input.
 #
-# Printing index 0 is the reason `print` lays a zero digit down explicitly: the
-# digit-peeling loop never runs for a zero argument (see `std/std.hl`).
+# `std` has no map, so the table is the honest open-addressing one: three
+# parallel arrays (occupancy, key, the index the key was seen at), linear
+# probing, and a capacity of 8 for 4 keys, so the load factor stays at a half
+# and the probe loop always finds an empty slot. Capacity is a power of two but
+# the slot still comes from `%` rather than a mask, because the dialect has no
+# `and` yet (DEVELOPMENT.md 11, Phase 0.5).
 #
-# Registers: a0 = n, a1 = target, a2 = element size (4), a3 = the found i,
-#            a4 = the found j, a5 = the found flag, a6 = nums[i], a7 = nums[j],
-#            t0 = i, t1/t4 = byte offsets, t2/t5 = addresses and the pair sum,
-#            t3 = j.
+# The complement is `target - nums[i]`, which goes negative here (9 - 11, and
+# 9 - 15). RISC-V `rem` takes the dividend's sign, so a bare `% 8` on it would
+# give a negative slot and index the table backwards. Every slot is therefore
+# the canonical non-negative remainder `((k % cap) + cap) % cap`, the idiom
+# `runtime_input` documents.
+#
+# Both probe loops end by clearing `t5` rather than breaking, because the
+# language has no `break`; the loop's own flag is then what the "advance to the
+# next slot" step tests, so an iteration that finished cannot also advance.
+#
+# Registers: a0 = n, a1 = the target, a2 = the capacity, a3 = element size (4),
+#            a4 = the answer's first index, a5 = its second, a6 = nums[i],
+#            a7 = the complement, t0 = an address, t1 = a byte offset,
+#            t2 = a loaded slot, t3 = the slot being probed, t4 = i,
+#            t5 = the probe flag.
 
-nums: thread [u32]*4
-
-t0 = &nums
-t1 = 2
-t0[0] = t1
-t1 = 7
-t0[1] = t1
-t1 = 11
-t0[2] = t1
-t1 = 15
-t0[3] = t1
+nums: thread [u32]*4 = [2, 7, 11, 15]
+used: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
+keys: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
+vals: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
 
 a0 = 4
 a1 = 9
-a2 = 4
-a3 = 0
+a2 = 8
+a3 = 4
 a4 = 0
 a5 = 0
 
-# --- scan every pair i < j, recording the one that sums to the target ---
-t0 = 0
-while t0 < a0:
-    t1 = t0 * a2
-    t2 = &nums
-    t2 = t2 + t1
-    a6 = t2[0]
-    t3 = t0 + 1
-    while t3 < a0:
-        t4 = t3 * a2
-        t5 = &nums
-        t5 = t5 + t4
-        a7 = t5[0]
-        t5 = a6 + a7
-        if t5 == a1:
-            a3 = t0
-            a4 = t3
-            a5 = 1
-        t3 = t3 + 1
-    t0 = t0 + 1
+t4 = 0
+while t4 < a0:
+    t1 = t4 * a3
+    t0 = &nums
+    t0 = t0 + t1
+    a6 = t0[0]
+    a7 = a1 - a6
 
-# --- the proof: a pair was found, and it is (0, 1) ---
+    # --- look the complement up, probing from its canonical slot ---
+    t3 = a7 % a2
+    t3 = t3 + a2
+    t3 = t3 % a2
+    t5 = 1
+    while t5 != 0:
+        t1 = t3 * a3
+        t0 = &used
+        t0 = t0 + t1
+        t2 = t0[0]
+        if t2 == 0:
+            t5 = 0
+        if t2 != 0:
+            t0 = &keys
+            t0 = t0 + t1
+            t2 = t0[0]
+            if t2 == a7:
+                t0 = &vals
+                t0 = t0 + t1
+                a4 = t0[0]
+                a5 = t4
+                t5 = 0
+        if t5 != 0:
+            t3 = t3 + 1
+            t3 = t3 % a2
+
+    # --- insert this value at its own canonical slot ---
+    t3 = a6 % a2
+    t3 = t3 + a2
+    t3 = t3 % a2
+    t5 = 1
+    while t5 != 0:
+        t1 = t3 * a3
+        t0 = &used
+        t0 = t0 + t1
+        t2 = t0[0]
+        if t2 == 0:
+            t2 = t2 + 1
+            t0[0] = t2
+            t0 = &keys
+            t0 = t0 + t1
+            t0[0] = a6
+            t0 = &vals
+            t0 = t0 + t1
+            t0[0] = t4
+            t5 = 0
+        if t5 != 0:
+            t3 = t3 + 1
+            t3 = t3 % a2
+
+    t4 = t4 + 1
+
+# --- the proof: the pair the table found is (0, 1) ---
+t0 = 0
+require a4 == t0
 t0 = 1
 require a5 == t0
-t0 = 0
-require a3 == t0
-t0 = 1
-require a4 == t0
 
-# `print` clobbers a0-a2/a7/t0-t2/t5; a3 and a4 survive it.
-print(a3)
-print(" ")
+# `print` clobbers a0-a2/a7/t0-t2/t5; a4 and a5 survive it.
 print(a4)
+print(" ")
+print(a5)
 print("\n")
 exit(0)

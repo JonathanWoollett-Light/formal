@@ -186,6 +186,12 @@ pub fn translate(source: &str) -> Result<String, TranslateError> {
         });
     }
 
+    // A list initialiser may span lines, so a fixture can be laid out in the
+    // shape of its data (`num_islands` writes its grid a row per line).
+    // Nothing else in the language spans lines, so joining a statement whose
+    // brackets are still open only ever affects an initialiser.
+    let lines = join_open_brackets(lines);
+
     let mut translator = Translator {
         out: Vec::new(),
         labels: 0,
@@ -421,6 +427,67 @@ impl Translator {
         }
     }
 
+    /// `name: <locality> <type> = [v, ...]`: defines a list and fills it in,
+    /// so a fixture reads as the data it is rather than as three lines per
+    /// element. The expansion is the `#$` define, one `la`, and a `li` plus an
+    /// element store per value: byte for byte what the same program written out
+    /// by hand lowers to, and visible in the emitted output, which is the
+    /// condition the cost contract puts on a multi-instruction lowering
+    /// (DEVELOPMENT.md §11). The string-literal argument expansion set the
+    /// precedent.
+    ///
+    /// It **clobbers `t0` and `t1`** (the address and the value being stored),
+    /// like that string expansion. A definition normally introduces its storage
+    /// before anything is live, so this is stated rather than worked around: an
+    /// initialiser that has to preserve `t0` is written out by hand.
+    fn define_initialised(
+        &mut self,
+        name: &str,
+        annotation: &str,
+        values: &str,
+        line: usize,
+    ) -> Result<(), TranslateError> {
+        let err = |message: String| TranslateError { line, message };
+        let define = translate_define(name, annotation).map_err(err)?;
+        let elements = define
+            .rsplit_once(" [")
+            .and_then(|(_, rest)| rest.strip_suffix(']'))
+            .map(|inner| inner.split_whitespace().count())
+            .ok_or_else(|| {
+                err(format!(
+                    "`{name}` is initialised with a list, so it needs a list type \
+                     (e.g. `{name}: thread [u32]*4 = ...`)"
+                ))
+            })?;
+        let inner = values
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+            .ok_or_else(|| err(format!("expected a list literal `[...]`, got `{values}`")))?;
+        let items: Vec<&str> = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .collect();
+        if items.len() != elements {
+            return Err(err(format!(
+                "`{name}` has {elements} elements but its initialiser has {}",
+                items.len()
+            )));
+        }
+        for item in &items {
+            if parse_int(item).is_none() {
+                return Err(err(format!("invalid value `{item}` in the initialiser")));
+            }
+        }
+        self.out.push(define);
+        self.out.push(format!("    la t0, {name}"));
+        for (index, item) in items.iter().enumerate() {
+            self.out.push(format!("    li t1, {item}"));
+            self.out.push(format!("    #] t1, {index}(t0)"));
+        }
+        Ok(())
+    }
+
     /// Translates the statement at `position` (consuming its indented block
     /// if it has one).
     fn statement(&mut self, lines: &[Line], position: &mut usize) -> Result<(), TranslateError> {
@@ -610,6 +677,20 @@ impl Translator {
             ));
         }
 
+        // `name: <locality> <type> = [v, ...]`: a definition with an
+        // initialiser. Checked before the assignment branch, whose `=` split
+        // would otherwise take it. The two are told apart by the text before
+        // the colon: a definition's is a bare label, while a slice store's
+        // (`t0[0:4] = t1`) is `t0[0`, which is not one.
+        if let Some((declaration, values)) = stripped.split_once('=') {
+            if let Some((name, annotation)) = declaration.split_once(':') {
+                let (name, annotation) = (name.trim(), annotation.trim());
+                if is_label(name) && !annotation.is_empty() {
+                    return self.define_initialised(name, annotation, values.trim(), line.number);
+                }
+            }
+        }
+
         // Assignments first: a slice store like `t0[0:4] = t1` contains a
         // colon, so it must not be mistaken for a definition.
         if let Some((lhs, rhs)) = stripped.split_once('=') {
@@ -638,6 +719,36 @@ impl Translator {
 
         Err(err(format!("unrecognized statement `{stripped}`")))
     }
+}
+
+/// Joins each statement that leaves a `[` open onto the line after it, so a
+/// list initialiser can be written in the shape of its data. Only an
+/// initialiser can leave one open (every other bracketed form is an index, and
+/// comments are already stripped), and the joined statement keeps the first
+/// line's number and indentation, so errors still point at where it starts.
+fn join_open_brackets(lines: Vec<Line>) -> Vec<Line> {
+    let mut out: Vec<Line> = Vec::new();
+    for line in lines {
+        match out
+            .last_mut()
+            .filter(|open| open.text.contains('=') && bracket_depth(&open.text) > 0)
+        {
+            Some(open) => {
+                open.text.push(' ');
+                open.text.push_str(&line.text);
+            }
+            None => out.push(line),
+        }
+    }
+    out
+}
+
+fn bracket_depth(text: &str) -> i32 {
+    text.chars().fold(0, |depth, c| match c {
+        '[' => depth + 1,
+        ']' => depth - 1,
+        _ => depth,
+    })
 }
 
 /// A register comparison: `Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`.

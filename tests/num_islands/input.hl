@@ -27,32 +27,12 @@
 #            t2 = a loaded cell, t4 = the popped cell's column,
 #            t5 = a neighbour cell.
 
-grid: thread [u32]*20
+# The grid, a row per line: 1 is land, 0 is water.
+grid: thread [u32]*20 = [1, 1, 0, 0, 0,
+                         1, 1, 0, 0, 0,
+                         0, 0, 1, 0, 0,
+                         0, 0, 0, 1, 1]
 stack: thread [u32]*20
-
-t0 = &grid
-t1 = 1
-t0[0] = t1
-t0[1] = t1
-t0[5] = t1
-t0[6] = t1
-t0[12] = t1
-t0[18] = t1
-t0[19] = t1
-t1 = 0
-t0[2] = t1
-t0[3] = t1
-t0[4] = t1
-t0[7] = t1
-t0[8] = t1
-t0[9] = t1
-t0[10] = t1
-t0[11] = t1
-t0[13] = t1
-t0[14] = t1
-t0[15] = t1
-t0[16] = t1
-t0[17] = t1
 
 a0 = 20
 a1 = 4

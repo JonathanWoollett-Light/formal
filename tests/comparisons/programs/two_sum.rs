@@ -1,15 +1,26 @@
 fn main() {
-    let nums: [u32; 4] = [2, 7, 11, 15];
-    let target: u32 = 9;
-    let mut a = 0usize;
-    let mut b = 0usize;
+    let nums = [2i32, 7, 11, 15];
+    let target = 9i32;
+    let cap = 8i32;
+    let mut used = [0i32; 8];
+    let mut keys = [0i32; 8];
+    let mut vals = [0usize; 8];
     for i in 0..nums.len() {
-        for j in i + 1..nums.len() {
-            if nums[i] + nums[j] == target {
-                a = i;
-                b = j;
+        let c = target - nums[i];
+        let mut h = (((c % cap) + cap) % cap) as usize;
+        while used[h] != 0 {
+            if keys[h] == c {
+                println!("{} {}", vals[h], i);
+                return;
             }
+            h = (h + 1) % cap as usize;
         }
+        h = (((nums[i] % cap) + cap) % cap) as usize;
+        while used[h] != 0 {
+            h = (h + 1) % cap as usize;
+        }
+        used[h] = 1;
+        keys[h] = nums[i];
+        vals[h] = i;
     }
-    println!("{} {}", a, b);
 }

@@ -1,28 +1,46 @@
     #$ grid thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
-    #$ stack thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     la t0, grid
     li t1, 1
     #] t1, 0(t0)
+    li t1, 1
     #] t1, 1(t0)
-    #] t1, 5(t0)
-    #] t1, 6(t0)
-    #] t1, 12(t0)
-    #] t1, 18(t0)
-    #] t1, 19(t0)
     li t1, 0
     #] t1, 2(t0)
+    li t1, 0
     #] t1, 3(t0)
+    li t1, 0
     #] t1, 4(t0)
+    li t1, 1
+    #] t1, 5(t0)
+    li t1, 1
+    #] t1, 6(t0)
+    li t1, 0
     #] t1, 7(t0)
+    li t1, 0
     #] t1, 8(t0)
+    li t1, 0
     #] t1, 9(t0)
+    li t1, 0
     #] t1, 10(t0)
+    li t1, 0
     #] t1, 11(t0)
+    li t1, 1
+    #] t1, 12(t0)
+    li t1, 0
     #] t1, 13(t0)
+    li t1, 0
     #] t1, 14(t0)
+    li t1, 0
     #] t1, 15(t0)
+    li t1, 0
     #] t1, 16(t0)
+    li t1, 0
     #] t1, 17(t0)
+    li t1, 1
+    #] t1, 18(t0)
+    li t1, 1
+    #] t1, 19(t0)
+    #$ stack thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     li a0, 20
     li a1, 4
     li a2, 5

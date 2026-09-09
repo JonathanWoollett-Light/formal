@@ -1,10 +1,18 @@
 #include <iostream>
-#include <vector>
 int main(){
-    std::vector<int> nums = {2, 7, 11, 15};
-    int n = 4, target = 9, a = 0, b = 0;
-    for(int i=0;i<n;i++)
-        for(int j=i+1;j<n;j++)
-            if(nums[i]+nums[j]==target){ a=i; b=j; }
-    std::cout << a << " " << b << "\n";
+    int nums[4] = {2,7,11,15};
+    int target = 9, cap = 8;
+    int used[8] = {0}, keys[8] = {0}, vals[8] = {0};
+    for(int i=0;i<4;i++){
+        int c = target - nums[i];
+        int h = ((c % cap) + cap) % cap;
+        while(used[h]){
+            if(keys[h] == c){ std::cout << vals[h] << " " << i << "\n"; return 0; }
+            h = (h + 1) % cap;
+        }
+        h = ((nums[i] % cap) + cap) % cap;
+        while(used[h]) h = (h + 1) % cap;
+        used[h] = 1; keys[h] = nums[i]; vals[h] = i;
+    }
+    return 0;
 }

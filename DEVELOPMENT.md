@@ -801,6 +801,29 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 | `fail` / `unreachable`                           | `#!` / `#?`                                                                      |
 | `asm:` + indented lines                          | each block line emitted verbatim (inline assembly; an empty block is an error)   |
 
+A define may carry a **list initialiser**, `name: <locality> [t*n] = [v, ...]`,
+which is the one statement that lowers to more than one line:
+
+```text
+nums: thread [u32]*4 = [2, 7, 11, 15]
+      ->  #$ nums thread [u32 u32 u32 u32]
+          la t0, nums
+          li t1, 2
+          #] t1, 0(t0)
+          ... one `li` + element store per value
+```
+
+Byte for byte what writing the stores out by hand lowers to, and visible in the
+emitted output, which is the condition [§11](#11-design-notes--roadmap)'s cost
+contract puts on a multi-instruction lowering (the string-literal `def`
+argument set the precedent). It **clobbers `t0` and `t1`**, so an initialiser
+that has to preserve them is written out by hand. The value count must equal
+the type's element count, the values are integer literals (radix preserved),
+and the type must be a list: scalars have no initialiser form. The statement
+may **span lines** while its bracket is open, so a fixture can be laid out in
+the shape of its data (`num_islands` writes its grid a row per line); nothing
+else in the language spans lines.
+
 In the define row, a `name:` with an annotation is a define, and a list type is
 comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g.
 `[u8*13]` or `[u8*2, u16*2, u8*3]` (a plain element is a run of 1); the legacy
@@ -1334,10 +1357,17 @@ and each prints its answer so the language-comparison panels ([§6.1](#61-the-la
 can hold every language to the same output.
 
 - `two_sum` ([tests/two_sum/](tests/two_sum/)): Two Sum over `[2 7 11 15]` with
-  target 9, `require`ing the found flag and both indices of the answer (0, 1).
-  The O(n^2) scan rather than a hash map: `std` has no map, and at this size
-  building one costs more than the scan. Nested computed indexing, and the
-  program that prints index `0` (so it covers `print_zero`'s arm end to end).
+  target 9, `require`ing both indices of the answer (0, 1). The optimal O(n)
+  solution, the hash map: `std` has no map, so the table is the honest
+  open-addressing one, three parallel arrays with linear probing and a capacity
+  of 8 for 4 keys. Two things make it the test that earns its keep: the
+  complement `target - nums[i]` goes negative here, so every slot is the
+  canonical non-negative remainder `((k % cap) + cap) % cap` (`rem` takes the
+  dividend's sign, so a bare `%` would index the table backwards); and it
+  indexes a table by a value **loaded out of memory**, which is what the
+  pointer arithmetic in [§4.4](#44-symbolic-value--memory-model-srcverifier_typesrs)
+  had to be generalised for. It also prints index `0`, so it covers
+  `print_zero`'s arm end to end.
 - `trapping_rain` ([tests/trapping_rain/](tests/trapping_rain/)): Trapping Rain
   Water over `[0 1 0 2 1 0 1 3 2 1 2 1]`, `require`ing the total of 6. Two
   pointers closing in from both ends with a running maximum on each side. The
@@ -1541,9 +1571,12 @@ The website's "same program, side by side" panels (index.html) are backed by
 - [tests/comparisons/programs/](tests/comparisons/programs/): the Rust/C/C++/
   Zig/Ada source for each program, verbatim the code the page displays
   (the page reads these files, see [§6.3](#63-the-website-indexhtml)). Every
-  language runs the **same algorithm**: the section is titled "the same
-  program, every language", so `two_sum` is the O(n^2) scan in all six, not a
-  hash map in the five that have one.
+  language runs the **same algorithm and the same data structure**: the
+  section is titled "the same program, every language", so `two_sum` is the
+  same hand-rolled open-addressing table in all six, not `HashMap` in Rust and
+  `unordered_map` in C++. Reaching for each language's standard map would
+  measure library choice, which is a different (and worth having, separately)
+  comparison from the one this section makes.
 - [tests/comparisons/main.rs](tests/comparisons/main.rs): the `comparisons`
   test (**`#[ignore]`d**; run it with
   `cargo nextest run --run-ignored all comparisons`). For each program x
@@ -2174,6 +2207,16 @@ Self>, CompilerError>` (continue / terminal-outcome in `Ok`, error in `Err`).
     reaches one of those (e.g. unions, multi-element list slices, `.ascii`) will
     panic before `verifier.rs` can turn it into a `CompilerError`. Converting
     these is the remaining work to make the whole pipeline panic-free.
+  - **Pointer plus an integer of any width.** `MemoryValue`'s `Add` carried one
+    arm per pointer-and-width pair (`U8`, `I8`, `I64`) and sent every other
+    width to the catch-all `todo!()`, so `&table + slot` where `slot` came out
+    of memory **panicked the compiler**. It is now a single arm over any value
+    `as_i64_range` accepts, in either operand order, going through one
+    `offset_pointer` helper: a register is 64-bit, so the offset moves by the
+    value's `i64` range whatever width it was loaded at. This is what indexing
+    a table by a value read out of memory needs, which is to say what a hash
+    table needs (`two_sum`). The replaced `I8` arm *subtracted* where it should
+    have added; nothing exercised it, and the suite is unchanged by the fix.
   - **Mixed-width integer arms.** The value model originally handled only the
     type pairs the early tests exercised (mostly `U8`/`U32`/`I8`). `fannkuch_redux`
     needs registers (`I64` from `li`/`addi`) to interoperate with 4-byte memory

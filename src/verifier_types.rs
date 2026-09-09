@@ -829,19 +829,19 @@ impl Add for MemoryValue {
         match (self, rhs) {
             (U8(a), U8(b)) => U8(a.add(&b).unwrap()),
             (Ptr(MemoryPtr(None)), _) => Ptr(MemoryPtr(None)),
-            (Ptr(MemoryPtr(Some(mut a))), U8(b)) => {
-                let c = MemoryValueU64::from(b);
-                a.offset = a.offset.add(&c).unwrap();
-                Ptr(MemoryPtr(Some(a)))
+            // A pointer plus any integer, in either operand order. A register is
+            // 64-bit, so the offset moves by the value's `i64` range whatever
+            // width it was loaded at: this is what indexing a table by a value
+            // read out of memory does (`&nums + slot*4`), which before this arm
+            // reached the `todo!()` below for every width but `u8`, `i8` and
+            // `i64`.
+            (Ptr(MemoryPtr(Some(a))), b) if as_i64_range(&b).is_some() => {
+                offset_pointer(a, &as_i64_range(&b).unwrap())
             }
-            (Ptr(MemoryPtr(Some(mut a))), I8(b)) => {
-                let c = MemoryValueI64::from(b);
-                a.offset = MemoryValueU64::try_from(
-                    MemoryValueI64::try_from(a.offset).unwrap().sub(&c).unwrap(),
-                )
-                .unwrap();
-                Ptr(MemoryPtr(Some(a)))
+            (b, Ptr(MemoryPtr(Some(a)))) if as_i64_range(&b).is_some() => {
+                offset_pointer(a, &as_i64_range(&b).unwrap())
             }
+            (_, Ptr(MemoryPtr(None))) => Ptr(MemoryPtr(None)),
             (U32(a), U8(b)) => U32(a.add(&MemoryValueU32::from(b)).unwrap()),
             // A register is 64-bit: arithmetic on a loaded `U32` widens to `I64`
             // (matching RV64, where `lw` sign-extends and `addi` is 64-bit), so a
@@ -854,12 +854,6 @@ impl Add for MemoryValue {
             // An accumulator (already widened to `I64`) plus another loaded `U32`,
             // as when summing per-hart partial results.
             (I64(a), U32(b)) => I64(a.add(&MemoryValueI64::from(b)).unwrap()),
-            (Ptr(MemoryPtr(Some(mut a))), I64(b)) => {
-                // dbg!(&b);
-                let c = MemoryValueI64::try_from(a.offset).unwrap();
-                a.offset = MemoryValueU64::try_from(c.add(&b).unwrap()).unwrap();
-                MemoryValue::Ptr(MemoryPtr(Some(a)))
-            }
             (I64(a), I64(b)) => I64(a.add(&b).unwrap()),
             // Two loaded signed bytes combine in a 64-bit register (sign-extended
             // by `lb`), so widen to `I64`, as the `U32` arms above do; and an
@@ -2279,6 +2273,16 @@ fn ranged_weak_update(
 /// A scalar value as an `i64` range, so values of different widths can be
 /// compared. `None` for a non-scalar, or for a `u64` range reaching past
 /// `i64::MAX` (unsupported rather than wrapped).
+/// Moves a pointer by a signed byte offset, the one place pointer arithmetic
+/// is done. Panics if the result is negative: a pointer before the start of
+/// what it points at is not a value this model can carry, and the access check
+/// downstream would have rejected it anyway.
+fn offset_pointer(mut ptr: NonNullMemoryPtr, by: &MemoryValueI64) -> MemoryValue {
+    let signed = MemoryValueI64::try_from(ptr.offset).unwrap();
+    ptr.offset = MemoryValueU64::try_from(signed.add(by).unwrap()).unwrap();
+    MemoryValue::Ptr(MemoryPtr(Some(ptr)))
+}
+
 fn as_i64_range(value: &MemoryValue) -> Option<MemoryValueI64> {
     use MemoryValue::*;
     let (start, stop) = match value {

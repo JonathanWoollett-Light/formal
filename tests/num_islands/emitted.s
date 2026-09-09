@@ -1,30 +1,48 @@
 .global _start
 _start:
     #$ grid thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
-    #$ stack thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     la t0, grid
     li t1, 1
     sw t1, 0(t0)  # #] t1, 0(t0)
+    li t1, 1
     sw t1, 4(t0)  # #] t1, 1(t0)
-    sw t1, 20(t0)  # #] t1, 5(t0)
-    sw t1, 24(t0)  # #] t1, 6(t0)
-    sw t1, 48(t0)  # #] t1, 12(t0)
-    sw t1, 72(t0)  # #] t1, 18(t0)
-    sw t1, 76(t0)  # #] t1, 19(t0)
     li t1, 0
     sw t1, 8(t0)  # #] t1, 2(t0)
+    li t1, 0
     sw t1, 12(t0)  # #] t1, 3(t0)
+    li t1, 0
     sw t1, 16(t0)  # #] t1, 4(t0)
+    li t1, 1
+    sw t1, 20(t0)  # #] t1, 5(t0)
+    li t1, 1
+    sw t1, 24(t0)  # #] t1, 6(t0)
+    li t1, 0
     sw t1, 28(t0)  # #] t1, 7(t0)
+    li t1, 0
     sw t1, 32(t0)  # #] t1, 8(t0)
+    li t1, 0
     sw t1, 36(t0)  # #] t1, 9(t0)
+    li t1, 0
     sw t1, 40(t0)  # #] t1, 10(t0)
+    li t1, 0
     sw t1, 44(t0)  # #] t1, 11(t0)
+    li t1, 1
+    sw t1, 48(t0)  # #] t1, 12(t0)
+    li t1, 0
     sw t1, 52(t0)  # #] t1, 13(t0)
+    li t1, 0
     sw t1, 56(t0)  # #] t1, 14(t0)
+    li t1, 0
     sw t1, 60(t0)  # #] t1, 15(t0)
+    li t1, 0
     sw t1, 64(t0)  # #] t1, 16(t0)
+    li t1, 0
     sw t1, 68(t0)  # #] t1, 17(t0)
+    li t1, 1
+    sw t1, 72(t0)  # #] t1, 18(t0)
+    li t1, 1
+    sw t1, 76(t0)  # #] t1, 19(t0)
+    #$ stack thread [u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32 u32]
     li a0, 20
     li a1, 4
     li a2, 5

@@ -1,7 +1,4 @@
     #$ starts thread [u32 u32 u32 u32]
-    #$ ends thread [u32 u32 u32 u32]
-    #$ outs thread [u32 u32 u32 u32]
-    #$ oute thread [u32 u32 u32 u32]
     la t0, starts
     li t1, 2
     #] t1, 0(t0)
@@ -11,6 +8,7 @@
     #] t1, 2(t0)
     li t1, 8
     #] t1, 3(t0)
+    #$ ends thread [u32 u32 u32 u32]
     la t0, ends
     li t1, 6
     #] t1, 0(t0)
@@ -20,6 +18,8 @@
     #] t1, 2(t0)
     li t1, 10
     #] t1, 3(t0)
+    #$ outs thread [u32 u32 u32 u32]
+    #$ oute thread [u32 u32 u32 u32]
     li a0, 4
     li a1, 4
     addi a4, a0, -1
