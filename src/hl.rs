@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! value: global _              ->  #$ value global _
-//! welcome: _ [u8*13]           ->  #$ welcome _ [u8 u8 ... u8]
+//! welcome: [u8*13]             ->  #$ welcome _ [u8 u8 ... u8]
 //! t0 = &value                  ->  la t0, value
 //! t0 = type(welcome)           ->  #& t0, welcome
 //! t0 = csr(mhartid)            ->  csrr t0, mhartid
@@ -456,7 +456,7 @@ impl Translator {
             .ok_or_else(|| {
                 err(format!(
                     "`{name}` is initialised with a list, so it needs a list type \
-                     (e.g. `{name}: thread [u32]*4 = ...`)"
+                     (e.g. `{name}: [u32]*4 = ...`)"
                 ))
             })?;
         let inner = values
@@ -709,7 +709,7 @@ impl Translator {
             if annotation.is_empty() {
                 return Err(err(format!(
                     "labels are not part of the language (a definition needs \
-                     `{name}: <locality> <type>`); use `if`/`while` blocks"
+                     `{name}: <type>`, with an optional `global`/`thread` before it); \n                     use `if`/`while` blocks"
                 )));
             }
             self.out
@@ -885,15 +885,32 @@ fn parse_condition(text: &str) -> Result<Condition, String> {
 /// Pythonic list forms (comma-separated runs `[u8*13]` / `[u8*2, u16*2]`, and
 /// the legacy outer `[t, t]*n` cycling suffix) to the dialect's
 /// space-separated list type.
+/// `name: [<locality>] <type>`. The locality may be **elided**, which means
+/// the same as writing `_`: leave it to the verifier. Only `global` and
+/// `thread` are worth saying out loud, and a program that says neither should
+/// not have to write a placeholder to get to its type.
+///
+/// The split is unambiguous because no type starts with a locality keyword.
+/// The one word that is both a locality and a type is `_`, and `x: _` reads as
+/// the type, which is the same `#$ x _ _` either way.
 fn translate_define(name: &str, annotation: &str) -> Result<String, String> {
-    let (locality, type_text) = annotation
-        .split_once(' ')
-        .ok_or_else(|| format!("expected `<locality> <type>` after `{name}:`"))?;
-    if !LOCALITIES.contains(&locality) {
-        return Err(format!("invalid locality `{locality}`"));
+    let (locality, type_text) = match annotation.split_once(' ') {
+        Some((first, rest)) if LOCALITIES.contains(&first) => (first, rest.trim()),
+        _ => ("_", annotation),
+    };
+    if type_text.is_empty() {
+        return Err(format!("expected a type after `{name}:`"));
     }
-    let type_text = type_text.trim();
-    let lowered = translate_type(type_text)?;
+    // A misspelt locality now reads as part of the type, so the type error
+    // says what it was probably meant to be rather than leaving the user to
+    // spot it.
+    let lowered =
+        translate_type(type_text).map_err(|message| match annotation.split_once(' ') {
+            Some((first, _)) if is_label(first) && !LOCALITIES.contains(&first) => format!(
+                "{message} (if `{first}` was meant as a locality, it must be `global` or `thread`)"
+            ),
+            _ => message,
+        })?;
     Ok(format!("    #$ {name} {locality} {lowered}"))
 }
 

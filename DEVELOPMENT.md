@@ -784,7 +784,7 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 
 | `hl` statement                                   | Dialect line                                                                     |
 | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `value: global _` / `welcome: _ [u8*13]`         | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a define; lists expand below) |
+| `value: global _` / `welcome: [u8*13]`           | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a define; lists expand below) |
 | `t0 = &value`                                    | `la t0, value`                                                                   |
 | `t0 = type(welcome)`                             | `#& t0, welcome`                                                                 |
 | `t0 = csr(mhartid)`                              | `csrr t0, mhartid`                                                               |
@@ -801,7 +801,7 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 | `fail` / `unreachable`                           | `#!` / `#?`                                                                      |
 | `asm:` + indented lines                          | each block line emitted verbatim (inline assembly; an empty block is an error)   |
 
-A define may carry a **list initialiser**, `name: <locality> [t*n] = [v, ...]`,
+A define may carry a **list initialiser**, `name: [<locality>] [t*n] = [v, ...]`,
 which is the one statement that lowers to more than one line:
 
 ```text
@@ -824,7 +824,17 @@ may **span lines** while its bracket is open, so a fixture can be laid out in
 the shape of its data (`num_islands` writes its grid a row per line); nothing
 else in the language spans lines.
 
-In the define row, a `name:` with an annotation is a define, and a list type is
+In the define row, a `name:` with an annotation is a define. The **locality
+may be elided**, which means exactly what writing `_` means: leave it to the
+verifier. So `welcome: [u8*13]` and `welcome: _ [u8*13]` are the same define,
+and `x: u32` needs no placeholder to get to its type. Only `global` and
+`thread` say anything, so only they have to be written. The split is
+unambiguous because no type starts with a locality keyword; the one word that
+is both is `_`, and `x: _` reads as the type, which lowers to `#$ x _ _`
+either way. A misspelt locality therefore reads as part of the type, and the
+type error names it (`v: glbal u32` says so).
+
+A list type is
 comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g.
 `[u8*13]` or `[u8*2, u16*2, u8*3]` (a plain element is a run of 1); the legacy
 outer `[t, t]*n` suffix cycles the whole list, so `[u8]*13` == `[u8*13]`.

@@ -59,6 +59,10 @@ const MALFORMED: &[(&str, &str)] = &[
         "a bare label (empty annotation) is not a statement",
     ),
     ("goto done\nexit(0)\n", "`goto` is not in the language"),
+    (
+        "v: glbal u32\nexit(0)\n",
+        "a misspelt locality reads as part of the type, and is named as such",
+    ),
     // Structured-statement headers and conditions.
     (
         "if t0 == t1:\nexit(0)\n",
