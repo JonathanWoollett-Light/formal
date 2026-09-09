@@ -12,7 +12,7 @@
 # Registers: a1 = n (6), a2 = n-1 (5), a5 = 4 (element size), a0 = pass/k outer,
 #            t0 = k, t1 = byte offset, t2 = &arr[k], a3/a4 = arr[k]/arr[k+1].
 
-arr: thread [u32]*6
+arr: [u32]*6
 
 a1 = 6
 a2 = 5

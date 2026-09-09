@@ -98,7 +98,9 @@ lives), and a `fail` marker is an assertion the compiler must prove can never be
 reached:
 
 ```python
-value: global _      # a global variable; let the compiler infer the type
+value: global _      # shared across harts; let the compiler infer the type
+                     # (`nums: [u32]*4` elides the locality: thread-local,
+                     #  the default; `_` in its place searches for one)
 t0 = &value
 t1 = 0
 t0[0] = t1           # value = 0 (element 0 of whatever type is inferred)

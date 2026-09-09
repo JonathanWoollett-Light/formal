@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! value: global _              ->  #$ value global _
-//! welcome: [u8*13]             ->  #$ welcome _ [u8 u8 ... u8]
+//! welcome: [u8*13]             ->  #$ welcome thread [u8 u8 ... u8]  (elided = default)
 //! t0 = &value                  ->  la t0, value
 //! t0 = type(welcome)           ->  #& t0, welcome
 //! t0 = csr(mhartid)            ->  csrr t0, mhartid
@@ -100,6 +100,12 @@ const REGISTERS: [&str; 14] = [
     "t0", "t1", "t2", "t3", "t4", "t5", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
 ];
 const LOCALITIES: [&str; 3] = ["global", "thread", "_"];
+/// The locality a define gets when it does not name one. Thread-local is
+/// the safe default (nothing is shared by accident) and the one the
+/// verifier's own search tries first, so eliding the locality lands on what
+/// an inferred one would almost always have picked, without paying for the
+/// search. Write `_` to ask for the search instead.
+const DEFAULT_LOCALITY: &str = "thread";
 
 fn is_register(token: &str) -> bool {
     REGISTERS.contains(&token)
@@ -885,18 +891,24 @@ fn parse_condition(text: &str) -> Result<Condition, String> {
 /// Pythonic list forms (comma-separated runs `[u8*13]` / `[u8*2, u16*2]`, and
 /// the legacy outer `[t, t]*n` cycling suffix) to the dialect's
 /// space-separated list type.
-/// `name: [<locality>] <type>`. The locality may be **elided**, which means
-/// the same as writing `_`: leave it to the verifier. Only `global` and
-/// `thread` are worth saying out loud, and a program that says neither should
-/// not have to write a placeholder to get to its type.
+/// `name: [<locality>] <type>`. The three spellings say three different
+/// things, and the difference is what the **verifier** is asked to do:
+///
+/// - `x: global u32` / `x: thread u32` pin the locality.
+/// - `x: _ u32` asks the verifier to *search* it. Locality is part of the
+///   configuration sweep exactly as the type is
+///   ([`locality_list`](crate::verifier), `Thread` then `Global`), so this
+///   costs exploration and buys a program that verifies under either.
+/// - `x: u32` **elides** it and takes [`DEFAULT_LOCALITY`]. No search, no
+///   placeholder: the facade for a program that does not care.
 ///
 /// The split is unambiguous because no type starts with a locality keyword.
 /// The one word that is both a locality and a type is `_`, and `x: _` reads as
-/// the type, which is the same `#$ x _ _` either way.
+/// the type, so it is `#$ x thread _`: the locality elided, the type searched.
 fn translate_define(name: &str, annotation: &str) -> Result<String, String> {
     let (locality, type_text) = match annotation.split_once(' ') {
         Some((first, rest)) if LOCALITIES.contains(&first) => (first, rest.trim()),
-        _ => ("_", annotation),
+        _ => (DEFAULT_LOCALITY, annotation),
     };
     if type_text.is_empty() {
         return Err(format!("expected a type after `{name}:`"));

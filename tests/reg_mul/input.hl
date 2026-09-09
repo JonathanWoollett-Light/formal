@@ -2,7 +2,7 @@
 # prove the result at compile time. `reg = a * b` lowers to `mul` (there is no
 # multiply-immediate), so the verifier must compute the products symbolically
 # and prove the `require`.
-fact: thread [u32]*1
+fact: [u32]*1
 t0 = &fact
 
 t1 = 1

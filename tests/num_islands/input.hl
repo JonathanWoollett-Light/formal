@@ -28,11 +28,11 @@
 #            t5 = a neighbour cell.
 
 # The grid, a row per line: 1 is land, 0 is water.
-grid: thread [u32]*20 = [1, 1, 0, 0, 0,
+grid: [u32]*20 = [1, 1, 0, 0, 0,
                          1, 1, 0, 0, 0,
                          0, 0, 1, 0, 0,
                          0, 0, 0, 1, 1]
-stack: thread [u32]*20
+stack: [u32]*20
 
 a0 = 20
 a1 = 4

@@ -5,7 +5,7 @@
 # 0..3. The verifier then proves the store is in bounds for *every* a0 (sound),
 # while the runtime keeps a0 = 12. This replaces the old
 # write-a-constant-through-a-region trick: no region, no raw address.
-arr: thread [u32]*4
+arr: [u32]*4
 a0 = 12
 forget a0           # verifier: a0 = any; runtime: a0 = 12 (emits nothing)
 t2 = 4

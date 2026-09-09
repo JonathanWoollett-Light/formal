@@ -5,7 +5,7 @@
 #
 # Registers: a0 = lo, a1 = hi, a2 = mid, a3 = target, a4 = found, a5 = 4 (elem
 # size), a6 = 2, t0 = &arr[mid], t1 = byte offset, t2 = arr[mid].
-arr: thread [u32]*6
+arr: [u32]*6
 t0 = &arr
 t1 = 1
 t0[0] = t1

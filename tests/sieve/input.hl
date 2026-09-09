@@ -10,7 +10,7 @@
 # Registers: a0 = i, a1 = n, a2 = count, t0/t4 = pointers, t1 = flag,
 #            t2 = multiple j, t3 = the constant 1.
 
-flags: thread [u8]*30
+flags: [u8]*30
 
 a1 = 30
 

@@ -2,7 +2,7 @@
 # division, truncating). Two divisions, proven at compile time. Division is what
 # the fannkuch algorithm uses to turn a permutation index into a permutation
 # (index / k!), and what integer printing uses to extract digits (/10).
-d: thread [u32]*1
+d: [u32]*1
 t0 = &d
 
 t1 = 100

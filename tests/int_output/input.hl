@@ -1,7 +1,7 @@
 # Print the integer 42 to stdout by digit extraction (div/rem), then the Linux
 # write syscall. Digits are written into a buffer from the back; the count is
 # tracked so the right slice is written. (Assumes a positive value.)
-buf: thread [u8]*20
+buf: [u8]*20
 t0 = &buf
 t0 = t0 + 20        # one past the end of the buffer
 a0 = 42             # the integer to print

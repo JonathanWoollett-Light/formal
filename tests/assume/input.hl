@@ -4,7 +4,7 @@
 # are dropped from the binary. With a0 = 5 the `while i != a0` loop is determinate
 # and the verifier proves the `arr[i] = i` fill is memory-safe (a subset of the
 # 16-element array); at runtime a0 = 12 and the fill covers arr[0..12].
-arr: thread [u32]*16
+arr: [u32]*16
 a0 = 12
 forget a0           # verifier: a0 = any; runtime: a0 = 12
 assume:

@@ -16,7 +16,7 @@
 #            a6 = the water total, t0 = an address, t1 = a byte offset,
 #            t2 = height[left], t3 = height[right], t4 = one bar's water.
 
-h: thread [u32]*12 = [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]
+h: [u32]*12 = [0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]
 
 a0 = 4
 a2 = 0

@@ -2,7 +2,7 @@
 # an exact total at compile time. Each `reg = a + b` with `b` a register lowers
 # to `add` (the immediate form `reg = a + imm` still lowers to `addi`), so the
 # verifier must compute the sums symbolically and prove the `require`.
-total: thread [u32]*1
+total: [u32]*1
 t0 = &total
 
 t1 = 5

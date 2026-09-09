@@ -1,7 +1,7 @@
 # Register-register subtraction: compute a difference of differences and prove
 # it at compile time. `reg = a - b` with `b` a register lowers to `sub` (the
 # immediate form `reg = a - imm` still lowers to `addi` with a negative value).
-gap: thread [u32]*1
+gap: [u32]*1
 t0 = &gap
 
 t1 = 100

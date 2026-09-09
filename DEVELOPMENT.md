@@ -784,7 +784,7 @@ error pointing at `if`/`while`); the labels in the dialect output are generated
 
 | `hl` statement                                   | Dialect line                                                                     |
 | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `value: global _` / `welcome: [u8*13]`           | `#$ value global _` / `#$ welcome _ [u8 u8 … u8]` (a define; lists expand below) |
+| `value: global _` / `welcome: [u8*13]`           | `#$ value global _` / `#$ welcome thread [u8 u8 … u8]` (a define) |
 | `t0 = &value`                                    | `la t0, value`                                                                   |
 | `t0 = type(welcome)`                             | `#& t0, welcome`                                                                 |
 | `t0 = csr(mhartid)`                              | `csrr t0, mhartid`                                                               |
@@ -824,15 +824,28 @@ may **span lines** while its bracket is open, so a fixture can be laid out in
 the shape of its data (`num_islands` writes its grid a row per line); nothing
 else in the language spans lines.
 
-In the define row, a `name:` with an annotation is a define. The **locality
-may be elided**, which means exactly what writing `_` means: leave it to the
-verifier. So `welcome: [u8*13]` and `welcome: _ [u8*13]` are the same define,
-and `x: u32` needs no placeholder to get to its type. Only `global` and
-`thread` say anything, so only they have to be written. The split is
-unambiguous because no type starts with a locality keyword; the one word that
-is both is `_`, and `x: _` reads as the type, which lowers to `#$ x _ _`
-either way. A misspelt locality therefore reads as part of the type, and the
-type error names it (`v: glbal u32` says so).
+In the define row, a `name:` with an annotation is a define. Its **locality
+has three spellings, and they say three different things**, the difference
+being what the verifier is asked to do:
+
+| Written         | Lowers to         | The verifier                            |
+| --------------- | ----------------- | --------------------------------------- |
+| `x: global u32` | `#$ x global u32` | is told; no search                      |
+| `x: _ u32`      | `#$ x _ u32`      | **searches** it, `thread` then `global`  |
+| `x: u32`        | `#$ x thread u32` | is told the default; no search          |
+
+Locality is part of the configuration sweep exactly as the type is
+(`locality_list` in [src/verifier.rs](src/verifier.rs), cartesian-producted
+with the type list), so `_` costs exploration and buys a program that verifies
+under either placement. **Eliding** it takes the default instead, `thread`:
+nothing is shared by accident, it is the placement the search would try first
+anyway, and a program that does not care pays nothing and writes no
+placeholder. `x: u32` and `x: _` both parse, the latter as `#$ x thread _`,
+the locality defaulted and the type searched.
+
+The split is unambiguous because no type starts with a locality keyword. A
+misspelt locality therefore reads as part of the type, and the type error
+names it (`v: glbal u32` says so).
 
 A list type is
 comma-separated **runs** `<scalar>*<count>` with `*` binding tightly, e.g.

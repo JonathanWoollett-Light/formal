@@ -27,10 +27,10 @@
 #            t2 = a loaded slot, t3 = the slot being probed, t4 = i,
 #            t5 = the probe flag.
 
-nums: thread [u32]*4 = [2, 7, 11, 15]
-used: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
-keys: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
-vals: thread [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
+nums: [u32]*4 = [2, 7, 11, 15]
+used: [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
+keys: [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
+vals: [u32]*8 = [0, 0, 0, 0, 0, 0, 0, 0]
 
 a0 = 4
 a1 = 9

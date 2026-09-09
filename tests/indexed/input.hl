@@ -2,7 +2,7 @@
 # register-register addition: `arr[i]` is `base + i*4` (u32 elements), so there
 # is no pointer-walk loop. Write arr[1] and arr[3] at computed addresses, read
 # them back, and prove their sum at compile time.
-arr: thread [u32]*4
+arr: [u32]*4
 t0 = &arr
 t2 = 4            # element size (u32)
 

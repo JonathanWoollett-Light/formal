@@ -10,9 +10,9 @@
 # `n` lives in a2 for the whole run (set once); the other persistent registers
 # are a5 = max flips, a6 = checksum, a7 = parity (0/1), a4 = done flag.
 
-perm: thread [u32]*16
-work: thread [u32]*16
-cnt: thread [u32]*16
+perm: [u32]*16
+work: [u32]*16
+cnt: [u32]*16
 
 # --- n: read at runtime, verifier-blind (forget), narrowed to 5 (assume). The
 #     first instruction is an `la` (perm's address) set up before n. ---

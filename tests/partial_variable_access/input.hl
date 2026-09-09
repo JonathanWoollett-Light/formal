@@ -2,7 +2,7 @@
 # verifier records exactly those ranges, and layout compaction emits
 # exactly those bytes - the unaccessed bytes 1 and 3 are removed from
 # `.bss` and the byte-2 access is re-pointed at its compacted offset.
-data: [u8]*4
+data: _ [u8]*4
 t0 = &data
 t1 = 7
 t0[0] = t1

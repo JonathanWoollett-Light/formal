@@ -22,10 +22,10 @@
 #            t0/t2 = addresses, t1 = a byte offset, t3/t4 = the swapped ends,
 #            t5 = the candidate's end.
 
-starts: thread [u32]*4 = [2, 1, 15, 8]
-ends: thread [u32]*4 = [6, 3, 18, 10]
-outs: thread [u32]*4
-oute: thread [u32]*4
+starts: [u32]*4 = [2, 1, 15, 8]
+ends: [u32]*4 = [6, 3, 18, 10]
+outs: [u32]*4
+oute: [u32]*4
 
 a0 = 4
 a1 = 4

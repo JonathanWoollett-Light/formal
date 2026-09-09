@@ -7,7 +7,7 @@
 # Registers: a1 = 4 (element size), a2 = sum, a3 = count, t0 = pointer,
 #            t1 = the loaded element.
 
-data: thread [u32]*8
+data: [u32]*8
 
 a1 = 4
 

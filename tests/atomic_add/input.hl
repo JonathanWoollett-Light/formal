@@ -3,7 +3,7 @@
 # instruction is parsed back from the `asm:` block, so the verifier models it --
 # it is not opaque). Single hart here, proving the RMW semantics: the old value
 # is returned and the memory is incremented in one step.
-counter: thread [u32]*1
+counter: [u32]*1
 t0 = &counter
 t1 = 5
 t0[0] = t1          # counter = 5
