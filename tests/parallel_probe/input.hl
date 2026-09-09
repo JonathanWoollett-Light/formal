@@ -17,9 +17,15 @@ t0 = &slots
 t0 = t0 + t2
 t0[0] = a4
 
+# Release fence: make this hart's slot write globally visible BEFORE it bumps
+# the done counter, so the finisher (which observes the bump) is guaranteed to
+# see it. The verifier explores all interleavings under sequential consistency,
+# but QEMU MTTCG is weakly ordered, so the fence is what makes the runtime
+# agree with the proof (`fannkuch_v2` documents the same pattern).
 t0 = &done_counter
 t1 = 1
 asm:
+    fence rw, rw
     amoadd.w t2, t1, (t0)
 a0 = 1
 if t2 == a0:

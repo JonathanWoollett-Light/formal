@@ -16,6 +16,7 @@
     #] a5, 0(t0)
     la t0, done_counter
     li t1, 1
+    fence rw, rw
     amoadd.w t2, t1, (t0)
     li a0, 1
     bne t2, a0, _l0
