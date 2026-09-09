@@ -5,9 +5,11 @@
 //! Shared between the `comparisons` test (tests/comparisons/main.rs), which
 //! measures and re-baselines the file, and `examples/update_website.rs`, which
 //! re-injects an existing file into the page (both include this module by
-//! path). Everything here is pure string/data transformation - deterministic,
-//! so a re-render of unchanged data is byte-identical (the file and the page
-//! are committed, and CI diffs them).
+//! path). Rendering is pure string/data transformation - deterministic, so a
+//! re-render of unchanged data is byte-identical (the file and the page are
+//! committed, and CI diffs them). The one thing that touches the filesystem is
+//! [`read_sources`], which reads each panel's source off disk so the page
+//! shows the real files instead of a copy of them.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -27,8 +29,142 @@ pub const METRICS: [(&str, &str); 6] = [
 /// conditions the measured samples were taken under.
 pub const ENVIRONMENT_METRIC: &str = "formal_comparison_environment_info";
 
-/// Programs and languages, in the page's presentation order.
-pub const PROGRAMS: [&str; 2] = ["hello", "fannkuch"];
+/// One comparison program. Everything that used to be a `match program` arm
+/// scattered through the measurement code lives here instead, so adding a
+/// program is one row rather than an edit in six places.
+pub struct Program {
+    /// The key in `metrics.prom`, in the page's `METRICS` object, and the
+    /// basename of this program's reference implementations in `programs/`.
+    pub key: &'static str,
+    /// The `tests/` dialect asset formal's build verifies, and the hart count
+    /// that program needs.
+    pub formal_asset: &'static str,
+    pub harts: u8,
+    /// The `gnatmake` flags this program's Ada reference wants.
+    pub ada_flags: &'static str,
+    /// Seconds allowed for the instrumented run, seconds allowed for each
+    /// timed run, and how many timed runs to take the best of. The
+    /// instrumented run gets the longer allowance: the plugin's per-access
+    /// working-set callback slows a heavy compute several-fold.
+    pub instrumented_timeout: u32,
+    pub timed_timeout: u32,
+    pub timed_runs: u32,
+    /// Substrings every language's build of this program must print (checked
+    /// against stdout and stderr combined, because Zig's hello writes to
+    /// stderr). The five kernels list their entire output.
+    pub expect: &'static [&'static str],
+    /// Whether the runtime runs are heavy enough to gate behind
+    /// `FORMAL_COMPARISONS_FULL` (minutes uninstrumented, hours instrumented).
+    pub heavy: bool,
+    /// A tolerance for formal's runtime figures, for a program whose harts
+    /// race: the interleaving that wins is genuinely nondeterministic.
+    pub formal_runtime_tolerance: Option<f64>,
+}
+
+/// The programs, in the page's presentation order: `hello` first, the five
+/// LeetCode kernels ([§6](../../DEVELOPMENT.md)) in the middle, and the heavy
+/// `fannkuch` last.
+pub const PROGRAMS: [Program; 7] = [
+    Program {
+        key: "hello",
+        formal_asset: "linux_hello/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 hello.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["Hello World!"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "two_sum",
+        formal_asset: "two_sum/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 two_sum.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["0 1\n"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "rain",
+        formal_asset: "trapping_rain/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 rain.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["6\n"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "coins",
+        formal_asset: "coin_change/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 coins.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["3\n"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "islands",
+        formal_asset: "num_islands/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 islands.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["3\n"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "intervals",
+        formal_asset: "merge_intervals/dialect.s",
+        harts: 1,
+        ada_flags: "-O2 intervals.adb -bargs -static -largs -static",
+        instrumented_timeout: 120,
+        timed_timeout: 120,
+        timed_runs: 3,
+        expect: &["1 6\n8 10\n15 18\n"],
+        heavy: false,
+        formal_runtime_tolerance: None,
+    },
+    Program {
+        key: "fannkuch",
+        formal_asset: "fannkuch_v2/dialect.s",
+        harts: 2,
+        ada_flags: "-Os fannkuch.adb -bargs -static -largs -static -Wl,--gc-sections",
+        instrumented_timeout: 28800,
+        timed_timeout: 3600,
+        timed_runs: 1,
+        expect: &["3968050", "Pfannkuchen(12) = 65"],
+        heavy: true,
+        formal_runtime_tolerance: Some(0.10),
+    },
+];
+
+/// The program with this key. Panics on an unknown key, which can only be a
+/// typo in this file: every caller's key comes from [`PROGRAMS`] itself.
+pub fn program(key: &str) -> &'static Program {
+    PROGRAMS
+        .iter()
+        .find(|p| p.key == key)
+        .unwrap_or_else(|| panic!("unknown comparison program `{key}`"))
+}
+
+/// The program keys, in presentation order.
+pub fn program_keys() -> impl Iterator<Item = &'static str> {
+    PROGRAMS.iter().map(|p| p.key)
+}
+
 pub const LANGUAGES: [&str; 6] = ["formal", "rust", "c", "cpp", "zig", "ada"];
 
 /// Where a sample came from.
@@ -195,7 +331,7 @@ impl Metrics {
                 _ => "",
             };
             out.push_str(&format!("# HELP {metric} {help}\n# TYPE {metric} gauge\n"));
-            for program in PROGRAMS {
+            for program in program_keys() {
                 for language in LANGUAGES {
                     let Some(sample) = self.get(metric, program, language) else {
                         continue;
@@ -321,7 +457,7 @@ fn render_data_block(metrics: &Metrics) -> String {
     ));
     out.push_str(&format!("{indent}// prettier-ignore\n"));
     out.push_str(&format!("{indent}var METRICS = {{\n"));
-    for program in PROGRAMS {
+    for program in program_keys() {
         out.push_str(&format!("{indent}  {program}: {{\n"));
         for language in LANGUAGES {
             let fields: Vec<String> = METRICS
@@ -372,25 +508,156 @@ fn escape_js(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Splices the generated data block into `html` (between the BEGIN/END marker
-/// lines) and syncs the static body defaults (the hello panels' numbers, shown
-/// before the script runs / without JS). Returns the updated page.
-pub fn update_html(html: &str, metrics: &Metrics) -> Result<String, String> {
-    let begin = html
-        .find(BEGIN_MARKER)
-        .ok_or_else(|| format!("index.html: missing `{BEGIN_MARKER}` marker"))?;
-    let line_start = html[..begin].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let end = html
-        .find(END_MARKER)
-        .ok_or_else(|| format!("index.html: missing `{END_MARKER}` marker"))?;
-    if end < begin {
-        return Err("index.html: comparison-data markers out of order".to_string());
+const SOURCES_BEGIN_MARKER: &str = "// COMPARISON-SOURCES-BEGIN";
+const SOURCES_END_MARKER: &str = "// COMPARISON-SOURCES-END";
+
+/// The file extension each language's reference implementation carries in
+/// `tests/comparisons/programs/`.
+const EXTENSIONS: [(&str, &str); 5] = [
+    ("rust", "rs"),
+    ("c", "c"),
+    ("cpp", "cpp"),
+    ("zig", "zig"),
+    ("ada", "adb"),
+];
+
+/// Every panel's source text, keyed by `(program, language)`. `formal` is the
+/// high-level `input.hl`; the pseudo-language `formal_low` is the dialect the
+/// verifier actually proves.
+pub type Sources = BTreeMap<(String, String), String>;
+
+/// Reads every panel's source off disk, so the page shows the real files
+/// rather than a copy of them. Before this the sources were hand-pasted into
+/// the page and nothing checked them, so they drifted silently; now the only
+/// hand-written strings left in a panel are the reproduction commands, which
+/// are not a file anywhere.
+pub fn read_sources(manifest: &str) -> Result<Sources, String> {
+    let read = |path: String| -> Result<String, String> {
+        std::fs::read_to_string(&path)
+            .map(|s| s.replace("\r\n", "\n"))
+            .map_err(|e| format!("{path}: {e}"))
+    };
+    let mut sources = Sources::new();
+    for spec in &PROGRAMS {
+        // The formal panel is the test folder the pipeline verifies: its
+        // `input.hl` above, the `dialect.s` it lowers to below.
+        let folder = spec
+            .formal_asset
+            .strip_suffix("/dialect.s")
+            .ok_or_else(|| format!("{}: formal_asset is not a dialect.s", spec.key))?;
+        sources.insert(
+            (spec.key.to_string(), "formal".to_string()),
+            strip_header(&read(format!("{manifest}/tests/{folder}/input.hl"))?),
+        );
+        sources.insert(
+            (spec.key.to_string(), "formal_low".to_string()),
+            read(format!("{manifest}/tests/{}", spec.formal_asset))?,
+        );
+        for (language, extension) in EXTENSIONS {
+            sources.insert(
+                (spec.key.to_string(), language.to_string()),
+                read(format!(
+                    "{manifest}/tests/comparisons/programs/{}.{extension}",
+                    spec.key
+                ))?,
+            );
+        }
     }
-    let end = end + END_MARKER.len();
-    let mut out = String::new();
-    out.push_str(&html[..line_start]);
-    out.push_str(&render_data_block(metrics));
-    out.push_str(&html[end..]);
+    Ok(sources)
+}
+
+/// Drops a test's header comment: the leading run of `#` lines and the blank
+/// lines under it. A test's header says what the program proves and maps its
+/// registers, which is documentation of the test rather than part of the
+/// program. The reference implementations in `programs/` carry no header at
+/// all, so leaving formal's in would make the panels incomparable in exactly
+/// the dimension the section is about. Inline comments stay.
+fn strip_header(source: &str) -> String {
+    let body = source
+        .lines()
+        .skip_while(|line| line.trim_start().starts_with('#'))
+        .skip_while(|line| line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{body}\n")
+}
+
+/// Renders the generated `SOURCES` block: one JS string literal per panel.
+fn render_sources_block(sources: &Sources) -> String {
+    let indent = "        ";
+    let mut out = format!(
+        "{indent}{SOURCES_BEGIN_MARKER} -- the panel sources, read from the files\n\
+         {indent}// they are measured from by the comparisons test (BLESS mode) /\n\
+         {indent}// `cargo run --example update_website`; do NOT edit by hand.\n\
+         {indent}// prettier-ignore\n\
+         {indent}var SOURCES = {{\n"
+    );
+    for program in program_keys() {
+        out.push_str(&format!("{indent}  {program}: {{\n"));
+        for language in ["formal", "formal_low", "rust", "c", "cpp", "zig", "ada"] {
+            let Some(text) = sources.get(&(program.to_string(), language.to_string())) else {
+                continue;
+            };
+            out.push_str(&format!(
+                "{indent}    {language}: \"{}\",\n",
+                escape_js_text(text)
+            ));
+        }
+        out.push_str(&format!("{indent}  }},\n"));
+    }
+    out.push_str(&format!("{indent}}};\n{indent}{SOURCES_END_MARKER}"));
+    out
+}
+
+/// Escapes a whole source file into one double-quoted JS string literal.
+fn escape_js_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => {}
+            // `</script` inside a string literal would still close the tag.
+            '<' => out.push_str("\\u003c"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Splices a generated block into `html` between its marker lines.
+fn splice(html: &str, begin: &str, end: &str, block: &str) -> Result<String, String> {
+    let at = html
+        .find(begin)
+        .ok_or_else(|| format!("index.html: missing `{begin}` marker"))?;
+    let line_start = html[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let close = html
+        .find(end)
+        .ok_or_else(|| format!("index.html: missing `{end}` marker"))?;
+    if close < at {
+        return Err(format!("index.html: `{begin}` markers out of order"));
+    }
+    let close = close + end.len();
+    Ok(format!(
+        "{}{}{}",
+        &html[..line_start],
+        block,
+        &html[close..]
+    ))
+}
+
+/// Splices the generated data and source blocks into `html` and syncs the
+/// static body defaults (the hello panels' numbers, shown before the script
+/// runs / without JS). Returns the updated page.
+pub fn update_html(html: &str, metrics: &Metrics, sources: &Sources) -> Result<String, String> {
+    let out = splice(html, BEGIN_MARKER, END_MARKER, &render_data_block(metrics))?;
+    let mut out = splice(
+        &out,
+        SOURCES_BEGIN_MARKER,
+        SOURCES_END_MARKER,
+        &render_sources_block(sources),
+    )?;
 
     // The body's default (no-JS) numbers: the hello panels for formal and the
     // default language tab (rust).

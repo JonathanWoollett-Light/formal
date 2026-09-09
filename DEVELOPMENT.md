@@ -1530,9 +1530,20 @@ module have been **deleted**.
 The website's "same program, side by side" panels (index.html) are backed by
 **measured, committed data**, not hand-typed numbers. The pieces:
 
+- The **programs** are the `PROGRAMS` table in
+  [tests/comparisons/support.rs](tests/comparisons/support.rs): `hello`, the
+  five LeetCode kernels `two_sum`/`rain`/`coins`/`islands`/`intervals`
+  ([§6](#6-integration-tests-tests)), and `fannkuch`. Everything that differs
+  between them (the test folder formal builds, its hart count, the Ada build
+  flags, the run timeouts, the output every language must produce, whether the
+  runtime runs are heavy enough to gate) is a field of that row, so adding a
+  program is one row rather than an edit in six `match` arms.
 - [tests/comparisons/programs/](tests/comparisons/programs/): the Rust/C/C++/
-  Zig/Ada `hello` and `fannkuch` sources, verbatim the code the page displays
-  (formal's programs are `tests/linux_hello` and `tests/fannkuch_v2`).
+  Zig/Ada source for each program, verbatim the code the page displays
+  (the page reads these files, see [§6.3](#63-the-website-indexhtml)). Every
+  language runs the **same algorithm**: the section is titled "the same
+  program, every language", so `two_sum` is the O(n^2) scan in all six, not a
+  hash map in the five that have one.
 - [tests/comparisons/main.rs](tests/comparisons/main.rs): the `comparisons`
   test (**`#[ignore]`d**; run it with
   `cargo nextest run --run-ignored all comparisons`). For each program x
@@ -1584,7 +1595,18 @@ Modes (mirroring the suite's `BLESS` convention):
   built and measured statically and its committed runtime figures are left
   untouched. `FORMAL_COMPARISONS_LANGUAGES=<subset>` (comma-separated)
   restricts a run to those languages, e.g. re-blessing one language after a
-  toolchain bump.
+  toolchain bump; `FORMAL_COMPARISONS_PROGRAMS=<subset>` does the same for
+  programs. Both matter more than they did: a full run is now **7 programs x 6
+  languages = 42 cells**, so measuring one new program is
+  `FORMAL_COMPARISONS_PROGRAMS=two_sum` rather than a full sweep. The check
+  that fires on a qualifying push to master pays the full 42 unless the
+  workflow narrows it, which is the main recurring cost of adding a program.
+
+A program can be added to the page **before** it is measured: the panels read
+their code from the files, and the generated `METRICS` block simply carries no
+row for it, so the page shows the sources and says "not measured yet" in place
+of the figures. That is the intended staging, since a measure run is a
+controlled-environment job (below) rather than something a contributor runs.
 
 CI ([.github/workflows/comparisons.yml](.github/workflows/comparisons.yml))
 installs the pinned toolchains (building a plugin-enabled `qemu-riscv64` from
@@ -1684,6 +1706,7 @@ through a DOM parser, so a redesign has to preserve its exact shape (§6.1):
 | Thing                                                    | Rule                                                                      |
 | -------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `// COMPARISON-DATA-BEGIN` / `-END`                      | JavaScript line comments, once each, in order, inline in `index.html`     |
+| `// COMPARISON-SOURCES-BEGIN` / `-END`                   | the same, for the generated panel sources                                 |
 | The generated block's indentation                        | 8 spaces; its `<script>` stays a direct child of `<body>`, one brace deep |
 | The three `// prettier-ignore` lines                     | kept, or prettier and the generator rewrite each other forever            |
 | `formal-{compile,count,bytes,exec,mem,time}` and `lang-` | one `id="name"` each, on an inline `<b>`, value as the whole text node    |
@@ -1701,14 +1724,24 @@ column and swaps the language. The selected tab is marked by
 state cannot disagree. The panels carry no name headers: the selectors already
 say what is shown.
 
-**Hand-copied samples, and the drift they invite.** `FK_FORMAL`,
-`HELLO_DIALECT` and `FK_DIALECT` are copies of `tests/fannkuch_v2/input.hl`,
-`tests/linux_hello/dialect.s` and `tests/fannkuch_v2/dialect.s`, and the
-end-to-end section copies `tests/uart_hello/`. Nothing checks any of them, so
-they go stale silently whenever the language or the lowering changes. The fix
-that would match the metrics pipeline ([§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons))
-is to generate them into their own marked block from the fixtures in
-`update_html`, which makes the `comparisons` test fail when they drift.
+**The panel sources are generated, not copied.** Every panel's code comes from
+the file the pipeline actually measures, spliced into the page's
+`// COMPARISON-SOURCES-BEGIN` / `-END` block by `read_sources` +
+`render_sources_block` ([tests/comparisons/support.rs](tests/comparisons/support.rs)):
+`formal`'s two levels from the test's `input.hl` and `dialect.s`, the other
+five languages from `tests/comparisons/programs/<program>.<ext>`. They cannot
+drift, because the same `git diff --exit-code index.html` that guards the
+numbers now guards the sources, and `cargo run --example update_website`
+re-splices both. The formal panel's source has its **header comment stripped**
+(the leading run of `#` lines): a test's header says what the program proves
+and maps its registers, which is documentation of the test, and the reference
+implementations carry no header at all, so leaving it in would make the panels
+incomparable in exactly the dimension the section is about. Inline comments
+stay. The only hand-written strings left in a panel are the reproduction
+commands, which are not a file anywhere.
+
+The end-to-end section still copies `tests/uart_hello/` by hand, and nothing
+checks that one; the same treatment would fix it.
 
 **Syntax highlighting.** Prism arrives as one pinned, integrity-checked
 request to jsDelivr's `combine` endpoint (core plus the `clike`, `c`, `cpp`,

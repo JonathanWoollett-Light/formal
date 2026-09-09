@@ -11,8 +11,8 @@ use support::*;
 /// **The language-comparison metrics pipeline** behind the website's
 /// "The same program, side by side" panels.
 ///
-/// For each comparison program (`hello`, `fannkuch`) x language (`formal`,
-/// `rust`, `c`, `cpp`, `zig`, `ada`), this test builds the program under
+/// For each comparison program x language (`formal`, `rust`, `c`, `cpp`,
+/// `zig`, `ada`), this test builds the program under
 /// **controlled, pinned conditions** (a static RISC-V Linux binary per
 /// language's pinned toolchain; Ada is host-static, build-only) and measures:
 ///
@@ -23,7 +23,15 @@ use support::*;
 /// - `executed_instructions` / `peak_memory_kib`: exact guest instruction count
 ///   and peak working set from an instrumented (`formal_stats` TCG plugin) run
 ///   under user-mode `qemu-riscv64` with an **empty guest environment**,
-/// - `run_seconds`: a separate plugin-free timed run (best of 3 for `hello`).
+/// - `run_seconds`: a separate plugin-free timed run (best of 3 for the
+///   sub-second programs).
+///
+/// The programs are the [`support::PROGRAMS`] table: `hello`, the five
+/// LeetCode kernels, and `fannkuch`. Everything that differs between them
+/// (which test folder formal builds, how many harts it needs, the Ada build
+/// flags, the run timeouts, the output every language must produce, whether
+/// the runtime runs are heavy) is a field of that table rather than a `match`
+/// here, so adding a program is one row.
 ///
 /// The results live in `tests/comparisons/metrics.prom` (Prometheus text
 /// format), which works like `Cargo.lock`: **committed, but generated**.
@@ -48,7 +56,10 @@ use support::*;
 /// runtime figures are left untouched. `FORMAL_COMPARISONS_LANGUAGES` (a
 /// comma-separated subset of formal,rust,c,cpp,zig,ada) restricts the run to
 /// those languages - e.g. re-blessing a single language after a toolchain
-/// bump without re-measuring the rest.
+/// bump without re-measuring the rest. `FORMAL_COMPARISONS_PROGRAMS` does the
+/// same for programs, which matters because a full run is now 7 x 6 = 42
+/// cells: measuring one new program is
+/// `FORMAL_COMPARISONS_PROGRAMS=two_sum`.
 ///
 /// Run it explicitly (it is `#[ignore]`d out of the default suite):
 /// `cargo nextest run --run-ignored all comparisons`.
@@ -102,12 +113,21 @@ fn comparisons() {
 
     // An explicit language subset (deliberate, so not a `skipped` warning and
     // exempt from the strict check).
-    let only: Option<Vec<String>> = std::env::var("FORMAL_COMPARISONS_LANGUAGES").ok().map(|v| {
-        v.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    });
+    let subset = |var: &str| -> Option<Vec<String>> {
+        std::env::var(var).ok().map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+    };
+    let only = subset("FORMAL_COMPARISONS_LANGUAGES");
+    // The same escape hatch per program. A full run is 7 programs x 6
+    // languages; a toolchain bump or a single new program rarely needs all 42.
+    let only_programs = subset("FORMAL_COMPARISONS_PROGRAMS");
+    if let Some(list) = &only_programs {
+        eprintln!("comparisons: programs filtered to {list:?}");
+    }
 
     let mut measured = Metrics::default();
     for language in LANGUAGES {
@@ -129,7 +149,13 @@ fn comparisons() {
             ));
             continue;
         }
-        for program in PROGRAMS {
+        for program in program_keys() {
+            if only_programs
+                .as_ref()
+                .is_some_and(|list| !list.iter().any(|p| p == program))
+            {
+                continue;
+            }
             eprintln!("comparisons: measuring {program}/{language}...");
             let m = measure(program, language, &plugin, full, manifest);
             measured.set(
@@ -234,7 +260,8 @@ fn comparisons() {
         merged.environment = tooling.0;
         fs::write(&metrics_path, merged.render()).expect("write metrics.prom");
         let html = fs::read_to_string(&html_path).expect("read index.html");
-        let updated = update_html(&html, &merged).expect("update index.html");
+        let sources = read_sources(manifest).expect("read the panel sources");
+        let updated = update_html(&html, &merged, &sources).expect("update index.html");
         fs::write(&html_path, updated).expect("write index.html");
         eprintln!("comparisons: blessed tests/comparisons/metrics.prom and index.html");
         return;
@@ -303,7 +330,8 @@ fn comparisons() {
         }
     }
     let html = fs::read_to_string(&html_path).expect("read index.html");
-    match update_html(&html, &committed) {
+    let sources = read_sources(manifest).expect("read the panel sources");
+    match update_html(&html, &committed, &sources) {
         Ok(updated) => {
             if updated != html {
                 failures.push(
@@ -352,10 +380,11 @@ fn policy(metric: &str, program: &str, language: &str) -> Policy {
     }
     if (metric == "formal_comparison_executed_instructions"
         || metric == "formal_comparison_peak_memory_kib")
-        && program == "fannkuch"
         && language == "formal"
     {
-        return Policy::Tolerance(0.10);
+        if let Some(tolerance) = support::program(program).formal_runtime_tolerance {
+            return Policy::Tolerance(tolerance);
+        }
     }
     Policy::Exact
 }
@@ -468,7 +497,7 @@ fn measure(program: &str, language: &str, plugin: &str, full: bool, manifest: &s
 
     // Ada is build-only (no RISC-V Ada toolchain); fannkuch's runtime runs are
     // gated behind FORMAL_COMPARISONS_FULL (minutes to hours).
-    let runtime = if language == "ada" || (program == "fannkuch" && !full) {
+    let runtime = if language == "ada" || (support::program(program).heavy && !full) {
         None
     } else {
         Some(run_riscv(program, language, &dir, plugin))
@@ -560,11 +589,8 @@ cd "{dir_sh}"
 /// real OS threads, `emit_executable_hosted`).
 fn build_formal(program: &str, dir: &str) -> (f64, u64) {
     let started = Instant::now();
-    let (asset, harts) = match program {
-        "hello" => ("linux_hello/dialect.s", 1),
-        "fannkuch" => ("fannkuch_v2/dialect.s", 2),
-        _ => unreachable!(),
-    };
+    let spec = support::program(program);
+    let (asset, harts) = (spec.formal_asset, spec.harts);
     let mut ast = setup_test(asset);
     let explorerer = unsafe {
         Explorerer::new(
@@ -758,11 +784,7 @@ fn build_ada(program: &str, dir: &str, manifest: &str) -> (f64, u64) {
     let dir_sh = script_path(dir);
     // `-bargs -static` picks the static GNAT runtime by path; Debian's gnatlink
     // otherwise asks the linker for `-lgnat-13`, which only exists shared.
-    let flags = match program {
-        "hello" => "-O2 hello.adb -bargs -static -largs -static",
-        "fannkuch" => "-Os fannkuch.adb -bargs -static -largs -static -Wl,--gc-sections",
-        _ => unreachable!(),
-    };
+    let flags = support::program(program).ada_flags;
     let script = format!(
         r#"set -e
 cd "{dir_sh}"
@@ -790,10 +812,12 @@ fn run_riscv(program: &str, language: &str, dir: &str, plugin: &str) -> Runtime 
     let dir_sh = script_path(dir);
     // The instrumented run gets a far longer allowance than the timed one: the
     // plugin's per-access working-set callback slows a heavy compute several-fold.
-    let (instrumented_timeout, timed_timeout, timed_runs) = match program {
-        "hello" => (120, 120, 3),
-        _ => (28800, 3600, 1),
-    };
+    let spec = support::program(program);
+    let (instrumented_timeout, timed_timeout, timed_runs) = (
+        spec.instrumented_timeout,
+        spec.timed_timeout,
+        spec.timed_runs,
+    );
     let script = format!(
         r#"set -e
 BIN="{bin}"
@@ -834,16 +858,11 @@ done
         fs::read_to_string(format!("{dir}/run.out")).unwrap_or_default(),
         fs::read_to_string(format!("{dir}/run.err")).unwrap_or_default()
     );
-    match program {
-        "hello" => assert!(
-            output.contains("Hello World!"),
-            "{program}/{language}: expected \"Hello World!\", got:\n{output}"
-        ),
-        "fannkuch" => assert!(
-            output.contains("3968050") && output.contains("Pfannkuchen(12) = 65"),
-            "{program}/{language}: expected the fannkuch(12) reference output, got:\n{output}"
-        ),
-        _ => unreachable!(),
+    for expected in spec.expect {
+        assert!(
+            output.contains(expected),
+            "{program}/{language}: expected the output to contain {expected:?}, got:\n{output}"
+        );
     }
 
     let stats = parse_plugin_stats(

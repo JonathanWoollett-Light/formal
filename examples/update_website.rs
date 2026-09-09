@@ -23,7 +23,8 @@ fn main() {
             .expect("failed to read tests/comparisons/metrics.prom"),
     );
     let html = std::fs::read_to_string(&html_path).expect("failed to read index.html");
-    match support::update_html(&html, &metrics) {
+    let sources = support::read_sources(manifest).expect("failed to read the panel sources");
+    match support::update_html(&html, &metrics, &sources) {
         Ok(updated) => {
             if updated == html {
                 println!("index.html is already in sync with tests/comparisons/metrics.prom");
