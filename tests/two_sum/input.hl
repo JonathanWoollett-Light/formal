@@ -1,8 +1,8 @@
 # Two Sum, the canonical LeetCode fixture: `nums = [2 7 11 15]` with target 9,
 # whose answer is the index pair (0, 1). This is the optimal O(n) solution, the
 # hash map: walk the array once, and for each value look up its complement
-# among the values already seen. `require` pins the flag and both indices, so a
-# `Valid` outcome IS the proof that the table found (0, 1) for this input.
+# among the values already seen. `require` pins both indices, so a `Valid`
+# outcome IS the proof that the table found (0, 1) for this input.
 #
 # `std` has no map, so the table is the honest open-addressing one: three
 # parallel arrays (occupancy, key, the index the key was seen at), linear

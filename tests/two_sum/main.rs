@@ -5,9 +5,10 @@ use common::*;
 use formal::*;
 
 /// Two Sum proven correct at compile time: over `nums = [2 7 11 15]` with
-/// target 9, the O(n^2) scan finds the pair (0, 1), asserted by the three
-/// `require`s on the found flag and both indices. Exercises computed indexing
-/// (`&nums + i*4`) inside a nested loop and `print`'s zero digit (index 0 is
+/// target 9, the O(n) hash map finds the pair (0, 1), asserted by the two
+/// `require`s on the indices. Exercises an open-addressing table indexed by a
+/// value loaded out of memory, the canonical non-negative remainder over a
+/// complement that goes negative, and `print`'s zero digit (index 0 is
 /// printed). Runs under `qemu-riscv64` and writes `0 1`.
 #[test]
 fn two_sum() {

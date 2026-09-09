@@ -990,11 +990,45 @@ the body is translated afresh:
   so the body's `if typeof param == i64` arm is taken), used to print a computed
   value, e.g. `print(a6)`.
 
-The body is **hygienic**: any local definition in it (`name: <locality> …`) is
-renamed to a fresh label per call (`__local0`, …, on a counter separate from the
-branch labels so renaming never perturbs them), so two calls do not collide on
+The body is **hygienic**: any local definition in it (`name: …`, by the same
+test the statement dispatcher uses, so an elided locality counts) is renamed to
+a fresh label per call (`__local0`, …, on a counter separate from the branch
+labels so renaming never perturbs them), so two calls do not collide on
 storage -- e.g. `print`'s integer scratch buffer, which two `print(int)`s would
-otherwise both define.
+otherwise both define. The parameter binding and those renames are applied in
+**one** pass, not one after another: sequential substitution let a rename
+rewrite the binding's own output, so `f(t0)` on a body that declares its own
+`t0` passed the local in place of the argument.
+
+**`return` and the call that takes a value.** A body's last statement may be
+`return <expression>`, and a call may then be assigned: `a1 = double(a0)`.
+Because the body is inlined, `return` is **not a jump**. It is the assignment
+to whatever the call site asked for, so it accepts exactly the right-hand
+sides an assignment accepts and emits exactly the one line that assignment
+emits. `def double(x): return x + x` called as `a1 = double(a0)` is one
+instruction, `add a1, a0, a0`: naming the operation costs nothing.
+
+A call whose value is dropped (`f(a0)` as a statement) is allowed; the
+`return` simply emits nothing, though its expression is still checked. Asking
+for a value from a body that produces none (`a0 = f(1)` where `f` never
+returns) is an error, which under `if typeof` also catches the case where the
+arm that would have returned is not the arm taken.
+
+`return` is confined to the body's **tail**. A `return` inside an `if` or a
+`while` is refused, because skipping the rest of the body needs a jump to a
+label the source never wrote, and the language has neither `goto` nor `break`;
+the message says to compute the result into a register and return that. A
+compile-time `if typeof` arm is exempt, since it is spliced with no branch, so
+its tail is still the body's tail: that is what lets a polymorphic `def` end
+each arm in its own `return`. The front-end tracks this by counting **runtime**
+blocks only. The cost of the restriction is the flag idiom that `two_sum`
+already uses for its probe loops, and the emitted code is the same either way.
+
+A call must be the **whole** right-hand side: `t0 = f(a0) + f(a0)` is refused,
+because evaluating a call inside a larger expression needs a scratch register
+the language has not decided how to allocate ([§11](#11-design-notes--roadmap)).
+A `def` may not be named `type` or `csr`, which would shadow the assignment
+forms.
 
 A `def` itself emits **no** dialect lines: it is inert until called. The
 translator prepends [std/std.hl](std/std.hl) (the `STD` constant,

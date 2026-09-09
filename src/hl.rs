@@ -40,6 +40,13 @@
 //!     wfi
 //! ```
 //!
+//! A `def` is inlined, so `return <value>` is not a jump: it is the assignment
+//! to whatever the call site asked for. `def double(x): return x + x` called
+//! as `a1 = double(a0)` is the single line `add a1, a0, a0`. It is therefore
+//! confined to the body's tail, since skipping the rest of a body would need a
+//! jump to a label the source never wrote; a compile-time `if typeof` arm is
+//! exempt, because it is spliced with no branch.
+//!
 //! Control flow is structured only: `if` and `while` take an indented block,
 //! and `require <cond>` is `if not <cond>: fail` in one line. The surface
 //! language has no `goto` and no labels; the labels in the dialect output are
@@ -106,6 +113,9 @@ const LOCALITIES: [&str; 3] = ["global", "thread", "_"];
 /// an inferred one would almost always have picked, without paying for the
 /// search. Write `_` to ask for the search instead.
 const DEFAULT_LOCALITY: &str = "thread";
+/// Call-shaped forms the assignment translator owns, which a `def` may not
+/// shadow: `t0 = type(x)` and `t0 = csr(x)`.
+const BUILTIN_CALLS: [&str; 2] = ["type", "csr"];
 
 fn is_register(token: &str) -> bool {
     REGISTERS.contains(&token)
@@ -205,6 +215,8 @@ pub fn translate(source: &str) -> Result<String, TranslateError> {
         locals: 0,
         functions: HashMap::new(),
         depth: 0,
+        returns: Vec::new(),
+        runtime_depth: 0,
     };
     if let Some(first) = lines.first() {
         let indent = first.indent;
@@ -229,6 +241,20 @@ pub fn translate(source: &str) -> Result<String, TranslateError> {
     Ok(text)
 }
 
+/// One inlined call's return context. `def`s are inlined, so a `return`
+/// is not a jump: it is an assignment to whatever the caller asked for, and
+/// the stack is here only because inlining nests.
+struct ReturnSlot {
+    /// Where the caller wants the value, `None` for a bare statement call
+    /// (whose returned value is simply dropped).
+    destination: Option<String>,
+    /// The runtime block depth at the call, so a `return` can tell "the tail
+    /// of the body" from "inside an `if` or a `while`", which would need a
+    /// jump the language does not have.
+    entry_depth: usize,
+    fired: bool,
+}
+
 struct Translator {
     out: Vec<String>,
     labels: usize,
@@ -241,6 +267,12 @@ struct Translator {
     functions: HashMap<String, FuncDef>,
     /// Inlining depth, a guard against a `def` that calls itself.
     depth: usize,
+    /// The call being inlined, innermost last. Empty outside a `def`.
+    returns: Vec<ReturnSlot>,
+    /// How many runtime `if`/`while` bodies enclose the statement being
+    /// translated. A compile-time `if typeof` arm does not count: it is
+    /// spliced with no branch, so its tail is still the body's tail.
+    runtime_depth: usize,
 }
 
 impl Translator {
@@ -343,7 +375,13 @@ impl Translator {
     /// to the literal (`param` in the body becomes the value, as `exit` uses
     /// it). Generated labels stay unique because the body is translated through
     /// the same fresh-label counter as everything else.
-    fn inline_call(&mut self, name: &str, arg: &str, number: usize) -> Result<(), TranslateError> {
+    fn inline_call(
+        &mut self,
+        name: &str,
+        arg: &str,
+        number: usize,
+        destination: Option<&str>,
+    ) -> Result<(), TranslateError> {
         let err = |message: String| TranslateError {
             line: number,
             message,
@@ -383,7 +421,11 @@ impl Translator {
             if let Some((decl, rest)) = l.text.trim().split_once(':') {
                 let decl = decl.trim();
                 let rest = rest.trim_start();
-                if is_label(decl) && (rest.starts_with("thread") || rest.starts_with("global")) {
+                // Any define, by the same test the statement dispatcher uses:
+                // a bare label, then a non-empty annotation. Matching only
+                // `thread`/`global` here missed a define that elides its
+                // locality, and two calls then shared one buffer.
+                if is_label(decl) && !rest.is_empty() {
                     subs.push((decl.to_string(), self.fresh_local()));
                 }
             }
@@ -392,10 +434,7 @@ impl Translator {
             .body
             .iter()
             .map(|l| {
-                let mut text = l.text.clone();
-                for (from, to) in &subs {
-                    text = substitute_token(&text, from, to);
-                }
+                let text = substitute_tokens(&l.text, &subs);
                 Line {
                     number: l.number,
                     indent: l.indent,
@@ -403,6 +442,12 @@ impl Translator {
                 }
             })
             .collect();
+        self.returns.push(ReturnSlot {
+            destination: destination.map(str::to_string),
+            entry_depth: self.runtime_depth,
+            fired: false,
+        });
+        let mut translated = Ok(());
         if let Some(first) = inlined.first() {
             let indent = first.indent;
             let mut position = 0;
@@ -410,10 +455,19 @@ impl Translator {
             // site and name the function, rather than surfacing a std-internal
             // line. A mismatch like `exit("x")` (a string bound where the body
             // uses the parameter as a value) lands here.
-            self.block(&inlined, &mut position, indent)
-                .map_err(|e| err(format!("while inlining `{name}`: {}", e.message)))?;
+            translated = self
+                .block(&inlined, &mut position, indent)
+                .map_err(|e| err(format!("while inlining `{name}`: {}", e.message)));
         }
+        let slot = self.returns.pop();
         self.depth -= 1;
+        translated?;
+        // Asking for a value from a body that does not produce one is a
+        // mistake worth naming: with `if typeof` dispatch it also catches the
+        // case where the arm that *would* have returned was not the one taken.
+        if destination.is_some() && !slot.is_some_and(|slot| slot.fired) {
+            return Err(err(format!("`{name}` does not return a value")));
+        }
         Ok(())
     }
 
@@ -616,7 +670,10 @@ impl Translator {
             let condition = header_condition(rest).map_err(err)?;
             let end = self.fresh_label();
             self.out.push(condition.branch(false, &end));
-            self.body(lines, position, line)?;
+            self.runtime_depth += 1;
+            let body = self.body(lines, position, line);
+            self.runtime_depth -= 1;
+            body?;
             self.out.push(format!("{end}:"));
             return Ok(());
         }
@@ -628,7 +685,10 @@ impl Translator {
             let end = self.fresh_label();
             self.out.push(format!("{start}:"));
             self.out.push(condition.branch(false, &end));
-            self.body(lines, position, line)?;
+            self.runtime_depth += 1;
+            let body = self.body(lines, position, line);
+            self.runtime_depth -= 1;
+            body?;
             self.out.push(format!("    j {start}"));
             self.out.push(format!("{end}:"));
             return Ok(());
@@ -655,6 +715,14 @@ impl Translator {
             if !is_label(param) {
                 return Err(err(format!("invalid parameter name `{param}`")));
             }
+            // `t0 = type(x)` and `t0 = csr(x)` are assignment forms, and the
+            // call branch above runs first, so a def by either name would
+            // silently take them over.
+            if BUILTIN_CALLS.contains(&name) {
+                return Err(err(format!(
+                    "`{name}` is a builtin, so a `def` cannot take that name"
+                )));
+            }
             let body = self.capture_body(lines, position, line)?;
             self.functions.insert(
                 name.to_string(),
@@ -672,8 +740,46 @@ impl Translator {
             let name = stripped[..open].trim();
             if stripped.ends_with(')') && self.functions.contains_key(name) {
                 let arg = stripped[open + 1..stripped.len() - 1].trim();
-                return self.inline_call(name, arg, line.number);
+                return self.inline_call(name, arg, line.number, None);
             }
+        }
+
+        // `return <value>`: a `def` is inlined, so this is not a jump. It
+        // assigns the value to whatever the call site asked for, which is only
+        // meaningful in the body's tail: anywhere else the statements after it
+        // would still run, and skipping them needs a jump the language does
+        // not have. So it is allowed at the tail of a body, or at the tail of
+        // a compile-time `if typeof` arm (spliced with no branch, so still the
+        // tail), and refused inside a runtime `if`/`while`.
+        if stripped == "return" || stripped.starts_with("return ") {
+            let value = stripped["return".len()..].trim();
+            let Some((destination, entry_depth)) = self
+                .returns
+                .last()
+                .map(|slot| (slot.destination.clone(), slot.entry_depth))
+            else {
+                return Err(err("`return` outside a `def`".to_string()));
+            };
+            if value.is_empty() {
+                return Err(err("`return` needs a value".to_string()));
+            }
+            if self.runtime_depth > entry_depth {
+                return Err(err(
+                    "`return` inside an `if`/`while` would have to jump over the rest of the body, which this language cannot do; set a register and `return` it from the tail instead"
+                        .to_string(),
+                ));
+            }
+            // Validated whether or not the caller wanted the value, so a typo
+            // in a dropped return is still an error.
+            let assignment =
+                translate_assignment(destination.as_deref().unwrap_or("t0"), value).map_err(err)?;
+            if destination.is_some() {
+                self.out.push(assignment);
+            }
+            if let Some(slot) = self.returns.last_mut() {
+                slot.fired = true;
+            }
+            return Ok(());
         }
 
         // Removed constructs get pointed at their replacements.
@@ -681,6 +787,35 @@ impl Translator {
             return Err(err(
                 "`goto` is not part of the language; use `if`/`while` blocks".to_string(),
             ));
+        }
+
+        // `<reg> = <name>(<arg>)`: a call whose returned value is assigned.
+        // Checked before the assignment branch, which cannot express it (that
+        // returns one line, and a call expands to a whole body), and gated on
+        // the name being a *defined* function so the builtins `type(...)` and
+        // `csr(...)` still fall through to it.
+        if let Some((lhs, rhs)) = stripped.split_once('=') {
+            let (lhs, rhs) = (lhs.trim(), rhs.trim());
+            if is_register(lhs) {
+                if let Some(open) = rhs.find('(') {
+                    let name = rhs[..open].trim();
+                    if rhs.ends_with(')') && self.functions.contains_key(name) {
+                        let arg = rhs[open + 1..rhs.len() - 1].trim();
+                        // The call must be the WHOLE right-hand side. Without
+                        // this, `t0 = f(1) + g(2)` matches (it opens with `f(`
+                        // and ends with `)`) and the argument comes out as
+                        // `1) + g(2`. A call inside a larger expression is not
+                        // supported: it would need a scratch register the
+                        // language has not decided how to allocate.
+                        if unquoted_paren(arg) {
+                            return Err(err(format!(
+                                "`{rhs}` is not a single call: a call cannot be part of a larger expression, so assign it on its own line first"
+                            )));
+                        }
+                        return self.inline_call(name, arg, line.number, Some(lhs));
+                    }
+                }
+            }
         }
 
         // `name: <locality> <type> = [v, ...]`: a definition with an
@@ -1253,26 +1388,64 @@ fn parse_string_literal(arg: &str) -> Result<Vec<u8>, String> {
 /// Replaces whole-token occurrences of `from` with `to` in `text` (an
 /// identifier bounded by non-identifier characters), to bind a `def`
 /// parameter to a call's argument when inlining the body.
-fn substitute_token(text: &str, from: &str, to: &str) -> String {
+/// Whether `text` contains a parenthesis outside a string literal, which is
+/// how a call that is only part of a larger expression is told from one that
+/// is the whole of it.
+fn unquoted_paren(text: &str) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '(' | ')' if !quoted => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Applies every substitution in ONE left-to-right pass, so each token is
+/// rewritten at most once. Doing them one after another let a later rename
+/// rewrite an earlier one's output: binding a parameter to `t0` and then
+/// freshening a body-local also called `t0` turned the argument into the
+/// local. Longer names are tried first so no substitution is a prefix of
+/// another's match.
+fn substitute_tokens(text: &str, subs: &[(String, String)]) -> String {
     fn is_ident(c: char) -> bool {
         c.is_ascii_alphanumeric() || c == '_'
     }
+    let mut order: Vec<&(String, String)> = subs.iter().collect();
+    order.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(pos) = rest.find(from) {
-        let (before, matched) = rest.split_at(pos);
-        let after = &matched[from.len()..];
-        out.push_str(before);
-        let before_ok = before.chars().next_back().is_none_or(|c| !is_ident(c));
-        let after_ok = after.chars().next().is_none_or(|c| !is_ident(c));
-        if before_ok && after_ok {
-            out.push_str(to);
-        } else {
-            out.push_str(from);
+    let mut at = 0;
+    while at < text.len() {
+        let before_ok = at == 0 || !is_ident(text[..at].chars().next_back().unwrap());
+        let matched = before_ok
+            .then(|| {
+                order.iter().find(|(from, _)| {
+                    text[at..].starts_with(from.as_str())
+                        && text[at + from.len()..]
+                            .chars()
+                            .next()
+                            .is_none_or(|c| !is_ident(c))
+                })
+            })
+            .flatten();
+        match matched {
+            Some((from, to)) => {
+                out.push_str(to);
+                at += from.len();
+            }
+            None => {
+                // Step a whole character, so a multi-byte one is not split.
+                let ch = text[at..].chars().next().unwrap();
+                out.push(ch);
+                at += ch.len_utf8();
+            }
         }
-        rest = after;
     }
-    out.push_str(rest);
     out
 }
 

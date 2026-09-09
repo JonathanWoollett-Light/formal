@@ -63,6 +63,42 @@ const MALFORMED: &[(&str, &str)] = &[
         "v: glbal u32\nexit(0)\n",
         "a misspelt locality reads as part of the type, and is named as such",
     ),
+    (
+        "return 5\nexit(0)\n",
+        "`return` outside a `def`",
+    ),
+    (
+        "def f(x):\n    return\na0 = f(1)\nexit(0)\n",
+        "`return` with no value",
+    ),
+    (
+        "def f(x):\n    t1 = 0\n    if x == t1:\n        return x\n    return t1\na0 = 3\na1 = f(a0)\nexit(0)\n",
+        "an early `return` inside an `if` needs a jump the language does not have",
+    ),
+    (
+        "def f(x):\n    t1 = 0\n    while x != t1:\n        return x\n    return t1\na0 = 3\na1 = f(a0)\nexit(0)\n",
+        "an early `return` inside a `while`",
+    ),
+    (
+        "def f(x):\n    t0 = x\na0 = f(1)\nexit(0)\n",
+        "assigning from a `def` that returns nothing",
+    ),
+    (
+        "def f(x):\n    return nonsense\nf(1)\nexit(0)\n",
+        "a bad expression in a dropped `return` is still checked",
+    ),
+    (
+        "def f(x):\n    return x\na0 = 1\nt0 = f(a0) + f(a0)\nexit(0)\n",
+        "a call may not be part of a larger expression",
+    ),
+    (
+        "def type(x):\n    return x\nexit(0)\n",
+        "a `def` may not shadow the builtin `type`",
+    ),
+    (
+        "def csr(x):\n    return x\nexit(0)\n",
+        "a `def` may not shadow the builtin `csr`",
+    ),
     // Structured-statement headers and conditions.
     (
         "if t0 == t1:\nexit(0)\n",

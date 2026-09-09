@@ -1,0 +1,65 @@
+# `return` from an inlined `def`. A `def` has no stack and no `ret`, so a
+# `return` is not a jump: it is the assignment to whatever the call site asked
+# for. `a1 = double(a0)` therefore lowers to the single instruction the body's
+# last statement was going to emit anyway, writing straight into `a1`, which is
+# the property this test pins.
+#
+# `slot` is the canonical non-negative remainder `((k % cap) + cap) % cap` that
+# `two_sum` computes twice inline and `runtime_input` once. It is the first
+# thing in the language worth naming, because it is the part that is easy to
+# get wrong: RISC-V `rem` takes the dividend's sign, so a bare `%` on a
+# negative key indexes a table backwards.
+#
+# `kind` is the polymorphic case: `if typeof` is resolved by the front-end and
+# emits no branch, so a `return` at the end of an arm is still the body's tail.
+# Only the taken arm is translated, so only its `return` fires.
+#
+# Registers: a2 = the capacity, a0/a1/a3/a4/a5 = arguments and results.
+
+def double(x):
+    return x + x
+
+def slot(k):
+    t3 = k % a2
+    t3 = t3 + a2
+    return t3 % a2
+
+def kind(v):
+    if typeof v == i64:
+        return v
+    if typeof v == [u8]:
+        return &v
+
+a2 = 8
+
+# a plain value in, a value out
+a0 = 5
+a1 = double(a0)
+t0 = 10
+require a1 == t0
+
+# a negative key still lands inside the table
+a0 = -2
+a3 = slot(a0)
+t0 = 6
+require a3 == t0
+
+# the same call with a non-negative key
+a0 = 11
+a4 = slot(a0)
+t0 = 3
+require a4 == t0
+
+# the integer arm of a polymorphic def
+a0 = 42
+a5 = kind(a0)
+t0 = 42
+require a5 == t0
+
+print(a1)
+print(" ")
+print(a3)
+print(" ")
+print(a4)
+print("\n")
+exit(0)
