@@ -137,12 +137,12 @@ const MALFORMED: &[(&str, &str)] = &[
         "a one-name tuple pattern",
     ),
     (
-        "def f(x: i64):\n    t0 = x\ndef f(y):\n    t0 = y\nexit(0)\n",
-        "overlapping overloads",
+        "def f([a, b]: [i32, _]):\n    t0 = a\ndef f([a, b]: [_, u8]):\n    t0 = b\nexit(0)\n",
+        "incomparable overlapping overloads",
     ),
     (
-        "def print(x):\n    t0 = x\nexit(0)\n",
-        "a user `def` overlapping a std one",
+        "def print(x: i64):\n    t0 = x\nexit(0)\n",
+        "a user `def` duplicating a std one",
     ),
     (
         "def f(x: i64):\n    t0 = x\nf(\"s\")\nexit(0)\n",

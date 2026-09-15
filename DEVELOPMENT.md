@@ -984,7 +984,11 @@ more, `[a, b]`, which a call matches with a tuple argument `f([a0, a1])`: a
 tuple argument is a list of *tokens*, so destructuring is just a substitution
 map with one entry per name, and nothing is materialised in memory. That is
 how a function takes several values, and why `def` never grew a second
-parameter: a function takes one thing, and a tuple is one thing.
+parameter: a function takes one thing, and a tuple is one thing. The brackets
+after a tuple pattern's colon are a *tuple* type, one pattern per name
+(`[a, b]: [i64, [..]]`); after a bare name they are an *array* type
+(`x: [i64, i64]`, one variable of two elements). The pattern's shape says
+which, and a one-name tuple is refused so there is no third reading.
 
 The tuple has a **comma spelling** too, in a header and in a call alike:
 `def f(a, b, c):` is `def f([a, b, c]):`, `def f(a: i64, b: [..]):` is
@@ -1018,14 +1022,22 @@ A spelled-out pattern met by a variable whose elements the front-end cannot
 see (defined after the call, or with an inferred type) is an error naming the
 variable, not a silent miss: define it above the call, or accept any array
 with `[..]`. An overload fits a call when the shapes agree (tuple or not), the
-arities agree, and every position accepts its argument. Exactly one must fit.
-Two overloads that could both fit some call are refused where the second is
-**defined**, not at each call: same shape and arity, and at every position
-some argument could satisfy both patterns (two spelled-out lists overlap only
-when they have the same length and agree, or leave `_`, at every element).
-This also ends the old silent behaviour where a second `def` of the same name
-replaced the first, and it means a user `def print(x)` is an error naming the
-std overload it overlaps rather than a quiet replacement.
+arities agree, and every position accepts its argument. Every fit is a
+candidate, and the **most specific** is taken, the standard rule for
+overloading: at each position an untyped or `_` position is less specific
+than a typed one, `[..]` is less specific than a spelled-out list, and a
+spelled-out list is less specific than one that replaces some of its `_`
+elements with types; an overload is more specific than another when it is so
+at some position and no less at any. So `def f(x)` may sit under
+`def f(x: i64)` and `def f(x: [..])` as the case neither covers, and a user
+`def print(x)` is legal, if never taken, beside std's two. What is refused
+where the second is **defined**, not at each call: an exact duplicate, and an
+overlap where each is more specific somewhere (`[i32, _]` against `[_, u8]`),
+since a call fitting both would have no best match. This also ends the old
+silent behaviour where a second `def` of the same name replaced the first.
+A spelled-out pattern the front-end cannot check (its variable undefined at
+the call, or of inferred type) is an error if it could have outranked the
+overload otherwise taken.
 
 `if typeof` stays as the primitive underneath (§ below), but it is not the
 same thing: two `if typeof` arms of the same category both translate, while

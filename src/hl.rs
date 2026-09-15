@@ -83,6 +83,7 @@
 //! inference). It lowers directly, the width visible at the call site:
 //! 1 = `lb`/`sb`, 2 = `lh`/`sh`, 4 = `lw`/`sw`, 8 = `ld`.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -225,6 +226,57 @@ fn fits(pattern: &Option<TypePattern>, shape: &ArgShape) -> Fit {
     }
 }
 
+/// How two positions compare in specificity, for choosing among overloads
+/// that both fit a call: `Greater` means `a` accepts strictly fewer arguments
+/// than `b`. An untyped or `_` position is less specific than a typed one,
+/// `[..]` less specific than a spelled-out list, and a spelled-out list less
+/// specific than one that replaces some of its `_` elements with types.
+/// `None` is incomparable: the two are disjoint (a scalar and an array, or
+/// lists of different lengths or with a concrete mismatch), which never both
+/// fit, or each is more specific than the other somewhere (`[i32, _]`
+/// against `[_, u8]`), which a call fitting both could not resolve.
+fn specificity(a: &Option<TypePattern>, b: &Option<TypePattern>) -> Option<Ordering> {
+    use TypePattern::*;
+    match (a, b) {
+        (None, None) => Some(Ordering::Equal),
+        (None, Some(_)) => Some(Ordering::Less),
+        (Some(_), None) => Some(Ordering::Greater),
+        (Some(Scalar), Some(Scalar)) => Some(Ordering::Equal),
+        (Some(Scalar), Some(_)) | (Some(_), Some(Scalar)) => None,
+        (Some(AnyArray), Some(AnyArray)) => Some(Ordering::Equal),
+        (Some(AnyArray), Some(Array(_))) => Some(Ordering::Less),
+        (Some(Array(_)), Some(AnyArray)) => Some(Ordering::Greater),
+        (Some(Array(x)), Some(Array(y))) => {
+            if x.len() != y.len() {
+                return None;
+            }
+            let mut order = Ordering::Equal;
+            for (p, q) in x.iter().zip(y) {
+                let here = match (p, q) {
+                    (None, None) => Ordering::Equal,
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (Some(p), Some(q)) if p == q => Ordering::Equal,
+                    _ => return None,
+                };
+                order = combine(order, here)?;
+            }
+            Some(order)
+        }
+    }
+}
+
+/// Folds per-position orderings into one: `Equal` defers to the other,
+/// agreement keeps the direction, and opposite directions are incomparable.
+fn combine(so_far: Ordering, here: Ordering) -> Option<Ordering> {
+    match (so_far, here) {
+        (Ordering::Equal, h) => Some(h),
+        (s, Ordering::Equal) => Some(s),
+        (s, h) if s == h => Some(s),
+        _ => None,
+    }
+}
+
 /// Whether some argument could satisfy both positions.
 fn patterns_overlap(a: &Option<TypePattern>, b: &Option<TypePattern>) -> bool {
     use TypePattern::*;
@@ -269,11 +321,25 @@ impl Overload {
         format!("{name}({})", self.spec)
     }
 
+    /// How this overload compares to another in specificity, position by
+    /// position (see [`specificity`]); `None` when they differ in shape or
+    /// arity, or are incomparable.
+    fn compare(&self, other: &Overload) -> Option<Ordering> {
+        if self.tuple != other.tuple || self.kinds.len() != other.kinds.len() {
+            return None;
+        }
+        let mut order = Ordering::Equal;
+        for (a, b) in self.kinds.iter().zip(&other.kinds) {
+            order = combine(order, specificity(a, b)?)?;
+        }
+        Some(order)
+    }
+
     /// Whether some call could fit both overloads: same shape, same arity,
-    /// and at every position some argument could satisfy both patterns. Two
-    /// overlapping overloads would make every such call ambiguous, so the
-    /// second is refused where it is written, and a call then fits at most
-    /// one.
+    /// and at every position some argument could satisfy both patterns.
+    /// Overlapping overloads may coexist when one is strictly more specific
+    /// (a call fitting both takes it); a duplicate or an incomparable overlap
+    /// is refused where the second is written.
     fn overlaps(&self, other: &Overload) -> bool {
         self.tuple == other.tuple
             && self.kinds.len() == other.kinds.len()
@@ -603,22 +669,40 @@ impl Translator {
                 fitting.push(o);
             }
         }
-        // Overlapping overloads are refused where they are defined, so at
-        // most one fits here.
-        debug_assert!(fitting.len() <= 1);
-        let Some(func) = fitting.first().map(|o| (*o).clone()) else {
-            if let Some(o) = unchecked.first() {
-                let culprit = o
-                    .kinds
-                    .iter()
-                    .zip(&shapes)
-                    .zip(&elements)
-                    .find(|((w, g), _)| fits(w, g) == Fit::Unknown)
-                    .map(|(_, e)| e.trim())
-                    .unwrap_or(arg);
+        // Several may fit when one is a more specific spelling of another
+        // (`f(x: i64)` under `f(x)`): the most specific wins. Overlaps with
+        // no such order are refused at definition, so a fitting set is a
+        // chain with a unique most specific member.
+        let best = fitting.iter().copied().find(|m| {
+            fitting
+                .iter()
+                .all(|o| std::ptr::eq(*o, *m) || m.compare(o) == Some(Ordering::Greater))
+        });
+        // A spelled-out pattern the front-end could not check might have
+        // outranked the best fit; that is not a guess to make.
+        if let Some(o) = unchecked
+            .iter()
+            .find(|o| best.is_none_or(|b| o.compare(b) != Some(Ordering::Less)))
+        {
+            let culprit = o
+                .kinds
+                .iter()
+                .zip(&shapes)
+                .zip(&elements)
+                .find(|((w, g), _)| fits(w, g) == Fit::Unknown)
+                .map(|(_, e)| e.trim())
+                .unwrap_or(arg);
+            return Err(err(format!(
+                "`{}` spells out its array's elements, but `{culprit}` has no define before this call (or its type is inferred), so it cannot be checked: define it above the call, or accept any array with `[..]`",
+                o.signature(name)
+            )));
+        }
+        let Some(func) = best.cloned() else {
+            if !fitting.is_empty() {
+                let signatures: Vec<String> = fitting.iter().map(|o| o.signature(name)).collect();
                 return Err(err(format!(
-                    "`{}` spells out its array's elements, but `{culprit}` has no define before this call (or its type is inferred), so it cannot be checked: define it above the call, or accept any array with `[..]`",
-                    o.signature(name)
+                    "`{name}({arg})` is ambiguous between {}",
+                    signatures.join(" and ")
                 )));
             }
             let signatures: Vec<String> = overloads.iter().map(|o| o.signature(name)).collect();
@@ -997,13 +1081,30 @@ impl Translator {
                 },
             };
             let overloads = self.functions.entry(name.to_string()).or_default();
-            if let Some(twin) = overloads.iter().find(|o| o.overlaps(&new)) {
-                return Err(err(format!(
-                    "`def {}` overlaps `def {}` ({}): both accept the same call, and the front-end dispatches on arity and on scalar-versus-array only",
-                    new.signature(name),
-                    twin.signature(name),
-                    twin.origin
-                )));
+            // An overlap is fine when one overload is strictly more specific,
+            // since a call fitting both then has a best match. A duplicate, or
+            // an overlap where each is more specific somewhere, is refused
+            // here rather than at every call that could not be resolved.
+            for twin in overloads.iter().filter(|o| o.overlaps(&new)) {
+                match new.compare(twin) {
+                    Some(Ordering::Equal) => {
+                        return Err(err(format!(
+                            "`def {}` duplicates `def {}` ({})",
+                            new.signature(name),
+                            twin.signature(name),
+                            twin.origin
+                        )));
+                    }
+                    None => {
+                        return Err(err(format!(
+                            "`def {}` overlaps `def {}` ({}) and neither is more specific: a call fitting both could not be resolved",
+                            new.signature(name),
+                            twin.signature(name),
+                            twin.origin
+                        )));
+                    }
+                    Some(_) => {}
+                }
             }
             overloads.push(new);
             return Ok(());

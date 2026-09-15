@@ -88,10 +88,13 @@ exit(0)
 fn overload_refusals_name_the_problem() {
     const CASES: &[(&str, &str)] = &[
         (
-            "def f(x: i64):\n    t0 = x\ndef f(y):\n    t0 = y\nexit(0)\n",
-            "overlaps `def f(x: i64)`",
+            "def f([a, b]: [i32, _]):\n    t0 = a\ndef f([a, b]: [_, u8]):\n    t0 = b\nexit(0)\n",
+            "neither is more specific",
         ),
-        ("def print(x):\n    t0 = x\nexit(0)\n", "std/std.hl line"),
+        (
+            "def print(x: i64):\n    t0 = x\nexit(0)\n",
+            "duplicates `def print(msg: i64)` (std/std.hl line",
+        ),
         (
             "def f(x: i64):\n    return x\na0 = f(\"s\")\nexit(0)\n",
             "no overload of `f` takes",
@@ -196,5 +199,76 @@ exit(0)
     assert!(
         translated.contains("li t1, 110"),
         "the `n` inside the string literal must not be substituted:\n{translated}"
+    );
+}
+
+/// When several overloads fit, the most specific is taken: a typed position
+/// over an untyped one, a spelled-out list over `[..]`, and `[..]` over
+/// nothing. So a general `def f(x)` can sit under the cases it does not cover.
+#[test]
+fn the_most_specific_overload_wins() {
+    const PROGRAM: &str = "\
+data: [u8]*2
+def f(x):
+    return x
+def f(x: i64):
+    return x + x
+def f(x: [..]):
+    return &x
+def f(x: [u8, u8]):
+    t0 = &x
+    return t0[1]
+a0 = 3
+a1 = f(a0)
+a2 = f(data)
+a3 = f(\"hi\")
+exit(0)
+";
+    // `a1`: `i64` beats `_`. `a2`: `[u8, u8]` beats `[..]` beats `_`. `a3`: the
+    // string is three bytes with its NUL, so `[u8, u8]` does not fit and `[..]`
+    // beats `_`.
+    const DIALECT: &str = "    #$ data thread [u8 u8]
+    li a0, 3
+    add a1, a0, a0
+    la t0, data
+    #[ a2, 1(t0)
+    #$ __str0 thread [u8 u8 u8]
+    la t0, __str0
+    li t1, 104
+    sb t1, 0(t0)
+    li t1, 105
+    sb t1, 1(t0)
+    li t1, 0
+    sb t1, 2(t0)
+    la a3, __str0
+    li a0, 0
+    li a7, 93
+    ecall
+    #?
+";
+    let translated = hl::translate(PROGRAM).expect("hl translation failed");
+    assert_eq!(normalize(translated), normalize(DIALECT));
+}
+
+/// A user's general `def print(x)` is legal beside std's two overloads and
+/// never taken, since each of std's is more specific: `print(a0)` still
+/// lowers to std's integer formatter, not to the user's body.
+#[test]
+fn a_user_fallback_never_outranks_std() {
+    const PROGRAM: &str = "\
+def print(x):
+    t4 = x
+a0 = 7
+print(a0)
+exit(0)
+";
+    let translated = hl::translate(PROGRAM).expect("hl translation failed");
+    assert!(
+        !translated.contains("addi t4, a0, 0"),
+        "std's `print(msg: i64)` must win over the user's `print(x)`:\n{translated}"
+    );
+    assert!(
+        translated.contains("li a7, 64"),
+        "the std `write` syscall must be what runs:\n{translated}"
     );
 }
