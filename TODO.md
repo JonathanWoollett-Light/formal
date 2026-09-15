@@ -46,6 +46,11 @@ Short, medium and long terms things to do.
   rewrite sites in the audit, but the natural rule also refuses `exit(a0)`
   and `print(t0)`, which are correct. Needs flow analysis or a narrower rule.
 - Zero-arity `def f():` and a call `f()`; today a `def` needs a parameter.
+- An array pattern with a known element type and unknown length, `[u8, ..]`,
+  is the form `print` really wants: today it takes `[..]`, any array, and its
+  NUL walk only means anything over bytes. Deliberately not added yet: an
+  array pattern spells out every element or none, until a partial form earns
+  its place with a second use.
 - The other two big repetitions are still open and designed in
   DEVELOPMENT.md 11: the runtime index `x[i]` folded into syntax (`at` is its
   std spelling and owns `t0`/`t1`), and an immediate on the right of a

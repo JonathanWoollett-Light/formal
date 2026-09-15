@@ -41,11 +41,14 @@
 //! ```
 //!
 //! A `def` takes one thing. Several values travel as a tuple of tokens,
-//! `f([a0, a1])` against `def f([a, b]: [i64, i64]):`, which is a two-entry
+//! `f(a0, a1)` (or `f([a0, a1])`) against `def f(a, b):`, which is a two-entry
 //! substitution map and materialises nothing. Several `def`s of one name are
-//! overloads, resolved here by arity and by each argument's category (a
-//! register or integer is a scalar, a variable name or string an array); two
-//! that could both fit some call are refused where the second is defined.
+//! overloads, resolved here by arity and by each argument's shape: a register
+//! or integer is a scalar; a variable name or string is an array, whose
+//! element list is read back from the `#$` define already emitted, so a
+//! pattern that spells out its elements (`[i32, i32]`) is checked in full and
+//! `[..]` accepts any array. Two overloads that could both fit some call are
+//! refused where the second is defined.
 //!
 //! A `def` is inlined, so `return <value>` is not a jump: it is the assignment
 //! to whatever the call site asked for. `def double(x): return x + x` called
@@ -164,14 +167,79 @@ struct Line {
     std: bool,
 }
 
-/// What the stateless front-end can tell about a call argument: a register
-/// or an integer literal is a scalar value; a label or a string literal names
-/// storage. Nothing finer (a register's width is not knowable here), so this
-/// is also all a type pattern can dispatch on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
+/// What one header position accepts. A scalar type name accepts a register
+/// or an integer literal (the name checks nothing finer: a register's width is
+/// unknowable here). An array is either spelled out **in full**, `[i32, u8, _]`
+/// (`_` an element of any type; runs such as `[u8*3]` expand as in a define),
+/// or written `[..]`, any array at all; nothing in between. A spelled-out
+/// pattern is genuinely checked, against the element list of a string literal
+/// or of a variable whose define the front-end has already emitted, so it is a
+/// dispatch key and not a hint. `None` (untyped, or `_`) accepts anything.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum TypePattern {
     Scalar,
-    Array,
+    AnyArray,
+    Array(Vec<Option<String>>),
+}
+
+/// What the front-end can see of one call argument: a register or an integer
+/// literal is a scalar; a string literal or a variable name is an array whose
+/// element list is known when its `#$` define has already been emitted (a
+/// string's always has) and unknown otherwise.
+enum ArgShape {
+    Scalar,
+    Array(Option<Vec<String>>),
+}
+
+/// Whether an argument satisfies a header position.
+#[derive(PartialEq, Eq)]
+enum Fit {
+    Yes,
+    No,
+    /// A spelled-out array pattern against a variable whose elements the
+    /// front-end cannot see (not yet defined, or its type is inferred).
+    Unknown,
+}
+
+fn fits(pattern: &Option<TypePattern>, shape: &ArgShape) -> Fit {
+    use TypePattern::*;
+    match (pattern, shape) {
+        (None, _) => Fit::Yes,
+        (Some(Scalar), ArgShape::Scalar) => Fit::Yes,
+        (Some(Scalar), ArgShape::Array(_)) => Fit::No,
+        (Some(AnyArray | Array(_)), ArgShape::Scalar) => Fit::No,
+        (Some(AnyArray), ArgShape::Array(_)) => Fit::Yes,
+        (Some(Array(want)), ArgShape::Array(Some(have))) => {
+            let same = want.len() == have.len()
+                && want
+                    .iter()
+                    .zip(have)
+                    .all(|(w, h)| w.as_ref().is_none_or(|w| w == h));
+            if same {
+                Fit::Yes
+            } else {
+                Fit::No
+            }
+        }
+        (Some(Array(_)), ArgShape::Array(None)) => Fit::Unknown,
+    }
+}
+
+/// Whether some argument could satisfy both positions.
+fn patterns_overlap(a: &Option<TypePattern>, b: &Option<TypePattern>) -> bool {
+    use TypePattern::*;
+    match (a, b) {
+        (None, _) | (_, None) => true,
+        (Some(Scalar), Some(Scalar)) => true,
+        (Some(Scalar), _) | (_, Some(Scalar)) => false,
+        (Some(AnyArray), _) | (_, Some(AnyArray)) => true,
+        (Some(Array(x)), Some(Array(y))) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|(p, q)| p.is_none() || q.is_none() || p == q)
+        }
+    }
 }
 
 /// One overload of an inline function. `def f([a, b]: [i32, i32]):` is a
@@ -187,7 +255,7 @@ enum Kind {
 struct Overload {
     params: Vec<String>,
     tuple: bool,
-    kinds: Vec<Option<Kind>>,
+    kinds: Vec<Option<TypePattern>>,
     body: Vec<Line>,
     /// The parameter text as written, for error messages.
     spec: String,
@@ -202,10 +270,10 @@ impl Overload {
     }
 
     /// Whether some call could fit both overloads: same shape, same arity,
-    /// and at every position the two kinds could be the same (an untyped or
-    /// `_` position accepts either kind). Two overlapping overloads would make
-    /// every such call ambiguous, so the second is refused where it is
-    /// written, and a call then fits at most one.
+    /// and at every position some argument could satisfy both patterns. Two
+    /// overlapping overloads would make every such call ambiguous, so the
+    /// second is refused where it is written, and a call then fits at most
+    /// one.
     fn overlaps(&self, other: &Overload) -> bool {
         self.tuple == other.tuple
             && self.kinds.len() == other.kinds.len()
@@ -213,7 +281,7 @@ impl Overload {
                 .kinds
                 .iter()
                 .zip(&other.kinds)
-                .all(|(a, b)| a.is_none() || b.is_none() || a == b)
+                .all(|(a, b)| patterns_overlap(a, b))
     }
 }
 
@@ -447,9 +515,15 @@ impl Translator {
             ));
         }
         // The argument is one element, or a tuple `[e1, e2, ...]` of them.
+        // `f([a, b])` and `f(a, b)` are the same tuple call: a comma at the
+        // top level makes a tuple, brackets or not.
         let (elements, tuple) = match arg.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             Some(inner) => (split_top_level(inner, ','), true),
-            None => (vec![arg], false),
+            None => {
+                let pieces = split_top_level(arg, ',');
+                let tuple = pieces.len() > 1;
+                (pieces, tuple)
+            }
         };
         if tuple && elements.len() < 2 {
             return Err(err(format!(
@@ -471,25 +545,29 @@ impl Translator {
         // storage and binds to its label; an integer, a register or a label
         // binds as written. Its kind is what the overloads dispatch on.
         let mut bindings = Vec::with_capacity(elements.len());
-        let mut kinds = Vec::with_capacity(elements.len());
+        let mut shapes = Vec::with_capacity(elements.len());
         for element in &elements {
             let element = element.trim();
             if element.starts_with('"') {
                 let bytes = parse_string_literal(element).map_err(err)?;
                 let label = self.fresh_string();
                 self.emit_string_storage(&label, &bytes);
+                // The NUL the storage appends is an element too.
+                shapes.push(ArgShape::Array(Some(vec![
+                    "u8".to_string();
+                    bytes.len() + 1
+                ])));
                 bindings.push(label);
-                kinds.push(Kind::Array);
             } else if parse_int(element).is_some() || is_register(element) {
                 bindings.push(element.to_string());
-                kinds.push(Kind::Scalar);
+                shapes.push(ArgShape::Scalar);
             } else if is_reserved(element) {
                 return Err(err(format!(
                     "`{element}` is a reserved word, not a variable"
                 )));
             } else if is_label(element) {
+                shapes.push(ArgShape::Array(self.defined_elements(element)));
                 bindings.push(element.to_string());
-                kinds.push(Kind::Array);
             } else {
                 return Err(err(format!(
                     "a call argument must be a string, an integer, a register or a variable name, got `{element}`"
@@ -500,25 +578,53 @@ impl Translator {
         let Some(overloads) = self.functions.get(name) else {
             return Err(err(format!("unknown function `{name}`")));
         };
-        let fitting: Vec<&Overload> = overloads
-            .iter()
-            .filter(|o| {
-                o.tuple == tuple
-                    && o.kinds.len() == kinds.len()
-                    && o.kinds
-                        .iter()
-                        .zip(&kinds)
-                        .all(|(want, got)| want.is_none_or(|w| w == *got))
-            })
-            .collect();
+        // An overload fits when its shape and arity match and every position
+        // says yes. A spelled-out array pattern met by a variable the front-end
+        // cannot see into is neither a fit nor a miss, and is reported as such
+        // rather than folded into "no overload".
+        let mut fitting: Vec<&Overload> = Vec::new();
+        let mut unchecked: Vec<&Overload> = Vec::new();
+        for o in overloads {
+            if o.tuple != tuple || o.kinds.len() != shapes.len() {
+                continue;
+            }
+            let verdicts: Vec<Fit> = o
+                .kinds
+                .iter()
+                .zip(&shapes)
+                .map(|(w, g)| fits(w, g))
+                .collect();
+            if verdicts.contains(&Fit::No) {
+                continue;
+            }
+            if verdicts.contains(&Fit::Unknown) {
+                unchecked.push(o);
+            } else {
+                fitting.push(o);
+            }
+        }
         // Overlapping overloads are refused where they are defined, so at
         // most one fits here.
         debug_assert!(fitting.len() <= 1);
         let Some(func) = fitting.first().map(|o| (*o).clone()) else {
+            if let Some(o) = unchecked.first() {
+                let culprit = o
+                    .kinds
+                    .iter()
+                    .zip(&shapes)
+                    .zip(&elements)
+                    .find(|((w, g), _)| fits(w, g) == Fit::Unknown)
+                    .map(|(_, e)| e.trim())
+                    .unwrap_or(arg);
+                return Err(err(format!(
+                    "`{}` spells out its array's elements, but `{culprit}` has no define before this call (or its type is inferred), so it cannot be checked: define it above the call, or accept any array with `[..]`",
+                    o.signature(name)
+                )));
+            }
             let signatures: Vec<String> = overloads.iter().map(|o| o.signature(name)).collect();
             return Err(err(format!(
                 "no overload of `{name}` takes `{arg}` ({}); defined: {}",
-                describe_kinds(&kinds, tuple),
+                describe_shapes(&shapes, tuple),
                 signatures.join(", ")
             )));
         };
@@ -575,6 +681,38 @@ impl Translator {
             )));
         }
         Ok(())
+    }
+
+    /// The element list of a defined variable, read back from the `#$` line
+    /// already emitted for it: the dialect is the symbol table, so no second
+    /// one is kept. `None` when no define has been emitted yet (the variable
+    /// is defined after the call, or not at all) or when its type is left to
+    /// inference, both cases a spelled-out pattern cannot be checked against.
+    fn defined_elements(&self, label: &str) -> Option<Vec<String>> {
+        let prefix = format!("#$ {label} ");
+        let line = self
+            .out
+            .iter()
+            .rev()
+            .find(|l| l.trim_start().starts_with(&prefix))?;
+        // `#$ <name> <locality> <type...>`: the type is `_`, a scalar, or a
+        // bracketed space-separated list.
+        let mut tokens = line.split_whitespace().skip(3);
+        let first = tokens.next()?;
+        if first == "_" {
+            return None;
+        }
+        let Some(open) = first.strip_prefix('[') else {
+            return Some(vec![first.to_string()]);
+        };
+        Some(
+            std::iter::once(open)
+                .chain(tokens)
+                .map(|token| token.trim_end_matches(']'))
+                .filter(|token| !token.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
     }
 
     /// Lays a NUL-terminated byte string down in fresh thread-local storage:
@@ -1557,12 +1695,42 @@ fn parse_string_literal(arg: &str) -> Result<Vec<u8>, String> {
 struct ParameterSpec {
     params: Vec<String>,
     tuple: bool,
-    kinds: Vec<Option<Kind>>,
+    kinds: Vec<Option<TypePattern>>,
 }
 
-/// Parses what sits between a `def`'s parentheses: `x`, `x: TYPE`, `[a, b]`
-/// or `[a, b]: [T1, T2]`.
+/// Parses what sits between a `def`'s parentheses. One parameter: `x` or
+/// `x: TYPE`. A tuple, either bracketed, `[a, b]` or `[a, b]: [T1, T2]`, or in
+/// the comma spelling, `a, b` or `a: T1, b: T2` (a piece may leave its type
+/// off), which is the same thing written the way Python writes it.
 fn parse_parameter_spec(spec: &str) -> Result<ParameterSpec, String> {
+    let pieces = split_top_level(spec, ',');
+    if pieces.len() > 1 {
+        let mut names = Vec::with_capacity(pieces.len());
+        let mut kinds = Vec::with_capacity(pieces.len());
+        for piece in &pieces {
+            let (name, ty) = match split_top_level(piece, ':').as_slice() {
+                [name] => (name.trim(), None),
+                [name, ty] => (name.trim(), Some(ty.trim())),
+                _ => {
+                    return Err(format!(
+                        "expected `name` or `name: TYPE` for each parameter in `def ...({spec})`"
+                    ))
+                }
+            };
+            names.push(name);
+            kinds.push(match ty {
+                None => None,
+                Some(ty) => parse_type_pattern(ty)?,
+            });
+        }
+        check_parameter_names(&names, spec)?;
+        return Ok(ParameterSpec {
+            params: names.into_iter().map(str::to_string).collect(),
+            tuple: true,
+            kinds,
+        });
+    }
+
     let (pattern, type_text) = match split_top_level(spec, ':').as_slice() {
         [pattern] => (pattern.trim(), None),
         [pattern, ty] => (pattern.trim(), Some(ty.trim())),
@@ -1593,25 +1761,7 @@ fn parse_parameter_spec(spec: &str) -> Result<ParameterSpec, String> {
             names.first().copied().unwrap_or("")
         ));
     }
-    for name in &names {
-        if !is_label(name) {
-            return Err(format!("invalid parameter name `{name}`"));
-        }
-        if is_register(name) || is_reserved(name) {
-            return Err(format!(
-                "parameter `{name}` is a reserved word (a register, a type, a locality, `_` or `typeof`)"
-            ));
-        }
-    }
-    if let Some((_, twice)) = names
-        .iter()
-        .enumerate()
-        .find(|(i, n)| names[..*i].contains(n))
-    {
-        return Err(format!(
-            "parameter `{twice}` is named twice in `def ...({spec})`"
-        ));
-    }
+    check_parameter_names(&names, spec)?;
     let kinds = match type_text {
         None => vec![None; names.len()],
         Some(ty) if tuple => {
@@ -1631,10 +1781,10 @@ fn parse_parameter_spec(spec: &str) -> Result<ParameterSpec, String> {
             }
             parts
                 .iter()
-                .map(|p| kind_of_type(p.trim()))
+                .map(|p| parse_type_pattern(p.trim()))
                 .collect::<Result<_, _>>()?
         }
-        Some(ty) => vec![kind_of_type(ty)?],
+        Some(ty) => vec![parse_type_pattern(ty)?],
     };
     Ok(ParameterSpec {
         params: names.into_iter().map(str::to_string).collect(),
@@ -1643,23 +1793,95 @@ fn parse_parameter_spec(spec: &str) -> Result<ParameterSpec, String> {
     })
 }
 
-/// The dispatch kind a type pattern stands for, validated with the same
-/// parser `define` uses: a scalar type is a `Scalar`, a list type an `Array`,
-/// and `_` matches either.
-fn kind_of_type(ty: &str) -> Result<Option<Kind>, String> {
+/// Parameter names must be labels, may not be reserved words (the
+/// substitution would rewrite body annotations or capture a register), and
+/// may not repeat.
+fn check_parameter_names(names: &[&str], spec: &str) -> Result<(), String> {
+    for name in names {
+        if !is_label(name) {
+            return Err(format!("invalid parameter name `{name}`"));
+        }
+        if is_register(name) || is_reserved(name) {
+            return Err(format!(
+                "parameter `{name}` is a reserved word (a register, a type, a locality, `_` or `typeof`)"
+            ));
+        }
+    }
+    if let Some((_, twice)) = names
+        .iter()
+        .enumerate()
+        .find(|(i, n)| names[..*i].contains(n))
+    {
+        return Err(format!(
+            "parameter `{twice}` is named twice in `def ...({spec})`"
+        ));
+    }
+    Ok(())
+}
+
+/// A header's type pattern (see [`TypePattern`]). `_` accepts anything; a
+/// scalar type name a scalar; `[..]` any array; a bracketed list an array
+/// with exactly those elements, with runs expanding as in a define and `_`
+/// standing for an element of any type. `..` anywhere but alone is refused,
+/// so an array is either spelled out in full or not at all.
+fn parse_type_pattern(ty: &str) -> Result<Option<TypePattern>, String> {
     if ty == "_" {
         return Ok(None);
     }
-    // `[_]` is "any array", legal only here: a define needs a real type.
-    if ty == "[_]" {
-        return Ok(Some(Kind::Array));
+    if ty == "[..]" {
+        return Ok(Some(TypePattern::AnyArray));
     }
-    translate_type(ty).map_err(|e| format!("invalid parameter type `{ty}`: {e}"))?;
-    Ok(Some(if ty.starts_with('[') {
-        Kind::Array
-    } else {
-        Kind::Scalar
-    }))
+    if SCALARS.contains(&ty) {
+        return Ok(Some(TypePattern::Scalar));
+    }
+    if !ty.starts_with('[') {
+        return Err(format!(
+            "invalid parameter type `{ty}`: expected a scalar type, `[..]`, or `[T, ...]`"
+        ));
+    }
+    // A list with no `_` in it is a plain define type (`[u8*3]`, `[u8]*2`,
+    // `[u8*2, u16*2]`): let the define parser expand it.
+    if let Ok(lowered) = translate_type(ty) {
+        return Ok(Some(TypePattern::Array(
+            flat_elements(&lowered).into_iter().map(Some).collect(),
+        )));
+    }
+    // Otherwise element by element, so `_` can stand for any type.
+    let inner = ty
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(|| format!("invalid parameter type `{ty}`"))?;
+    let mut elements = Vec::new();
+    for piece in split_top_level(inner, ',') {
+        let piece = piece.trim();
+        if piece == "_" {
+            elements.push(None);
+            continue;
+        }
+        if piece.contains("..") {
+            return Err(format!(
+                "invalid parameter type `{ty}`: either list every element or write `[..]` for any array"
+            ));
+        }
+        let lowered = translate_type(&format!("[{piece}]"))
+            .map_err(|e| format!("invalid parameter type `{ty}`: {e}"))?;
+        elements.extend(flat_elements(&lowered).into_iter().map(Some));
+    }
+    if elements.is_empty() {
+        return Err(format!("invalid parameter type `{ty}`: an empty list"));
+    }
+    Ok(Some(TypePattern::Array(elements)))
+}
+
+/// The element types of a lowered list type `[u8 u8 u16]`.
+fn flat_elements(lowered: &str) -> Vec<String> {
+    lowered
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 /// A token that names a type, a locality, `_` or the `typeof` keyword: none
@@ -1680,20 +1902,22 @@ fn body_defines(body: &[Line]) -> impl Iterator<Item = &str> {
     })
 }
 
-/// A call's shape for the no-overload message: `a scalar`, `an array`, or
-/// `[scalar, array]` for a tuple.
-fn describe_kinds(kinds: &[Kind], tuple: bool) -> String {
-    let word = |k: &Kind| match k {
-        Kind::Scalar => "scalar",
-        Kind::Array => "array",
+/// A call's shape for the no-overload message: `a scalar`, `an array of
+/// [u8, u8]`, `an array` (elements unknown), or the list of those for a tuple.
+fn describe_shapes(shapes: &[ArgShape], tuple: bool) -> String {
+    let one = |s: &ArgShape| match s {
+        ArgShape::Scalar => "scalar".to_string(),
+        ArgShape::Array(Some(elements)) => format!("array of [{}]", elements.join(", ")),
+        ArgShape::Array(None) => "array".to_string(),
     };
     if tuple {
-        let inner: Vec<&str> = kinds.iter().map(word).collect();
+        let inner: Vec<String> = shapes.iter().map(one).collect();
         format!("[{}]", inner.join(", "))
     } else {
-        match kinds.first() {
-            Some(Kind::Scalar) => "a scalar".to_string(),
-            _ => "an array".to_string(),
+        match shapes.first() {
+            Some(ArgShape::Scalar) => "a scalar".to_string(),
+            Some(other) => format!("an {}", one(other)),
+            None => "nothing".to_string(),
         }
     }
 }

@@ -188,6 +188,31 @@ const MALFORMED: &[(&str, &str)] = &[
         "arr: [u8*2]\nt0 = arr[0]\nexit(0)\n",
         "indexing a variable on the load side",
     ),
+    // Array patterns and the comma spelling.
+    (
+        "def f(x: [i32, i32]):\n    t0 = &x\nf(nums)\nexit(0)\n",
+        "a spelled-out array pattern against an undefined variable",
+    ),
+    (
+        "def f(x: [u8, ..]):\n    t0 = &x\nexit(0)\n",
+        "`..` inside a list: every element or `[..]`",
+    ),
+    (
+        "d: [u8]*3\ndef f(x: [u8, u8]):\n    t0 = &x\nf(d)\nexit(0)\n",
+        "a spelled-out array pattern of the wrong length",
+    ),
+    (
+        "v: global _\ndef f(x: [u32]):\n    t0 = &x\nf(v)\nexit(0)\n",
+        "a spelled-out array pattern against an inferred type",
+    ),
+    (
+        "def f(a, b):\n    return a + b\na0 = 1\na1 = f(a0)\nexit(0)\n",
+        "one argument to a comma-spelled tuple",
+    ),
+    (
+        "def f(a, a):\n    return a\nexit(0)\n",
+        "a repeated name in the comma spelling",
+    ),
     // Structured-statement headers and conditions.
     (
         "if t0 == t1:\nexit(0)\n",

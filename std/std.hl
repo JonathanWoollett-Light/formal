@@ -22,9 +22,10 @@
 # program (no OS to answer the `ecall`) must write to its device directly (see
 # the `uart_hello` test, which pokes the QEMU UART with raw assembly).
 
-# A byte array (a string literal, or a variable holding a NUL-terminated
-# string): walk to the NUL, then write it. Clobbers a0, a1, a2, a7, t0.
-def print(msg: [u8]):
+# Any array (a string literal, or a variable holding a NUL-terminated
+# string): walk to the first zero byte, then write up to it. Clobbers a0, a1,
+# a2, a7, t0.
+def print(msg: [..]):
     a1 = &msg
     a2 = 0
     t0 = a1[0]
@@ -94,7 +95,7 @@ def exit(code: i64):
 # result with `p[0]`. Clobbers t0 and t1; leaves the byte offset in t1, which
 # `at_offset` reuses for a parallel array. Do not pass t0 as `i` (the result
 # overwrites it before it is used).
-def at([arr, i, size]: [[_], i64, i64]):
+def at([arr, i, size]: [[..], i64, i64]):
     t1 = i * size
     t0 = &arr
     return t0 + t1
@@ -102,7 +103,7 @@ def at([arr, i, size]: [[_], i64, i64]):
 # at_offset([arr, off]): the address `off` bytes into the variable arr: a byte
 # array's element `off`, or the offset a preceding `at` left in t1 (the same
 # element of a parallel array). Clobbers t0.
-def at_offset([arr, off]: [[_], i64]):
+def at_offset([arr, off]: [[..], i64]):
     t0 = &arr
     return t0 + off
 
@@ -120,7 +121,7 @@ def mod([k, cap]: [i64, i64]):
 # u32 counter. `old` is the register that receives the previous value (an asm
 # line cannot be a `return`, so it is an argument); `v` is a register or an
 # integer. Clobbers t0, t1 and writes old. Bare-metal and Linux alike.
-def fetch_add([old, counter, v]: [i64, [_], i64]):
+def fetch_add([old, counter, v]: [i64, [..], i64]):
     t0 = &counter
     t1 = v
     asm:

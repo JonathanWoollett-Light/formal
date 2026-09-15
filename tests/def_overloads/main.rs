@@ -5,36 +5,53 @@ use common::*;
 use formal::hl;
 
 /// Typed, destructuring overloads of one `def` name, resolved at translate
-/// time by shape, arity and each argument element's category (a register or
-/// an integer literal is a scalar; a variable name or a string literal is an
-/// array). Only the taken overload's body is translated, bound by the same
-/// whole-token substitution as a one-parameter `def`, so every call lowers to
-/// exactly the lines its body was going to emit anyway. A string element is
-/// laid down before the body, as a single string argument is today.
+/// time by shape, arity and each argument's shape: a register or an integer
+/// literal is a scalar; a variable name or a string literal is an array, whose
+/// element list the front-end reads back from the `#$` define it already
+/// emitted. An array pattern is either spelled out in full (`[i32, i32]`,
+/// checked element by element, so `data` and `pair` below take different
+/// overloads by their declared element types) or `[..]`, any array. `f(a, b)`
+/// is `f([a, b])`, in a call and in a header alike. Only the taken overload's
+/// body is translated, bound by the same whole-token substitution as a
+/// one-parameter `def`, so every call lowers to exactly the lines its body was
+/// going to emit anyway.
 #[test]
-fn overloads_resolve_by_shape_arity_and_category() {
+fn overloads_resolve_by_shape_arity_and_elements() {
     const PROGRAM: &str = "\
 data: [u8]*2
+pair: [i32]*2
 def shape(x: i64):
     return x + x
-def shape(x: [u8]):
+def shape(x: [u8*2]):
     return &x
+def shape(x: [i32, i32]):
+    t0 = &x
+    return t0[1]
 def shape([lo, hi]: [i64, i64]):
     return lo - hi
-def shape([s, n]: [[_], _]):
+def shape([s, n]: [[..], _]):
     t1 = &s
     return t1 + n
+def shape(a, b, c):
+    return a + c
+def g(a: i64, b: [..]):
+    t2 = &b
+    return t2 + a
 a0 = 3
 a1 = shape(a0)
 a2 = shape(data)
 a3 = shape([a1, a0])
 a4 = shape([data, a0])
 a5 = shape([\"hi\", a0])
+a6 = shape(pair)
+a7 = shape(a0, a1, a2)
+t3 = g(a0, data)
 exit(0)
 ";
     // No `\` after the opening quote: a backslash-newline would strip the
     // first line's indentation, which is part of the canonical form.
     const DIALECT: &str = "    #$ data thread [u8 u8]
+    #$ pair thread [i32 i32]
     li a0, 3
     add a1, a0, a0
     la a2, data
@@ -51,6 +68,11 @@ exit(0)
     sb t1, 2(t0)
     la t1, __str0
     add a5, t1, a0
+    la t0, pair
+    #[ a6, 1(t0)
+    add a7, a0, a2
+    la t2, data
+    add t3, t2, a0
     li a0, 0
     li a7, 93
     ecall
@@ -100,7 +122,7 @@ fn overload_refusals_name_the_problem() {
             "must be the last statement",
         ),
         (
-            "def f(x: [u8]):\n    t0 = 1\na0 = f(\"s\")\nexit(0)\n",
+            "def f(x: [..]):\n    t0 = 1\na0 = f(\"s\")\nexit(0)\n",
             "does not return a value",
         ),
         (
@@ -122,6 +144,27 @@ fn overload_refusals_name_the_problem() {
         (
             "def f([x]):\n    t0 = x\nexit(0)\n",
             "one-name tuple pattern",
+        ),
+        // A spelled-out array pattern is checked, so the variable must be
+        // defined above the call for the front-end to see its elements.
+        (
+            "def f(x: [i32, i32]):\n    t0 = &x\nf(nums)\nexit(0)\n",
+            "has no define before this call",
+        ),
+        // `..` means the whole array or nothing.
+        (
+            "def f(x: [u8, ..]):\n    t0 = &x\nexit(0)\n",
+            "either list every element or write `[..]`",
+        ),
+        // Wrong length is a plain miss, reported with the elements seen.
+        (
+            "d: [u8]*3\ndef f(x: [u8, u8]):\n    t0 = &x\nf(d)\nexit(0)\n",
+            "an array of [u8, u8, u8]",
+        ),
+        // The comma spelling is the same tuple: one argument does not fit it.
+        (
+            "def f(a, b):\n    return a + b\na0 = 1\na1 = f(a0)\nexit(0)\n",
+            "no overload of `f` takes",
         ),
     ];
     for (source, expected) in CASES {

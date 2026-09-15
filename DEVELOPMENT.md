@@ -986,23 +986,46 @@ map with one entry per name, and nothing is materialised in memory. That is
 how a function takes several values, and why `def` never grew a second
 parameter: a function takes one thing, and a tuple is one thing.
 
+The tuple has a **comma spelling** too, in a header and in a call alike:
+`def f(a, b, c):` is `def f([a, b, c]):`, `def f(a: i64, b: [..]):` is
+`def f([a, b]: [i64, [..]]):`, and `f(a0, a1)` is `f([a0, a1])`. A comma at
+the top level makes a tuple, brackets or not (a comma inside a string literal
+or inside a type's brackets does not).
+
 Several `def`s of one name are **overloads**, resolved at translate time.
-Each argument element has a **category** the stateless front-end can see: a
-register or an integer literal is a *scalar*, a variable name or a string
-literal is an *array*. Nothing finer, since a register's width is unknowable
-here. A type in the header stands for a category: a scalar type name (`i64`,
-`u8`, ...) matches a scalar, a list type or `[_]` matches an array, and `_` or
-no type matches either. **A scalar type name checks only the category**:
-`def f(x: u8)` accepts a register holding anything, and `[u8*13]` says
-nothing about length; the names are documentation the reader can trust that
-far and no further. An overload fits a call when the shapes agree (tuple or
-not), the arities agree, and every position's category matches. Exactly one
-must fit. Two overloads that could both fit some call are refused where the
-second is **defined**, not at each call: same shape and arity, and at every
-position the two types could name the same category. This also ends the old
-silent behaviour where a second `def` of the same name replaced the first,
-and it means a user `def print(x)` is an error naming the std overload it
-overlaps rather than a quiet replacement.
+Each argument has a **shape** the front-end can see: a register or an integer
+literal is a *scalar*, and a variable name or a string literal is an *array*
+whose **element list** is known when its `#$` define has already been emitted
+(the front-end reads it back out of the dialect it has produced, so the
+dialect is the symbol table; a string's define always precedes its use). A
+type in the header is a **pattern**:
+
+- a scalar type name (`i64`, `u8`, ...) accepts a scalar. **It checks only
+  that**: `def f(x: u8)` accepts a register holding anything, since a
+  register's width is unknowable here;
+- `[..]` accepts any array;
+- a list, `[i32, i32]` or `[u8*3]` or `[i32, u8, _]` (`_` an element of any
+  type, runs expanding as in a define), accepts an array with **exactly those
+  elements**, checked against the element list. So `data: [u8]*2` and
+  `pair: [i32]*2` take different overloads of one name by their declared
+  types. There is nothing in between: an array pattern spells out every
+  element or none, so `[_]` is a one-element array of any type, which is why
+  the any-array spelling is `[..]` and not `[_]`. `..` anywhere but alone is
+  refused;
+- `_`, or no type, accepts anything.
+
+A spelled-out pattern met by a variable whose elements the front-end cannot
+see (defined after the call, or with an inferred type) is an error naming the
+variable, not a silent miss: define it above the call, or accept any array
+with `[..]`. An overload fits a call when the shapes agree (tuple or not), the
+arities agree, and every position accepts its argument. Exactly one must fit.
+Two overloads that could both fit some call are refused where the second is
+**defined**, not at each call: same shape and arity, and at every position
+some argument could satisfy both patterns (two spelled-out lists overlap only
+when they have the same length and agree, or leave `_`, at every element).
+This also ends the old silent behaviour where a second `def` of the same name
+replaced the first, and it means a user `def print(x)` is an error naming the
+std overload it overlaps rather than a quiet replacement.
 
 `if typeof` stays as the primitive underneath (§ below), but it is not the
 same thing: two `if typeof` arms of the same category both translate, while
@@ -1022,11 +1045,12 @@ Each element of an argument binds as follows:
   so the body's `if typeof param == i64` arm is taken), used to print a computed
   value, e.g. `print(a6)`;
 - a **variable name** binds the parameter to that label (an array), so the body
-  may take its address with `&param` exactly as it does a string's. The
-  front-end has no symbol table and cannot check the name is defined: define it
-  before you pass it, and the verifier is the authority. Indexing a variable
-  directly, `t1 = nums[0]`, is refused on both the load and the store side with
-  the same "take its address first" message.
+  may take its address with `&param` exactly as it does a string's. Against a
+  `[..]` or untyped position the front-end does not check that the name is
+  defined (the verifier is the authority); against a spelled-out array pattern
+  it reads the define back from the emitted dialect, so the define must come
+  first. Indexing a variable directly, `t1 = nums[0]`, is refused on both the
+  load and the store side with the same "take its address first" message.
 
 A tuple argument may not mix a string literal with `t0` or `t1`: laying the
 string down writes both before the body runs. Parameter names may not be a
@@ -1090,7 +1114,7 @@ destination. The library today:
 
 | Function                        | Does                                                    | Clobbers                 |
 | ------------------------------- | ------------------------------------------------------- | ------------------------ |
-| `print(msg: [u8])`              | writes a NUL-terminated string (Linux `write`)           | a0 a1 a2 a7 t0           |
+| `print(msg: [..])`              | writes a NUL-terminated string (Linux `write`)           | a0 a1 a2 a7 t0           |
 | `print(msg: i64)`               | writes a non-negative integer in decimal                 | a0 a1 a2 a7 t0 t1 t2 t5  |
 | `println(x)`                    | `print(x)` then a newline                                | as `print`               |
 | `exit(code: i64)`               | ends the process (Linux `exit`, syscall 93)              | a0 a7                    |
