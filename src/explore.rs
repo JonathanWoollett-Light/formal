@@ -17,15 +17,95 @@
 
 use crate::ast::{Ast, AstNode, AstNodeId, Instruction, Label, Type};
 use crate::verifier::{
-    locality_list, step, type_list, CompilerError, Continuation, ExplorePathResult, Explorerer,
-    InnerVerifierConfiguration, LocalAccumulators, RecordSinks, Terminal, ValidPathResult,
+    locality_list, seed, step, type_list, CompilerError, Continuation, ExplorePathResult,
+    Explorerer, InnerVerifierConfiguration, LocalAccumulators, RecordSinks, Terminal,
+    ValidPathResult,
 };
 use crate::verifier_types::{
-    AccessTransitions, AccessedRanges, IndexLowerings, LabelLocality, State, TypeConfiguration,
+    AccessTransitions, AccessedRanges, IndexLowerings, LabelLocality, TypeConfiguration,
 };
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ptr::NonNull;
+
+/// The continuations already stepped, as 16-byte digests of their `postcard`
+/// bytes. Two interleavings that reach the same continuation (state, per-hart
+/// fronts, active hart) have identical futures and identical grow-only
+/// outputs, so the second is pure repetition; every pointer-free engine steps
+/// only what `first_visit` has not seen. Every state type serialises from
+/// `BTreeMap`s and `Vec`s, so equal states give equal bytes and the digest is
+/// an exact test up to collision. It is the first 128 bits of SHA-256: at
+/// 10^12 distinct states the chance that any two collide is about 10^-15
+/// (n^2 / 2^129), and a collision would prune a new state, so the width is a
+/// soundness margin rather than a size choice. On the multi-hart tests the set
+/// removes 75 to 99.9% of steps (DEVELOPMENT.md §11), at about 1.9 µs a step
+/// for the serialise and hash against 5.8 µs for the step itself.
+#[derive(Default)]
+pub struct Visited(HashSet<[u8; 16]>);
+
+impl Visited {
+    /// Records `cont`; `Ok(true)` the first time it is seen.
+    pub fn first_visit(&mut self, cont: &Continuation) -> Result<bool, CompilerError> {
+        Ok(self.first_visit_bytes(&encode(cont)?))
+    }
+
+    /// As [`Visited::first_visit`], for a continuation already serialised (the
+    /// form that crosses between nodes).
+    pub fn first_visit_bytes(&mut self, bytes: &[u8]) -> bool {
+        self.insert(digest(bytes))
+    }
+
+    /// Records a digest computed elsewhere (by a parallel worker, or by the
+    /// rank that produced the continuation); `true` the first time it is seen.
+    /// The wave engines digest their successors inside the parallel section,
+    /// where the work is, and keep only this insert serial: at 1.9 µs a digest
+    /// against 5.8 µs a step shared across the workers, digesting between
+    /// waves would cap a node at two or three cores' worth.
+    pub fn insert(&mut self, key: [u8; 16]) -> bool {
+        self.0.insert(key)
+    }
+
+    /// The distinct continuations seen so far.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// A continuation as the bytes that cross between workers and nodes, and the
+/// visited set's key material.
+pub fn encode(cont: &Continuation) -> Result<Vec<u8>, CompilerError> {
+    postcard::to_stdvec(cont)
+        .map_err(|e| CompilerError::Internal(format!("continuation serialize: {e}")))
+}
+
+/// The inverse of [`encode`].
+pub fn decode(bytes: &[u8]) -> Result<Continuation, CompilerError> {
+    postcard::from_bytes(bytes)
+        .map_err(|e| CompilerError::Internal(format!("continuation deserialize: {e}")))
+}
+
+/// The first 128 bits of a serialised continuation's SHA-256: the visited-set
+/// key, and what a distributed backend owns a continuation by.
+pub fn digest(bytes: &[u8]) -> [u8; 16] {
+    let full = Sha256::digest(bytes);
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&full[..16]);
+    key
+}
+
+/// Which of `ranks` owns the continuation with digest `key`: a function of the
+/// digest alone, so every rank computes the same owner without a message, and
+/// a rank's visited set is complete for the continuations it owns.
+pub fn owner(key: &[u8; 16], ranks: usize) -> usize {
+    let mut word = [0u8; 8];
+    word.copy_from_slice(&key[..8]);
+    (u64::from_le_bytes(word) % ranks.max(1) as u64) as usize
+}
 
 /// Verifies the program at `ast`, run on `systems`, under the single fixed
 /// `configuration`, returning the terminal [`ExplorePathResult`]: `Valid` with
@@ -142,12 +222,6 @@ pub unsafe fn verify_configuration_pooled(
     configuration: &TypeConfiguration,
 ) -> Result<ExplorePathResult, CompilerError> {
     let ast = Ast::index(ast_head);
-    let start = ast.head().ok_or_else(|| {
-        CompilerError::Internal("verify_configuration_pooled: empty AST".to_string())
-    })?;
-    let start_id = ast.id_of(start).ok_or_else(|| {
-        CompilerError::Internal("verify_configuration_pooled: entry node not indexed".to_string())
-    })?;
 
     // The shared, grow-only outputs (single-threaded: one set of sinks, exactly
     // like the global accumulators the sequential `Explorerer` keeps).
@@ -159,25 +233,33 @@ pub unsafe fn verify_configuration_pooled(
     let mut pinned_nodes: BTreeSet<NonNull<AstNode>> = BTreeSet::new();
     let mut indexed: IndexLowerings = IndexLowerings::new();
 
-    // Seed one continuation per system: every hart starts at the entry node,
-    // hart 0 active (the analogue of `build_initial_chain`).
+    // Seed one continuation per system (the analogue of `build_initial_chain`),
+    // recording into the same sinks as the steps.
     let mut work: VecDeque<Continuation> = VecDeque::new();
     for system in systems {
-        let state = State::new(system, configuration);
-        let mut fronts = BTreeMap::new();
-        for hart in 0..system.harts {
-            fronts.insert(hart, start_id);
+        let mut sinks = RecordSinks {
+            accessed: &mut accessed,
+            transitions: &mut transitions,
+            uncompactable: &mut uncompactable,
+            pinned_nodes: &mut pinned_nodes,
+            indexed: &mut indexed,
+        };
+        match seed(&ast, system, configuration, &mut sinks)? {
+            Some(cont) => work.push_back(cont),
+            None => return Ok(ExplorePathResult::Invalid),
         }
-        work.push_back(Continuation {
-            state,
-            fronts,
-            active_hart: 0,
-        });
     }
 
     // Drain the frontier. Any `Invalid` makes the whole configuration invalid
     // (no backtracking under a fixed configuration); a drained path just ends.
+    let mut visited = Visited::default();
     while let Some(cont) = work.pop_front() {
+        // A continuation stepped before has already contributed everything it
+        // ever will (its outputs are grow-only unions), so it is not stepped
+        // twice.
+        if !visited.first_visit(&cont)? {
+            continue;
+        }
         let mut sinks = RecordSinks {
             accessed: &mut accessed,
             transitions: &mut transitions,
@@ -296,6 +378,48 @@ pub unsafe fn step_local(
     Ok((outcome.successors, outcome.terminal, local))
 }
 
+/// The seed continuations of `systems`, one each ([`seed`]), with whatever
+/// their construction recorded, in the form the wave engines reduce; `None`
+/// when a system's entry is invalid under `configuration`.
+///
+/// # Safety
+/// As [`step_local`].
+pub unsafe fn seed_local(
+    ast: &Ast,
+    systems: &[InnerVerifierConfiguration],
+    configuration: &TypeConfiguration,
+) -> Result<Option<(Vec<Continuation>, LocalAccumulators)>, CompilerError> {
+    let mut accessed = AccessedRanges::new();
+    let mut transitions = AccessTransitions::new();
+    let mut uncompactable = BTreeSet::new();
+    let mut pinned = BTreeSet::new();
+    let mut indexed = IndexLowerings::new();
+    let mut sinks = RecordSinks {
+        accessed: &mut accessed,
+        transitions: &mut transitions,
+        uncompactable: &mut uncompactable,
+        pinned_nodes: &mut pinned,
+        indexed: &mut indexed,
+    };
+    let mut seeds = Vec::with_capacity(systems.len());
+    for system in systems {
+        match seed(ast, system, configuration, &mut sinks)? {
+            Some(cont) => seeds.push(cont),
+            None => return Ok(None),
+        }
+    }
+    let local = local_from_parts(
+        ast,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &accessed,
+        &transitions,
+        &uncompactable,
+        &pinned,
+    )?;
+    Ok(Some((seeds, local)))
+}
+
 /// Re-keys a [`ValidPathResult`] (the pointer-keyed oracle/`verify_configuration`
 /// output) onto [`AstNodeId`] so it can be compared against the parallel pool's
 /// [`LocalAccumulators`]. This is the boundary the cross-check test uses.
@@ -333,6 +457,10 @@ pub struct WaveReport {
     pub frontier: usize,
     /// Per-worker / per-node count of continuations stepped this wave.
     pub units: Vec<usize>,
+    /// Distinct continuations seen so far, this wave's included: the visited
+    /// set's size, which is the memory the search holds (§11, state
+    /// convergence).
+    pub distinct: usize,
 }
 
 /// The **deep inner parallel** search: explore one fixed configuration's
@@ -376,37 +504,30 @@ pub unsafe fn verify_configuration_parallel_observed(
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let start = ast.head().ok_or_else(|| {
-        CompilerError::Internal("verify_configuration_parallel: empty AST".to_string())
-    })?;
-    let start_id = ast.id_of(start).ok_or_else(|| {
-        CompilerError::Internal("verify_configuration_parallel: entry node not indexed".to_string())
-    })?;
+    // Seed: one continuation per system, keeping what seeding recorded.
+    let Some((frontier, mut total)) = seed_local(ast, systems, configuration)? else {
+        return Ok(None);
+    };
+    let mut visited = Visited::default();
+    let mut seeded = Vec::with_capacity(frontier.len());
+    for cont in frontier {
+        if visited.first_visit(&cont)? {
+            seeded.push(cont);
+        }
+    }
+    let mut frontier = seeded;
 
-    // Seed: one continuation per system, all harts at the entry, hart 0 active.
-    let mut frontier: Vec<Continuation> = systems
-        .iter()
-        .map(|system| {
-            let state = State::new(system, configuration);
-            let mut fronts = BTreeMap::new();
-            for hart in 0..system.harts {
-                fronts.insert(hart, start_id);
-            }
-            Continuation {
-                state,
-                fronts,
-                active_hart: 0,
-            }
-        })
-        .collect();
-
-    let mut total = LocalAccumulators::default();
     let workers = rayon::current_num_threads();
     let mut wave_index = 0usize;
 
     // Process the frontier wave by wave; each wave is stepped in parallel.
     while !frontier.is_empty() {
-        type WaveItem = (Vec<Continuation>, Option<Terminal>, LocalAccumulators);
+        // Each successor with its digest, taken by the worker that produced it.
+        type WaveItem = (
+            Vec<([u8; 16], Continuation)>,
+            Option<Terminal>,
+            LocalAccumulators,
+        );
         // Per-worker step counts, allocated only when an observer wants them.
         let counts: Vec<AtomicUsize> = if observer.is_some() {
             (0..workers).map(|_| AtomicUsize::new(0)).collect()
@@ -417,7 +538,7 @@ pub unsafe fn verify_configuration_parallel_observed(
             .par_iter()
             // SAFETY: `ast` is read-only and shared across workers; `cont`
             // references its nodes.
-            .map(|cont| {
+            .map(|cont| -> Result<WaveItem, CompilerError> {
                 if !counts.is_empty() {
                     if let Some(worker) = rayon::current_thread_index() {
                         if let Some(slot) = counts.get(worker) {
@@ -425,7 +546,13 @@ pub unsafe fn verify_configuration_parallel_observed(
                         }
                     }
                 }
-                unsafe { step_local(ast, configuration, cont) }
+                let (successors, terminal, local) =
+                    unsafe { step_local(ast, configuration, cont)? };
+                let keyed = successors
+                    .into_iter()
+                    .map(|cont| Ok((digest(&encode(&cont)?), cont)))
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
+                Ok((keyed, terminal, local))
             })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
 
@@ -434,6 +561,7 @@ pub unsafe fn verify_configuration_parallel_observed(
                 wave: wave_index,
                 frontier: frontier.len(),
                 units: counts.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
+                distinct: visited.len(),
             });
         }
         wave_index += 1;
@@ -444,7 +572,13 @@ pub unsafe fn verify_configuration_parallel_observed(
                 return Ok(None);
             }
             total.union_with(local);
-            next.extend(successors);
+            // Between waves, single-threaded: a successor stepped in an
+            // earlier wave, or reached twice within this one, is dropped.
+            for (key, cont) in successors {
+                if visited.insert(key) {
+                    next.push(cont);
+                }
+            }
         }
         frontier = next;
     }
@@ -565,46 +699,24 @@ pub unsafe fn verify_configuration_distributed_sim_observed(
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let encode = |cont: &Continuation| -> Result<Vec<u8>, CompilerError> {
-        postcard::to_stdvec(cont)
-            .map_err(|e| CompilerError::Internal(format!("continuation serialize: {e}")))
-    };
-    let decode = |bytes: &[u8]| -> Result<Continuation, CompilerError> {
-        postcard::from_bytes(bytes)
-            .map_err(|e| CompilerError::Internal(format!("continuation deserialize: {e}")))
-    };
-
-    let start = ast.head().ok_or_else(|| {
-        CompilerError::Internal("verify_configuration_distributed_sim: empty AST".to_string())
-    })?;
-    let start_id = ast.id_of(start).ok_or_else(|| {
-        CompilerError::Internal(
-            "verify_configuration_distributed_sim: entry not indexed".to_string(),
-        )
-    })?;
-
     // The frontier is carried as serialized bytes, as if in transit between nodes.
-    let mut frontier: Vec<Vec<u8>> = systems
-        .iter()
-        .map(|system| {
-            let mut fronts = BTreeMap::new();
-            for hart in 0..system.harts {
-                fronts.insert(hart, start_id);
-            }
-            encode(&Continuation {
-                state: State::new(system, configuration),
-                fronts,
-                active_hart: 0,
-            })
-        })
-        .collect::<Result<_, _>>()?;
+    let Some((seeds, mut total)) = seed_local(ast, systems, configuration)? else {
+        return Ok(None);
+    };
+    let mut frontier: Vec<Vec<u8>> = seeds.iter().map(encode).collect::<Result<_, _>>()?;
+    let mut visited = Visited::default();
+    frontier.retain(|bytes| visited.first_visit_bytes(bytes));
 
-    let mut total = LocalAccumulators::default();
     let workers = rayon::current_num_threads();
     let mut wave_index = 0usize;
 
     while !frontier.is_empty() {
-        type WaveItem = (Vec<Vec<u8>>, Option<Terminal>, LocalAccumulators);
+        // Each successor's bytes with their digest, taken by the worker.
+        type WaveItem = (
+            Vec<([u8; 16], Vec<u8>)>,
+            Option<Terminal>,
+            LocalAccumulators,
+        );
         // Per-node step counts, allocated only when an observer wants them.
         let counts: Vec<AtomicUsize> = if observer.is_some() {
             (0..workers).map(|_| AtomicUsize::new(0)).collect()
@@ -629,8 +741,11 @@ pub unsafe fn verify_configuration_distributed_sim_observed(
                     unsafe { step_local(ast, configuration, &cont)? };
                 let successors = successors
                     .iter()
-                    .map(&encode)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(|cont| {
+                        let bytes = encode(cont)?;
+                        Ok((digest(&bytes), bytes))
+                    })
+                    .collect::<Result<Vec<_>, CompilerError>>()?;
                 Ok((successors, terminal, local))
             })
             .collect::<Result<Vec<WaveItem>, CompilerError>>()?;
@@ -640,6 +755,7 @@ pub unsafe fn verify_configuration_distributed_sim_observed(
                 wave: wave_index,
                 frontier: frontier.len(),
                 units: counts.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
+                distinct: visited.len(),
             });
         }
         wave_index += 1;
@@ -650,7 +766,12 @@ pub unsafe fn verify_configuration_distributed_sim_observed(
                 return Ok(None);
             }
             total.union_with(local);
-            next.extend(successors);
+            // The digest was taken from the bytes in transit, by the worker.
+            for (key, bytes) in successors {
+                if visited.insert(key) {
+                    next.push(bytes);
+                }
+            }
         }
         frontier = next;
     }

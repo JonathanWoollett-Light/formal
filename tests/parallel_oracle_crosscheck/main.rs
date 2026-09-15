@@ -507,3 +507,225 @@ fn uart_hello_maximal_parallelism() {
         "parallel uart_hello outputs differ from the fixed-config reference"
     );
 }
+
+/// One multi-hart test program, as the pointer-free engines are checked against
+/// the oracle: its stored dialect, the hart counts its own test verifies, and
+/// whether it writes the QEMU UART (which its test seeds as a memory section).
+struct Program {
+    test: &'static str,
+    harts: &'static [u8],
+    uart: bool,
+    /// The distinct continuations of its exploration, when pinned: with the
+    /// visited set the rayon backend steps exactly this many.
+    distinct: Option<usize>,
+}
+
+fn program_systems(program: &Program) -> Vec<InnerVerifierConfiguration> {
+    let sections = if program.uart {
+        vec![Section {
+            address: MemoryValueI64::from(0x10000000),
+            size: MemoryValueI64::from(1),
+            permissions: Permissions::Write,
+            volatile: true,
+        }]
+    } else {
+        Vec::new()
+    };
+    program
+        .harts
+        .iter()
+        .map(|&harts| InnerVerifierConfiguration {
+            sections: sections.clone(),
+            harts,
+        })
+        .collect()
+}
+
+/// Runs the oracle, then the pooled, rayon and byte-carrying engines on its
+/// configuration, asserting every output identical, and returns the rayon
+/// engine's step count (the sum of its wave sizes), which with the visited set
+/// is the number of distinct continuations.
+fn engines_match_oracle(program: &Program) -> usize {
+    let ast = setup_test(&format!("{}/dialect.s", program.test));
+    let sys = program_systems(program);
+    let explorerer = unsafe { Explorerer::new(ast, &sys).expect("construct verifier") };
+    let (trace, result) = unsafe { trace_valid_path(explorerer) };
+    let oracle = expect_valid(&trace, result);
+    let expected = unsafe { valid_path_to_local(ast, &oracle) }.expect("re-key oracle outputs");
+
+    let pooled = unsafe { verify_configuration_pooled(ast, &sys, &oracle.configuration) }
+        .unwrap_or_else(|e| panic!("{}: pooled: {e:?}", program.test));
+    let pooled = match pooled {
+        ExplorePathResult::Valid(valid) => valid,
+        other => panic!("{}: pooled did not reach Valid: {other:?}", program.test),
+    };
+    // The pooled engine is the one pointer-free engine that returns the index
+    // lowerings (the re-keyed form below drops them).
+    assert_eq!(
+        pooled.indexed, oracle.indexed,
+        "{}: pooled index lowerings",
+        program.test
+    );
+    let pooled = unsafe { valid_path_to_local(ast, &pooled) }.expect("re-key pooled outputs");
+    assert_eq!(
+        pooled, expected,
+        "{}: pooled outputs differ from the oracle",
+        program.test
+    );
+
+    let index = Ast::index(ast);
+    let steps = std::sync::atomic::AtomicUsize::new(0);
+    let observe = |report: &WaveReport| {
+        steps.fetch_add(report.frontier, std::sync::atomic::Ordering::Relaxed);
+    };
+    let parallel = unsafe {
+        verify_configuration_parallel_observed(&index, &sys, &oracle.configuration, Some(&observe))
+    }
+    .unwrap_or_else(|e| panic!("{}: parallel: {e:?}", program.test))
+    .unwrap_or_else(|| {
+        panic!(
+            "{}: parallel rejected the oracle's configuration",
+            program.test
+        )
+    });
+    assert_eq!(
+        parallel, expected,
+        "{}: parallel outputs differ from the oracle",
+        program.test
+    );
+
+    let simulated =
+        unsafe { verify_configuration_distributed_sim(&index, &sys, &oracle.configuration) }
+            .unwrap_or_else(|e| panic!("{}: distributed sim: {e:?}", program.test))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: distributed sim rejected the configuration",
+                    program.test
+                )
+            });
+    assert_eq!(
+        simulated, expected,
+        "{}: simulated outputs differ from the oracle",
+        program.test
+    );
+
+    let steps = steps.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        steps <= trace.len(),
+        "{}: the visited set must not step more than the oracle ({steps} > {})",
+        program.test,
+        trace.len()
+    );
+    if let Some(distinct) = program.distinct {
+        assert_eq!(
+            steps, distinct,
+            "{}: steps with the visited set",
+            program.test
+        );
+    }
+    steps
+}
+
+/// Every cheap multi-hart test program: the three pointer-free engines, each
+/// with its visited set, reproduce the oracle's outputs exactly. Where the
+/// distinct-state count is pinned, the rayon engine steps exactly that many,
+/// which is the saving the set buys (`racy_increment`: 716 steps without it).
+#[test]
+fn every_multi_hart_program_matches_the_oracle() {
+    let programs = [
+        Program {
+            test: "racy_increment",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(184),
+        },
+        Program {
+            test: "racy_store_annotated",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(43),
+        },
+        Program {
+            test: "racy_store_inferred",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(43),
+        },
+        Program {
+            test: "atomic_claim",
+            harts: &[2],
+            uart: false,
+            distinct: Some(65),
+        },
+        Program {
+            test: "three_harts",
+            harts: &[3],
+            uart: false,
+            distinct: Some(65),
+        },
+        Program {
+            test: "heap_regions",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(99),
+        },
+        Program {
+            test: "descriptor_read_union",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(40),
+        },
+        Program {
+            test: "partial_variable_access",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(14),
+        },
+        Program {
+            test: "parallel_probe",
+            harts: &[2],
+            uart: true,
+            distinct: Some(445),
+        },
+        Program {
+            test: "tls_probe",
+            harts: &[2],
+            uart: true,
+            distinct: Some(483),
+        },
+    ];
+    for program in &programs {
+        engines_match_oracle(program);
+    }
+}
+
+/// The expensive programs, whose oracle runs take tens of seconds (their own
+/// tests already pay for those). With the visited set the pointer-free engines
+/// step a few thousand continuations where the oracle steps millions.
+#[test]
+#[ignore = "the oracle runs take about a minute in total; run with --run-ignored all"]
+fn every_heavy_multi_hart_program_matches_the_oracle() {
+    let programs = [
+        Program {
+            test: "uart_hello",
+            harts: &[1, 2],
+            uart: true,
+            distinct: Some(6098),
+        },
+        Program {
+            test: "hpc_demo",
+            harts: &[1, 2],
+            uart: false,
+            distinct: Some(407),
+        },
+        Program {
+            test: "fannkuch_v2",
+            harts: &[2],
+            uart: false,
+            distinct: Some(6017),
+        },
+    ];
+    for program in &programs {
+        engines_match_oracle(program);
+    }
+}

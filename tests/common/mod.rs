@@ -132,10 +132,11 @@ pub fn utilisation_log(phase: &str, cores_per_node: usize) -> impl Fn(&WaveRepor
         let total_width = total.separate_with_commas().len();
         let node_width = cores_per_node.separate_with_commas().len();
         let frontier = report.frontier.separate_with_commas();
+        let distinct = report.distinct.separate_with_commas();
         let busy_str = busy.separate_with_commas();
         let total_str = total.separate_with_commas();
         let mut line = format!(
-            "wave {:>6} | frontier {frontier:>19} | cores {busy_str:>total_width$}/{total_str} ({:>3}%)",
+            "wave {:>6} | frontier {frontier:>19} | distinct {distinct:>15} | cores {busy_str:>total_width$}/{total_str} ({:>3}%)",
             report.wave,
             pct(busy, total),
         );

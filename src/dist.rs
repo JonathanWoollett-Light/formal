@@ -22,16 +22,19 @@
 #![cfg(feature = "hpc")]
 
 use crate::ast::{Ast, AstNode};
-use crate::explore::{candidate_configs, step_local, valid_path_to_local, verify_configuration};
+use crate::explore::{
+    candidate_configs, decode, digest, encode, owner, seed_local, step_local, valid_path_to_local,
+    verify_configuration, Visited,
+};
 use crate::verifier::{
     Continuation, ExplorePathResult, InnerVerifierConfiguration, LocalAccumulators, Terminal,
 };
-use crate::verifier_types::{State, TypeConfiguration};
+use crate::verifier_types::TypeConfiguration;
 use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::traits::*;
 use mpi::{Count, Tag};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use thousands::Separable;
 
@@ -105,12 +108,16 @@ pub unsafe fn outer_sweep_winner<C: Communicator>(
 }
 
 /// The inner search for one fixed `configuration`, distributed across the MPI
-/// world with real continuation migration. Wave-synchronised: every rank holds
-/// the (replicated) frontier, steps the continuations it owns (`index % size ==
-/// rank`), and the successors are MPI all-gathered into the next frontier - so a
-/// continuation produced on one rank is processed by whichever rank owns its slot
-/// next (migration). Each continuation is stepped by exactly one rank, so the
-/// per-rank [`LocalAccumulators`] are disjoint contributions that reduce by union.
+/// world with real continuation migration. Wave-synchronised: each rank holds
+/// the part of the frontier it owns, where a continuation's owner is [`owner`],
+/// its digest modulo the rank count, a function of its bytes that every rank
+/// computes alike. A rank steps its part, encodes and digests each successor
+/// once, and puts it in the bucket of its owner; the buckets are MPI
+/// all-gathered and each rank keeps the bucket addressed to it (migration),
+/// stepping only what its [`Visited`] set has not seen, which is complete for
+/// what it owns. Each distinct continuation is thus stepped by exactly one
+/// rank, once, so the per-rank [`LocalAccumulators`] are disjoint contributions
+/// that reduce by union, and the visited set is partitioned across the ranks.
 /// Returns `Some(union)` if valid, `None` if any rank hit `Invalid`.
 ///
 /// # Safety
@@ -125,44 +132,38 @@ pub unsafe fn verify_configuration_mpi<C: Communicator>(
     let size = world.size() as usize;
 
     let ast = Ast::index(ast_head);
-    let start = ast
-        .head()
-        .ok_or_else(|| internal("verify_configuration_mpi: empty AST"))?;
-    let start_id = ast
-        .id_of(start)
-        .ok_or_else(|| internal("verify_configuration_mpi: entry not indexed"))?;
 
-    // The seed frontier is identical on every rank (deterministic construction),
-    // which keeps the replicated frontier consistent without a scatter.
-    let mut frontier: Vec<Continuation> = systems
-        .iter()
-        .map(|system| {
-            let mut fronts = BTreeMap::new();
-            for hart in 0..system.harts {
-                fronts.insert(hart, start_id);
-            }
-            Continuation {
-                state: State::new(system, configuration),
-                fronts,
-                active_hart: 0,
-            }
-        })
-        .collect();
-
-    let mut total = LocalAccumulators::default();
+    // Every rank seeds identically (deterministic construction) and keeps the
+    // seeds it owns; the owner is a function of the bytes, so no scatter.
+    let Some((seeds, mut total)) = seed_local(&ast, systems, configuration)? else {
+        return Ok(None);
+    };
+    let mut visited = Visited::default();
+    let mut frontier: Vec<Continuation> = Vec::new();
+    for cont in seeds {
+        let key = digest(&encode(&cont)?);
+        if owner(&key, size) == rank && visited.insert(key) {
+            frontier.push(cont);
+        }
+    }
 
     loop {
-        // Step the continuations this rank owns.
-        let mut successors: Vec<Continuation> = Vec::new();
+        // Step this rank's part of the frontier, encoding and digesting each
+        // successor once and bucketing it by its owner. A rank with nothing to
+        // step still takes part in the collectives below, so every rank runs
+        // the same number of waves.
+        let mut buckets: Vec<Vec<([u8; 16], Vec<u8>)>> = vec![Vec::new(); size];
         let mut invalid: u8 = 0;
-        for (i, cont) in frontier.iter().enumerate() {
-            if i % size == rank {
-                let (succ, terminal, local) = step_local(&ast, configuration, cont)?;
-                total.union_with(local);
-                if matches!(terminal, Some(Terminal::Invalid)) {
-                    invalid = 1;
-                }
-                successors.extend(succ);
+        for cont in &frontier {
+            let (successors, terminal, local) = step_local(&ast, configuration, cont)?;
+            total.union_with(local);
+            if matches!(terminal, Some(Terminal::Invalid)) {
+                invalid = 1;
+            }
+            for successor in &successors {
+                let bytes = encode(successor)?;
+                let key = digest(&bytes);
+                buckets[owner(&key, size)].push((key, bytes));
             }
         }
 
@@ -173,18 +174,29 @@ pub unsafe fn verify_configuration_mpi<C: Communicator>(
             return Ok(None);
         }
 
-        // Migrate: all-gather the successors so every rank rebuilds the identical
-        // next frontier (concatenated in rank order).
-        let encoded = postcard::to_stdvec(&successors)
+        // Migrate: all-gather the buckets; each rank decodes only the bucket
+        // addressed to it and drops what it has stepped before. Every rank sees
+        // the same buffers, so all agree the search is over when every bucket
+        // from every rank is empty, without another collective.
+        let encoded = postcard::to_stdvec(&buckets)
             .map_err(|e| internal(format!("successor serialize: {e}")))?;
         let buffers = all_gather_bytes(world, &encoded)?;
         let mut next: Vec<Continuation> = Vec::new();
+        let mut any = false;
         for buffer in &buffers {
-            let part: Vec<Continuation> = postcard::from_bytes(buffer)
+            let part: Vec<Vec<([u8; 16], Vec<u8>)>> = postcard::from_bytes(buffer)
                 .map_err(|e| internal(format!("successor deserialize: {e}")))?;
-            next.extend(part);
+            any |= part.iter().any(|bucket| !bucket.is_empty());
+            let mine = part
+                .get(rank)
+                .ok_or_else(|| internal("verify_configuration_mpi: short bucket list"))?;
+            for (key, bytes) in mine {
+                if visited.insert(*key) {
+                    next.push(decode(bytes)?);
+                }
+            }
         }
-        if next.is_empty() {
+        if !any {
             break;
         }
         frontier = next;
@@ -234,6 +246,11 @@ pub struct RankStats {
     pub rank: i32,
     /// Continuations this rank stepped (its share of the search).
     pub processed: u64,
+    /// Continuations this rank dropped as stepped by it before. Its visited set
+    /// is per rank, so a duplicate stolen across ranks is stepped again rather
+    /// than counted here; the summed `processed` over the distinct-state count
+    /// is how far the sets leak.
+    pub skipped: u64,
     /// `STEAL` requests this rank sent while idle.
     pub steals_sent: u64,
     /// Steals this rank served (handed half its deque to a thief).
@@ -266,6 +283,16 @@ pub struct RankStats {
 /// is stepped exactly once and the per-rank [`LocalAccumulators`] are disjoint
 /// contributions that reduce by commutative union.
 ///
+/// Each rank keeps its own [`Visited`] set, checked before a step. A steal
+/// moves the front half of a deque to another rank, so a duplicate produced on
+/// one rank and its twin stolen to another are both stepped: the set is exact
+/// per rank and approximate across ranks, and sound either way (outputs are
+/// unions). The leak is bounded (a rank steps a distinct state at most once)
+/// but not small when steals split a commuting racy stretch early, since each
+/// rank then explores its own copy of what follows; [`RankStats::skipped`] and
+/// the summed `processed` measure it. The exact form is owner routing
+/// (DEVELOPMENT.md §11, state convergence), a different scheduler.
+///
 /// # Safety
 /// `ast_head` heads each rank's live (replicated) AST.
 pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
@@ -279,28 +306,23 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
     let size = world.size();
 
     let ast = Ast::index(ast_head);
-    let start_id = ast
-        .id_of(
-            ast.head()
-                .ok_or_else(|| internal("verify_configuration_mpi_stealing: empty AST"))?,
-        )
-        .ok_or_else(|| internal("verify_configuration_mpi_stealing: entry not indexed"))?;
 
     // Rank 0 seeds all continuations and holds all the credit; others start empty.
     let mut deque: VecDeque<Continuation> = VecDeque::new();
+    // Per rank: a duplicate that was stolen across ranks is stepped again
+    // there, so this is approximate, and still sound (outputs are unions). The
+    // duplicates are produced together on one rank, which is where it bites.
+    let mut visited = Visited::default();
     let mut credit: u64 = 0;
+    let mut total = LocalAccumulators::default();
+    // Every rank seeds (the AST and configuration are replicated, so all agree
+    // whether the entry is valid without a message); only rank 0 keeps them.
+    let Some((seeds, seeded)) = seed_local(&ast, systems, configuration)? else {
+        return Ok(None);
+    };
     if rank == 0 {
-        for system in systems {
-            let mut fronts = BTreeMap::new();
-            for hart in 0..system.harts {
-                fronts.insert(hart, start_id);
-            }
-            deque.push_back(Continuation {
-                state: State::new(system, configuration),
-                fronts,
-                active_hart: 0,
-            });
-        }
+        deque.extend(seeds);
+        total.union_with(seeded);
         credit = TOTAL_CREDIT;
     }
 
@@ -312,7 +334,6 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
         .filter(|&v| v < size)
         .collect();
 
-    let mut total = LocalAccumulators::default();
     let mut home: u64 = 0; // rank 0: credit returned so far (plus its own when idle)
     let mut returned = false; // returned our credit since last becoming active?
     let mut outstanding_steal = false;
@@ -393,6 +414,10 @@ pub unsafe fn verify_configuration_mpi_stealing<C: Communicator>(
 
         // 2. Do one unit of work, if any.
         if let Some(cont) = deque.pop_front() {
+            if !visited.first_visit(&cont)? {
+                stats.skipped += 1;
+                continue;
+            }
             let (successors, terminal, local) = step_local(&ast, configuration, &cont)?;
             stats.processed += 1;
             total.union_with(local);
@@ -600,17 +625,22 @@ pub fn mpi_verify(program_path: &str, harts: &[u8]) {
     if rank == 0 {
         // Per-rank utilisation table + a load-balance summary.
         println!("[utilisation] per-rank work-stealing breakdown:");
-        println!("  rank  processed  steals_sent  steals_served  work_recv  idle_iters  seconds");
+        println!(
+            "  rank    processed    skipped  steals_sent  steals_served  work_recv  idle_iters  seconds"
+        );
         let mut total_processed = 0u64;
+        let mut total_skipped = 0u64;
         let (mut min_p, mut max_p) = (u64::MAX, 0u64);
         for s in &stats {
             total_processed += s.processed;
+            total_skipped += s.skipped;
             min_p = min_p.min(s.processed);
             max_p = max_p.max(s.processed);
             println!(
-                "  {:>4}  {:>11}  {:>11}  {:>13}  {:>9}  {:>11}  {:>7.3}",
+                "  {:>4}  {:>11}  {:>9}  {:>11}  {:>13}  {:>9}  {:>11}  {:>7.3}",
                 s.rank,
                 s.processed.separate_with_commas(),
+                s.skipped.separate_with_commas(),
                 s.steals_sent.separate_with_commas(),
                 s.steals_served.separate_with_commas(),
                 s.work_received.separate_with_commas(),
@@ -625,9 +655,10 @@ pub fn mpi_verify(program_path: &str, harts: &[u8]) {
         };
         let wall = stats.iter().map(|s| s.seconds).fold(0.0, f64::max);
         println!(
-            "  total processed={} across {size} rank(s); \
+            "  total processed={} skipped={} across {size} rank(s); \
              load balance max/min={balance:.2} (max {}, min {}); wall {wall:.3}s",
             total_processed.separate_with_commas(),
+            total_skipped.separate_with_commas(),
             max_p.separate_with_commas(),
             min_p.separate_with_commas(),
         );

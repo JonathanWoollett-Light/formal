@@ -1,23 +1,22 @@
-//! Measures how much of the verifier's exploration is redundant, the number
-//! behind the state-convergence design note (DEVELOPMENT.md §11). Two interleavings that reach the same
-//! `Continuation` (state + per-hart fronts + active hart) have identical
-//! futures, so exploring both is wasted work. This drives the pointer-free
-//! pooled engine over a program twice, without and with a visited set keyed
-//! on the continuation's `postcard` bytes (every state type serialises from
-//! `BTreeMap`s and `Vec`s, so equal states give equal bytes), and reports the
-//! steps each took, the distinct states, and whether the six grow-only outputs
-//! came out identical, which is the soundness claim for skipping duplicates.
+//! Measures how much of the verifier's exploration would be repeated without
+//! the visited set the pointer-free engines keep (`Visited` in src/explore.rs),
+//! the numbers behind the state-convergence note in DEVELOPMENT.md §11. Two
+//! interleavings that reach the same `Continuation` (state + per-hart fronts +
+//! active hart) have identical futures, so exploring both is wasted work. This
+//! drives the pooled engine's worklist over a program twice, without and with
+//! the set, and reports the steps each took, the distinct states, and whether
+//! the six grow-only outputs came out identical, which is the soundness claim
+//! for skipping duplicates.
 //!
 //! Usage: `cargo run --profile test --example converge -- [--uart] <test> <harts>...`
 //! (the test profile: optimised, with the verifier's debug assertions kept).
 //! `CONVERGE_NOHASH=1` skips hashing on the plain run, to time the visited
 //! set's own cost.
 use formal::verifier_types::{
-    AccessTransitions, AccessedRanges, IndexLowerings, State, TypeConfiguration,
+    AccessTransitions, AccessedRanges, IndexLowerings, TypeConfiguration,
 };
 use formal::*;
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::time::Instant;
@@ -67,6 +66,12 @@ struct Run {
     steps: u64,
     skipped: u64,
     distinct: u64,
+    /// Repeats reached at a different depth from the state's first visit, and
+    /// the largest such distance. Zero on every program today: a repeat is a
+    /// commuting racy stretch's other order, reached in the same BFS wave,
+    /// which is what the wave-window mode in DEVELOPMENT.md §11 rests on.
+    far_repeats: u64,
+    max_distance: u32,
     max_frontier: usize,
     seconds: f64,
     outputs: Outputs,
@@ -81,8 +86,6 @@ unsafe fn explore(
     dedup: bool,
 ) -> Run {
     let ast = Ast::index(ast_head);
-    let start = ast.head().expect("empty AST");
-    let start_id = ast.id_of(start).expect("entry not indexed");
     let mut outputs = Outputs {
         touched: BTreeSet::new(),
         jumped: BTreeSet::new(),
@@ -92,28 +95,41 @@ unsafe fn explore(
         pinned_nodes: BTreeSet::new(),
         indexed: IndexLowerings::new(),
     };
-    let mut work: Vec<Continuation> = Vec::new();
+    let mut work: Vec<(u32, Continuation)> = Vec::new();
     for system in systems {
-        let state = State::new(system, configuration);
-        let mut fronts = BTreeMap::new();
-        for hart in 0..system.harts {
-            fronts.insert(hart, start_id);
-        }
-        work.push(Continuation {
-            state,
-            fronts,
-            active_hart: 0,
-        });
+        let mut sinks = RecordSinks {
+            accessed: &mut outputs.accessed,
+            transitions: &mut outputs.transitions,
+            uncompactable: &mut outputs.uncompactable,
+            pinned_nodes: &mut outputs.pinned_nodes,
+            indexed: &mut outputs.indexed,
+        };
+        let cont = seed(&ast, system, configuration, &mut sinks)
+            .expect("seed")
+            .expect("the entry is invalid under the oracle's configuration");
+        work.push((0, cont));
     }
-    let mut seen: HashSet<[u8; 32]> = HashSet::new();
+    // Digest to the depth first seen at, so a repeat's distance is measured.
+    let mut seen: HashMap<[u8; 16], u32> = HashMap::new();
     let (mut steps, mut skipped, mut max_frontier) = (0u64, 0u64, 0usize);
+    let (mut far_repeats, mut max_distance) = (0u64, 0u32);
     let started = Instant::now();
     let hash = dedup || std::env::var_os("CONVERGE_NOHASH").is_none();
-    while let Some(cont) = work.pop() {
+    while let Some((depth, cont)) = work.pop() {
         if hash {
-            let bytes = postcard::to_stdvec(&cont).expect("serialise continuation");
-            let digest: [u8; 32] = Sha256::digest(&bytes).into();
-            let fresh = seen.insert(digest);
+            let key = digest(&postcard::to_stdvec(&cont).expect("serialise continuation"));
+            let fresh = match seen.get(&key) {
+                Some(&first) => {
+                    let distance = depth.abs_diff(first);
+                    far_repeats += u64::from(distance > 0);
+                    max_distance = max_distance.max(distance);
+                    false
+                }
+                None => {
+                    seen.insert(key, depth);
+                    true
+                }
+            };
             if dedup && !fresh {
                 skipped += 1;
                 continue;
@@ -147,13 +163,15 @@ unsafe fn explore(
         if let Some(Terminal::Invalid) = outcome.terminal {
             panic!("the program is invalid under the oracle's configuration");
         }
-        work.extend(outcome.successors);
+        work.extend(outcome.successors.into_iter().map(|s| (depth + 1, s)));
         max_frontier = max_frontier.max(work.len());
     }
     Run {
         steps,
         skipped,
         distinct: seen.len() as u64,
+        far_repeats,
+        max_distance,
         max_frontier,
         seconds: started.elapsed().as_secs_f64(),
         outputs,
@@ -205,7 +223,7 @@ fn main() {
         && plain.outputs.indexed == deduped.outputs.indexed;
     let saved = 100.0 * (1.0 - deduped.steps as f64 / plain.steps.max(1) as f64);
     println!(
-        "{test}\tharts={harts:?}\tsteps={}\tdistinct={}\tdedup_steps={}\tskipped={}\tsaved={saved:.1}%\tplain={:.2}s\tdedup={:.2}s\tfrontier={}/{}\toutputs_identical={same}",
+        "{test}\tharts={harts:?}\tsteps={}\tdistinct={}\tdedup_steps={}\tskipped={}\tsaved={saved:.1}%\tplain={:.2}s\tdedup={:.2}s\tfrontier={}/{}\tfar_repeats={}\tmax_repeat_distance={}\toutputs_identical={same}",
         plain.steps,
         plain.distinct,
         deduped.steps,
@@ -213,6 +231,8 @@ fn main() {
         plain.seconds,
         deduped.seconds,
         plain.max_frontier,
-        deduped.max_frontier
+        deduped.max_frontier,
+        plain.far_repeats,
+        plain.max_distance
     );
 }

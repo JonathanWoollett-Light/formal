@@ -137,6 +137,131 @@ pub struct StepOutcome {
     pub terminal: Option<Terminal>,
 }
 
+/// Whether `active`, about to execute on `hart` in `state`, is valid under the
+/// fixed `configuration`: an invalid store/load, a config/annotation conflict,
+/// or a reachable `#!` makes the configuration invalid (no backtracking under a
+/// fixed configuration). Accesses are recorded into `sinks` as they are
+/// validated, exactly as the oracle's `next_step` records them.
+///
+/// # Safety
+/// `active` must be a live AST node and `state` the state reaching it.
+unsafe fn validate(
+    state: &State,
+    hart: u8,
+    active: NonNull<AstNode>,
+    configuration: &TypeConfiguration,
+    sinks: &mut RecordSinks,
+) -> Result<bool, CompilerError> {
+    Ok(match &active.as_ref().as_ref().this {
+        Instruction::Sw(Sw { to, offset, .. }) => {
+            check_store_at(state, hart, active, sinks, to, offset, 4)?
+        }
+        Instruction::Sb(Sb { to, offset, .. }) => {
+            check_store_at(state, hart, active, sinks, to, offset, 1)?
+        }
+        Instruction::Sh(Sh { to, offset, .. }) => {
+            check_store_at(state, hart, active, sinks, to, offset, 2)?
+        }
+        Instruction::Ld(Ld { from, offset, .. }) => {
+            check_load_at(state, hart, active, sinks, from, offset, 8)?
+        }
+        Instruction::Lw(Lw { from, offset, .. }) => {
+            check_load_at(state, hart, active, sinks, from, offset, 4)?
+        }
+        Instruction::Lb(Lb { from, offset, .. }) => {
+            check_load_at(state, hart, active, sinks, from, offset, 1)?
+        }
+        Instruction::Lh(Lh { from, offset, .. }) => {
+            check_load_at(state, hart, active, sinks, from, offset, 2)?
+        }
+        // An element-indexed access states no width: resolve it against the
+        // pointee's type first, then validate the sized access it stands for.
+        Instruction::Lidx(Lidx { from, index, .. }) => {
+            match resolve_index(state, hart, from, index)? {
+                IndexLowering::OutOfBounds => false,
+                IndexLowering::At { label, offset, ty } => {
+                    record_index_into(sinks.indexed, active, &label, &offset, &ty);
+                    check_load_at(state, hart, active, sinks, from, &offset, size(&ty))?
+                }
+            }
+        }
+        Instruction::Sidx(Sidx { to, index, .. }) => match resolve_index(state, hart, to, index)? {
+            IndexLowering::OutOfBounds => false,
+            IndexLowering::At { label, offset, ty } => {
+                check_store_width(&ty)?;
+                record_index_into(sinks.indexed, active, &label, &offset, &ty);
+                check_store_at(state, hart, active, sinks, to, &offset, size(&ty))?
+            }
+        },
+        // An atomic accesses `(rs1)` (zero offset): validate it like a 4-byte
+        // store (read and write hit the same address, so the store check covers
+        // both).
+        Instruction::Amoadd(Amoadd { rs1, .. }) => {
+            let zero = Offset {
+                value: Immediate {
+                    radix: 10,
+                    value: 0,
+                },
+            };
+            check_store_at(state, hart, active, sinks, rs1, &zero, 4)?
+        }
+        // A `define`/`la`/`lat` must match the fixed configuration the way the
+        // oracle's `load_label` validates; this also guards `apply_node`'s
+        // annotation asserts, reached only once `load_label` has accepted.
+        Instruction::Define(Define {
+            label,
+            locality,
+            cast,
+        }) => config_accepts(configuration, label, cast.as_ref(), locality.as_ref()),
+        Instruction::La(La { label, .. }) | Instruction::Lat(Lat { label, .. }) => {
+            config_accepts(configuration, label, None, None)
+        }
+        // A reachable `#!` invalidates the configuration.
+        Instruction::Fail(_) => false,
+        // Everything else has no validation step (matches `next_step`).
+        _ => true,
+    })
+}
+
+/// The continuation a system's exploration starts from: every hart's front is
+/// the entry node and hart 0 is active, with the entry already applied for
+/// every other hart. That is the state the sequential [`Explorerer`] reaches
+/// before its first `queue_up`: `build_initial_chain` lays one branch per hart
+/// at the entry with hart 0 nearest the leaf, and `find_state` replays the
+/// others' entries first. `compute_next` then looks one node past every front
+/// in this state, so a program whose entry is `csrr t0, mhartid` followed by
+/// `bnez t0` (`three_harts`) needs `t0` defined on every hart, not just hart 0.
+///
+/// `None` when the entry itself is invalid under `configuration`: the oracle
+/// validates hart 0's entry (its first `next_step`) before the chain is
+/// replayed, and `apply_node` asserts what validation has accepted, so nothing
+/// is applied for an entry the configuration refuses.
+///
+/// # Safety
+/// `ast` must index a live AST with an entry node.
+pub unsafe fn seed(
+    ast: &Ast,
+    system: &InnerVerifierConfiguration,
+    configuration: &TypeConfiguration,
+    sinks: &mut RecordSinks,
+) -> Result<Option<Continuation>, CompilerError> {
+    let start = ast.head().internal("seed: empty AST")?;
+    let start_id = ast.id_of(start).internal("seed: entry node not indexed")?;
+    let mut state = State::new(system, configuration);
+    if !validate(&state, 0, start, configuration, sinks)? {
+        return Ok(None);
+    }
+    for hart in (1..system.harts).rev() {
+        apply_node(&mut state, hart, start, configuration, sinks)?;
+    }
+    let fronts = (0..system.harts).map(|hart| (hart, start_id)).collect();
+    Ok(Some(Continuation {
+        state,
+        fronts,
+        active_hart: 0,
+    }))
+}
+
 /// Advances one [`Continuation`] by applying its active hart's front node: the
 /// pointer-free analogue of one `next_step` + `queue_up` of the sequential
 /// [`Explorerer`]. It validates the active node under the fixed `configuration`
@@ -171,81 +296,8 @@ pub unsafe fn step(
     // Reachability: the oracle records `touched` for every node it makes active.
     touched.insert(active);
 
-    // Validate the active node under the fixed configuration: an invalid
-    // store/load, a config/annotation conflict, or a reachable `#!` makes the
-    // configuration invalid (no backtracking under a fixed configuration).
-    let valid = match &active.as_ref().as_ref().this {
-        Instruction::Sw(Sw { to, offset, .. }) => {
-            check_store_at(&cont.state, hart, active, sinks, to, offset, 4)?
-        }
-        Instruction::Sb(Sb { to, offset, .. }) => {
-            check_store_at(&cont.state, hart, active, sinks, to, offset, 1)?
-        }
-        Instruction::Sh(Sh { to, offset, .. }) => {
-            check_store_at(&cont.state, hart, active, sinks, to, offset, 2)?
-        }
-        Instruction::Ld(Ld { from, offset, .. }) => {
-            check_load_at(&cont.state, hart, active, sinks, from, offset, 8)?
-        }
-        Instruction::Lw(Lw { from, offset, .. }) => {
-            check_load_at(&cont.state, hart, active, sinks, from, offset, 4)?
-        }
-        Instruction::Lb(Lb { from, offset, .. }) => {
-            check_load_at(&cont.state, hart, active, sinks, from, offset, 1)?
-        }
-        Instruction::Lh(Lh { from, offset, .. }) => {
-            check_load_at(&cont.state, hart, active, sinks, from, offset, 2)?
-        }
-        // An element-indexed access states no width: resolve it against the
-        // pointee's type first, then validate the sized access it stands for.
-        Instruction::Lidx(Lidx { from, index, .. }) => {
-            match resolve_index(&cont.state, hart, from, index)? {
-                IndexLowering::OutOfBounds => false,
-                IndexLowering::At { label, offset, ty } => {
-                    record_index_into(sinks.indexed, active, &label, &offset, &ty);
-                    check_load_at(&cont.state, hart, active, sinks, from, &offset, size(&ty))?
-                }
-            }
-        }
-        Instruction::Sidx(Sidx { to, index, .. }) => {
-            match resolve_index(&cont.state, hart, to, index)? {
-                IndexLowering::OutOfBounds => false,
-                IndexLowering::At { label, offset, ty } => {
-                    check_store_width(&ty)?;
-                    record_index_into(sinks.indexed, active, &label, &offset, &ty);
-                    check_store_at(&cont.state, hart, active, sinks, to, &offset, size(&ty))?
-                }
-            }
-        }
-        // An atomic accesses `(rs1)` (zero offset): validate it like a 4-byte
-        // store (read and write hit the same address, so the store check covers
-        // both).
-        Instruction::Amoadd(Amoadd { rs1, .. }) => {
-            let zero = Offset {
-                value: Immediate {
-                    radix: 10,
-                    value: 0,
-                },
-            };
-            check_store_at(&cont.state, hart, active, sinks, rs1, &zero, 4)?
-        }
-        // A `define`/`la`/`lat` must match the fixed configuration the way the
-        // oracle's `load_label` validates; this also guards `apply_node`'s
-        // annotation asserts, reached only once `load_label` has accepted.
-        Instruction::Define(Define {
-            label,
-            locality,
-            cast,
-        }) => config_accepts(configuration, label, cast.as_ref(), locality.as_ref()),
-        Instruction::La(La { label, .. }) | Instruction::Lat(Lat { label, .. }) => {
-            config_accepts(configuration, label, None, None)
-        }
-        // A reachable `#!` invalidates the configuration.
-        Instruction::Fail(_) => false,
-        // Everything else has no validation step (matches `next_step`).
-        _ => true,
-    };
-    if !valid {
+    // Validate the active node under the fixed configuration.
+    if !validate(&cont.state, hart, active, configuration, sinks)? {
         return Ok(StepOutcome {
             successors: Vec::new(),
             terminal: Some(Terminal::Invalid),

@@ -46,13 +46,6 @@ Short, medium and long terms things to do.
   rewrite sites in the audit, but the natural rule also refuses `exit(a0)`
   and `print(t0)`, which are correct. Needs flow analysis or a narrower rule.
 - Zero-arity `def f():` and a call `f()`; today a `def` needs a parameter.
-- State convergence in the verifier: a visited set in the pooled, rayon and
-  MPI engines (hash ownership in MPI). Measured 75 to 99.9% of steps repeated
-  on every multi-hart test, `uart_hello` 15 s to 0.05 s, outputs identical;
-  design and numbers in DEVELOPMENT.md 11, driver in `examples/converge.rs`.
-- The pooled `step` refuses `three_harts` (`bnez register has no value`) where
-  the oracle passes it, and `parallel_oracle_crosscheck` pins the two engines
-  equal only on its own program. Widen it to every multi-hart test.
 - `cargo build --release` does not compile: seven `debug_assert!` read loop
   counters declared under `#[cfg(debug_assertions)]` (ast.rs 152, 184, 196,
   673, 697; verifier.rs 903, 1171). The tests get their speed from
@@ -93,6 +86,18 @@ Short, medium and long terms things to do.
 
 ## Medium
 
+- The verifier's visited set past memory, in order: a wave window (a ring of
+  the last L per-wave digest sets, L = 1 today, with a wave cap that refuses),
+  then disk delayed duplicate detection at the wave barriers (bucket files by
+  digest prefix, a `FORMAL_VISITED_MEMORY` threshold pinned by a test that
+  forces it low). Both designed with their numbers in DEVELOPMENT.md 11, state
+  convergence; the largest state space today is 6,098 states, so nothing
+  needs either yet.
+- Owner routing in the MPI work-stealing backend: send each successor to its
+  `owner` instead of stealing, with Safra's token-ring termination in place of
+  Mattern's credit (which halves per hand-off). Makes deduplication exact
+  across ranks; today the per-rank sets leak when steals split a commuting
+  racy stretch early, measured by `skipped` in the `mpi-bench` table.
 - Add more IO, make a `core` library that has IO agnostic things from `std`.
 - Add a test, that tests using AI to re-write Python code into formal code.
 

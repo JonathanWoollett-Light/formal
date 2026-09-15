@@ -1990,10 +1990,10 @@ the base: keep shared mutation rare, keep branches determinate, annotate types
 (`uart_hello` at 13 racy UART writes × 2 harts is already ~2·10⁶ steps).
 
 Planned (unimplemented) scaling modes trade soundness or precision for those
-exponents; see [§11](#11-design-notes--roadmap). Most of `h^r` as explored
-today is repetition rather than distinct states: the state-convergence note in
-§11 measured 75 to 99.9% of steps on the multi-hart tests as revisits of a
-state already explored.
+exponents; see [§11](#11-design-notes--roadmap). Most of `h^r` is repetition
+rather than distinct states: the pointer-free engines keep a visited set and
+step each distinct continuation once (§11, state convergence), which on the
+multi-hart tests removes 75 to 99.9% of the steps the oracle takes.
 
 ### 7.1 Parallel decoupling
 
@@ -2043,11 +2043,13 @@ sequential `Explorerer` which stays as the reference oracle):
       configurations; an MPI all-reduce(min) selects the lowest-rank valid one
       (only a `u64` crosses).
     - *Inner* (`verify_configuration_mpi`): one fixed configuration's frontier is
-      distributed across ranks - each rank steps the continuations it owns, the
-      successors are MPI all-gathered (so a continuation produced on one rank
-      *migrates* to whichever rank owns its slot next - the real `postcard` bytes
-      a node ships), and the per-rank `LocalAccumulators` reduce by commutative
-      union. `all_gather_bytes` is the var-count all-gather both use.
+      distributed across ranks - each rank steps the part of the frontier it
+      owns (`owner`: the digest of the continuation's bytes modulo the rank
+      count, so every rank agrees without a message), buckets each successor by
+      its owner, and the buckets are MPI all-gathered, each rank keeping the
+      bucket addressed to it (migration: the real `postcard` bytes a node ships)
+      and stepping only what its visited set has not seen; the per-rank
+      `LocalAccumulators` reduce by commutative union. `all_gather_bytes` is the var-count all-gather both use.
 
   `formal mpi-selftest` runs both axes end to end. Building needs a system MPI +
   libclang (provisioned by `build.rs` alongside MPI), so it builds/runs
@@ -2069,18 +2071,21 @@ backends that all produce the identical outputs:
 | Real MPI, wave          | `outer_sweep_winner` + `verify_configuration_mpi`                    | `mpirun -n N`, barrier per wave |
 | Real MPI, work-stealing | `verify_configuration_mpi_stealing`                                  | `mpirun -n N`, barrier-free     |
 
-The flow is the same in every backend: seed one `Continuation` per system at the
-program entry; `step` each frontier item (validate the active node, `apply_node`
-it, classify the next interleaving via `compute_next`, fork into 0/1/N
-successors); union the grow-only outputs; a configuration drains to `Valid` or
-hits `Invalid`. The backends differ only in *where* the `step`s run and *how* the
+The flow is the same in every backend: `seed` one `Continuation` per system
+(every hart at the entry, hart 0 active, the entry validated for hart 0 and
+applied for the other harts, as the oracle's initial chain replays it); `step`
+each frontier item the visited set has not seen (validate the active node,
+`apply_node` it, classify the next interleaving via `compute_next`, fork into
+0/1/N successors); union the grow-only outputs; a configuration drains to
+`Valid` or hits `Invalid`. The backends differ only in *where* the `step`s run and *how* the
 continuations and the output union move between workers (shared memory, a
 `postcard` round-trip, or MPI messages).
 
 Every backend is pinned against the sequential oracle by
 [`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs)
-(in-process, annotated + inferred programs, identical across worker counts) and,
-for the real MPI paths, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), which
+(in-process: annotated + inferred programs, identical across worker counts, and
+every multi-hart test program with the distinct-state count each engine steps
+pinned, §11) and, for the real MPI paths, by [`tests/mpi_cluster`](tests/mpi_cluster/main.rs), which
 launches the verifier under `mpirun` (each process a simulated node): the wave
 backend at 1/4/24 ranks (checking it infers the oracle's configuration and
 accessed byte-ranges), and the work-stealing backend at 8/16/24 ranks on the
@@ -2601,15 +2606,18 @@ work in the Linux stream: a hosted hart-id primitive so `mhartid`-reading progra
 `mhartid`/MMIO) is now hostable and could move; and hosted variants of the racy /
 MMIO programs.
 
-### State convergence (measured, not implemented)
+### State convergence (implemented)
 
 Two interleavings that reach the same continuation (state, per-hart fronts,
 active hart) under one configuration have identical futures: `step` is a
 function of that continuation and the AST, and its outputs are grow-only
-unions, so exploring the second is pure repetition. Nothing notices today.
-The sequential `Explorerer` is a tree with parent pointers and 21 tests pin
-its exact traces, so it stays as it is; the pointer-free engines are where a
-visited set belongs.
+unions, so exploring the second is pure repetition. The pointer-free engines
+therefore keep a visited set, [`Visited`](src/explore.rs): the first 128 bits
+of the SHA-256 of the continuation's `postcard` bytes, checked before every
+`step` (`first_visit`), so each distinct continuation is stepped once and the
+search runs over the state graph rather than the tree of interleavings. The
+sequential `Explorerer` is a tree with parent pointers and 21 tests pin its
+exact traces, so it stays as it is, as the oracle.
 
 Where the repetition comes from, in this verifier:
 
@@ -2627,11 +2635,10 @@ Where the repetition comes from, in this verifier:
   canonical, so two calls printing different strings still converge.
 
 Measured with `cargo run --profile test --example converge -- [--uart] <test>
-<harts>...`, which drives the pooled engine twice, without and with a visited
-set keyed on the continuation's `postcard` bytes (every state type serialises
-from `BTreeMap`s and `Vec`s, so equal states give equal bytes). The six
-outputs were identical in every run, which is the soundness claim checked
-rather than argued:
+<harts>...`, which drives the same worklist twice, without and with the set.
+The six outputs were identical in every run, which is the soundness claim
+checked rather than argued. Steps is what the oracle (and an engine without
+the set) takes; distinct is what the engines step now:
 
 | Program (harts)           | Steps      | Distinct | Saved  |
 | ------------------------- | ---------- | -------- | ------ |
@@ -2639,34 +2646,175 @@ rather than argued:
 | `hpc_demo` (1, 2)         | 499,601    | 407      | 99.9%  |
 | `parallel_probe` (2)      | 4,679      | 445      | 90.5%  |
 | `heap_regions` (1, 2)     | 1,021      | 99       | 90.3%  |
+| `three_harts` (3)         | 281        | 65       | 76.9%  |
 | `fannkuch_v2` (2)         | 24,359     | 6,017    | 75.3%  |
 | `racy_increment` (1, 2)   | 716        | 184      | 74.3%  |
 | `racy_store_*` (1, 2)     | 67         | 43       | 35.8%  |
 | `two_sum` (1)             | 460        | 460      | 0%     |
 
-`uart_hello` at two harts went from 15.4 s to 0.05 s. The visited set costs
-about 1.9 µs a step (serialise, SHA-256, insert: 12.3 s to 16.4 s over 2.1 M
-steps, against 5.8 µs for the step itself), so it pays for itself once a
-quarter of the steps are repeats; every multi-hart program above clears that,
-and a single-hart program is a few hundred steps whichever way. The set holds
-one 32-byte digest per distinct state.
+`uart_hello` at two harts went from 15.4 s to 0.05 s. The check costs about
+1.9 µs a continuation (serialise, SHA-256, insert) against 5.8 µs for the
+step, so it pays for itself once a quarter of the steps are repeats; every
+multi-hart program above clears that, and a single-hart program is a few
+hundred steps whichever way.
 
-The implementation, when it is taken up: in `verify_configuration_pooled`, a
-`HashSet<[u8; 32]>` checked before `step`, a dozen lines and what the example
-does. In the rayon wave backend, deduplicate each wave's successors between
-waves, single-threaded, keeping the set across waves. In the MPI backends, own
-a continuation by `hash % size` rather than by frontier index, so each rank's
-local set is complete for what it owns; under work-stealing a stolen item
-changes owner and the set becomes approximate, acceptable because the
-duplicates are produced together on one rank. No output changes:
-`parallel_oracle_crosscheck` already pins these engines against the oracle by
-the outputs. Two things found on the way: the pooled `step` refuses
-`three_harts` (`bnez register has no value`) where the oracle passes it, and
-the crosscheck covers only its own program, so it should be widened to every
-multi-hart test before that engine is relied on; and beyond a visited set the
-next classic wins are symmetry reduction (a canonical hart order for identical
-harts) and independence-based partial-order reduction, which avoids generating
-the duplicate rather than pruning it after one step.
+The example also measures each repeat's distance: the depth it was reached
+again at, less the depth of its first visit. On every program above every
+repeat was at distance 0 (`max_repeat_distance=0`), reached in the same BFS
+wave. That is structural: a step advances one hart by one node, so two paths
+that reach the same fronts have the same length unless a hart went round a
+cycle that left the state unchanged, and only such a cycle can produce a far
+repeat today (after fork-on-indeterminate, joins will too). The wave-window
+layer below rests on this number, so it is measured, not remembered.
+
+Per engine:
+
+- `verify_configuration_pooled`: checked as each continuation is popped.
+- `verify_configuration_parallel` and `verify_configuration_distributed_sim`:
+  each worker digests the successors it produces, inside the parallel section
+  (the byte-carrying engine from the bytes in transit), and between waves the
+  single-threaded part is only the insert. Digesting between waves would have
+  cost 1.9 µs a state against 5.8 µs of stepping shared across the workers,
+  capping a 24-core node at two or three cores' worth once frontiers widen.
+  `WaveReport::distinct` reports the set's size wave by wave (the utilisation
+  log prints it beside the frontier), which is the memory the search holds.
+- `verify_configuration_mpi` (wave): each rank holds the part of the frontier
+  it owns, where a continuation's owner is `owner`, its digest modulo the rank
+  count. A rank steps its part, encodes and digests each successor once and
+  puts it in the bucket of its owner; the buckets are all-gathered and each
+  rank keeps the bucket addressed to it, stepping only what its set has not
+  seen, which is complete for what it owns. Frontier and set are both
+  partitioned: each rank holds its share of the distinct states, and the
+  cluster's capacity is the sum of its ranks' memory. Every rank digests only
+  what it produces and receives, about 2 x 1.9 µs a state against 5.8 µs of
+  stepping; the first form, an owner check over a replicated frontier, had
+  every rank digesting the whole frontier, O(F) a rank against O(F/N) of
+  stepping. The wire volume is unchanged (an all-gather carries everything to
+  everyone); an all-to-all would divide it by the rank count when that
+  matters.
+- `verify_configuration_mpi_stealing`: a per-rank set checked before
+  `step_local`, exact per rank and approximate across ranks, sound either way
+  (outputs are unions). The leak is bounded, since a rank steps a distinct
+  state at most once, but not small: a steal moves the front half of a deque,
+  so when steals split a commuting racy stretch early each rank goes on to
+  explore its own copy of what follows, and total work tends towards ranks
+  times distinct with the wall time of the single-process exact search.
+  `RankStats::skipped` and the summed `processed` measure it (the `mpi-bench`
+  table prints both). The exact form is owner routing: each successor goes to
+  `owner`, local ones checked against the set and pushed, remote ones sent in
+  batches, which replaces stealing and needs a termination detector that
+  survives routing (Safra's token ring; Mattern's credit halves per hand-off
+  and is exhausted within about forty). A rewrite of that scheduler, in
+  TODO.md.
+
+**Soundness.** The set can only prune, so the question is whether it ever
+prunes a state that was new. Equal states give equal bytes (every state type
+serialises from `BTreeMap`s and `Vec`s), so two different states are conflated
+only by a digest collision: at 10^12 distinct states the chance that any two
+collide is about 10^-15 (n^2 / 2^129). A collision would hide whatever the
+pruned state led to, an invalid path included, so the digest's width is a
+soundness margin rather than a size choice. Every engine is pinned against the
+oracle by [`tests/parallel_oracle_crosscheck`](tests/parallel_oracle_crosscheck/main.rs),
+program by program: the pooled, rayon and byte-carrying engines reproduce the
+oracle's outputs on every multi-hart test, and the rayon engine's step count
+(the sum of its wave sizes) is pinned to the distinct column above. The three
+heavy programs are an ignored variant (about 30 s, most of it the oracle):
+`cargo test --test parallel_oracle_crosscheck every_heavy -- --ignored`.
+
+**Seeding, found on the way.** The pointer-free engines seeded every hart at
+the entry with hart 0 active and nothing applied, then `compute_next` looked
+one node past every front. The oracle's `build_initial_chain` lays one branch
+per hart at the entry and `find_state` replays the entry for every hart but 0
+before the first `queue_up`, so a program whose entry is `csrr t0, mhartid`
+followed by `bnez t0` had `t0` defined on every hart in the oracle and only on
+hart 0 in the engines: `three_harts` was refused with `bnez register has no
+value`. All five seeds are now one function, [`seed`](src/verifier.rs), which
+validates hart 0's entry first (the oracle's first `next_step` runs before the
+replay, and `apply_node` asserts what validation accepted) and applies it for
+the other harts; `Invalid` at the entry is `None`.
+
+#### When the set itself is too large
+
+With the set, time is the number of distinct states times a step, and memory
+is 16 bytes a state plus the table's slack (about 20 bytes with hashbrown's
+load factor). At 7.7 µs a state a core produces about 470 million distinct
+states an hour, 8 to 9 GB of set; 64 cores fill a 512 GB machine in an hour.
+A large system's state space will not fit in memory, and the frontier is the
+other consumer: the wave engines hold a whole BFS level as full continuations
+(kilobytes each), whereas a depth-first order (the example's stack) holds only
+the path's branching. What is built so far, and what to add when a program
+needs it, in the order it should be taken:
+
+1. **Partition across ranks** (built, the MPI wave engine). Ownership by
+   digest splits the set evenly, so capacity grows with the cluster: 64 nodes
+   of 64 GB hold 2.5 x 10^11 states, a collision chance of 10^-16.
+2. **A wave window instead of the whole set** (designed; the memory answer
+   for the fork-free engine). Every repeat today is found in the same wave,
+   so the set need only hold the current wave's digests to catch them: a ring
+   of the last L per-wave sets, L = 1 today, makes memory the width of the
+   state graph at one depth times 16 bytes times L rather than the whole
+   graph. `uart_hello`'s 6,098 becomes 48; a run of 10^12 states of the same
+   deep, narrow shape (width 10^6 to 10^7) holds 16 to 160 MB of digests
+   instead of 16 TB. It is the sweep-line method ("A Sweep-Line Method for
+   State Space Exploration", Christensen, Kristensen and Mailund) with BFS
+   depth as the progress measure. Exact, never a skip: forgetting a digest can
+   only re-explore a far repeat, whose outputs are the same unions. The one
+   hazard is termination: a cycle that leaves the state unchanged (a hart
+   spinning while every other is blocked) repeats at a distance, and only a
+   global set ends it, so the window mode needs a wave cap that refuses
+   ("depth bound reached, not proven"), which is sound. After
+   fork-on-indeterminate, joins produce far repeats and L must cover the
+   longest difference in arm length (a CLI argument, a default such as 64).
+   About thirty lines in the wave engines. It waits for a program whose set
+   passes about 1 GB (6 x 10^7 states), and the example's
+   `max_repeat_distance` must stay 0 for L = 1 to be exact.
+3. **Spill to disk, checked in batches** (designed; only past the window, and
+   only together with partitioning). Delayed duplicate detection as in "Using
+   magnetic disk instead of main memory in the Murphi verifier" (Stern and
+   Dill): the set on disk in bucket files by the digest's leading bits, a
+   buffer of unchecked digests in memory, and at a barrier the buffer sorted
+   by bucket and each touched bucket merged in one sequential pass, emitting
+   the fresh ones. Within a batch a duplicate may be stepped twice, harmless
+   (outputs are unions); no state is ever wrongly pruned, so it is exactly as
+   sound as the in-memory set. A pass reads and rewrites 32 bytes a state: a
+   16 TB set (10^12 states) at 3 GB/s is 1.5 hours a pass, so passes must be
+   rare. With R unchecked digests buffered, the I/O per state is 32 B x |V| /
+   R, and keeping it under the step cost of a 24-core node needs R of about
+   4% of the set: 700 GB a node for 10^12 states unless the set is also
+   partitioned (layer 1: over 64 nodes, 250 GB of disk and 11 GB of buffer
+   each). The shape is a `Visited` that switches to bucket files past a memory
+   threshold (`FORMAL_VISITED_MEMORY`), pinned by a test with the threshold
+   forced low; the frontier spills the same way, as `postcard` bytes per
+   wave, which the byte-carrying engine already produces. Complete searches
+   of about 10^13 states have been done this way ("Large-Scale Parallel
+   Breadth-First Search", Korf and Schultze, in about a month); distributed
+   Murphi reached about 10^10 ("Industrial strength distributed explicit
+   state model checking", Bingham and others). Past that the exponents must
+   come down first.
+4. **Fewer states rather than more storage**, which is what beats an
+   exponent: partial-order reduction (do not generate the commuting
+   interleavings at all, rather than pruning them a step later), symmetry
+   reduction (a canonical hart order for identical harts, bounded by h! and
+   limited here since `csrr mhartid` tells harts apart), and state
+   canonicalisation (`forget` on std's clobbered scratch registers, so states
+   differing only in dead registers are one). Each shrinks the distinct
+   column itself, and the set then costs 16 bytes per state that is left. One
+   caution: static persistent sets keep the reduced successor function a
+   function of the continuation, so the visited set stays sound; dynamic
+   partial-order reduction with sleep or backtrack sets does not (the future
+   then depends on the sleep set too) and needs its stateful form ("Efficient
+   Stateful Dynamic Partial Order Reduction", Yang, Chen, Gopalakrishnan and
+   Kirby).
+
+Bitstate hashing (Holzmann's supertrace, a Bloom filter of one or two bits a
+state) is not planned: a false positive prunes a new state and can hide an
+invalid path, so it accepts invalid programs with a probability no report
+string makes acceptable, and the designed `partial` scaling mode below is the
+better-defined partial answer.
+
+No program today comes near any threshold (the largest state space is
+`uart_hello` at 6,098 states, 100 KB of set), so layers 2 to 4 wait for the
+program that needs them, and the numbers above say when that is.
 
 ### Scaling modes (designed, not implemented)
 
