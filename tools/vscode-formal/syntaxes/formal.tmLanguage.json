@@ -6,6 +6,7 @@
   "patterns": [
     { "include": "#comment" },
     { "include": "#string" },
+    { "include": "#asm-block" },
     { "include": "#def-header" },
     { "include": "#define" },
     { "include": "#keyword" },
@@ -15,7 +16,8 @@
     { "include": "#builtin-call" },
     { "include": "#call" },
     { "include": "#operator" },
-    { "include": "#punctuation" }
+    { "include": "#punctuation" },
+    { "include": "#variable" }
   ],
   "repository": {
     "comment": {
@@ -28,6 +30,22 @@
       "end": "\"",
       "patterns": [
         { "name": "constant.character.escape.formal", "match": "\\\\." }
+      ]
+    },
+    "asm-block": {
+      "comment": "`asm:` and the lines indented deeper than it. Registers, numbers, comments and strings are coloured; the mnemonics and their other operands stay plain instead of being read as variables. The end backreference is the header's indentation: the block closes at the first non-blank line not indented past it.",
+      "begin": "^(\\s*)(asm)(:)[ \\t]*(?=#|$)",
+      "beginCaptures": {
+        "2": { "name": "keyword.control.formal" },
+        "3": { "name": "punctuation.separator.annotation.formal" }
+      },
+      "end": "^(?!\\1[ \\t]+\\S)(?=[ \\t]*\\S)",
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#string" },
+        { "include": "#asm-register" },
+        { "include": "#number" },
+        { "include": "#punctuation" }
       ]
     },
     "def-header": {
@@ -76,9 +94,19 @@
       ]
     },
     "register": {
-      "comment": "the fourteen registers the dialect names: these are the CPU registers themselves",
-      "name": "variable.language.register.formal",
+      "comment": "the fourteen registers the dialect names: the CPU registers themselves, so a constant scope rather than a variable one. Themes colour the two families apart (Dark+: blue against light blue; One Dark: orange against red), where `variable.language` is often painted like any other variable.",
+      "name": "constant.language.register.formal",
       "match": "\\b(?:t[0-5]|a[0-7])\\b"
+    },
+    "asm-register": {
+      "comment": "inside `asm:` every RISC-V register name, the same list the website's grammar uses",
+      "name": "constant.language.register.formal",
+      "match": "\\b(?:x(?:[12]?\\d|3[01])|zero|ra|sp|gp|tp|fp|a[0-7]|s(?:[0-9]|1[0-1])|t[0-6]|v(?:[12]?\\d|3[01]))\\b"
+    },
+    "variable": {
+      "comment": "any other name: an ordinary variable (`my_variable = 2`). Last, after keywords, types, registers and calls have had their turn.",
+      "name": "variable.other.formal",
+      "match": "\\b[A-Za-z_]\\w*\\b"
     },
     "number": {
       "name": "constant.numeric.formal",

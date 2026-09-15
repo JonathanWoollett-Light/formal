@@ -54,11 +54,30 @@ folder is untouched.
 | `if` `while` `return` `require` `asm` | control keywords                   |
 | `global` `thread`                     | locality                           |
 | `u8` ... `i64`, `_`, `..`             | types and their placeholders       |
-| `t0`-`t5`, `a0`-`a7`                  | registers                          |
+| `t0`-`t5`, `a0`-`a7`                  | registers, as language constants   |
 | numbers, `0x...`, `0b...`             | numeric constants                  |
 | `type(` `csr(`                        | builtins                           |
 | `name(`                               | a call                             |
 | `&name`, `+ - * / %`, `== != < > <= >=` | operators                        |
+| any other name                        | a variable                         |
 
-Lines inside an `asm:` block get the same treatment; the registers and
-numbers in them are coloured, the mnemonics are left plain.
+Registers are the CPU registers themselves, not variables, and they are
+scoped as constants (`constant.language.register.formal`) so that they read
+differently from ordinary variables (`variable.other.formal`): themes colour
+the two families apart (Dark+ blue against light blue, One Dark orange against
+red), whereas a `variable.language` scope is painted like any other variable
+by many themes. If a theme still shows them alike, a rule in `settings.json`
+picks a colour for the register scope alone:
+
+```json
+"editor.tokenColorCustomizations": {
+  "textMateRules": [
+    { "scope": "constant.language.register.formal", "settings": { "foreground": "#d19a66" } }
+  ]
+}
+```
+
+Inside an `asm:` block (the header and the lines indented past it) every
+RISC-V register name, the numbers, comments and strings are coloured; the
+mnemonics and their other operands stay plain rather than being read as
+variables.
