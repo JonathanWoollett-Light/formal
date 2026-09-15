@@ -41,23 +41,23 @@ a5 = 0
 
 t4 = 0
 while t4 < a0:
-    t0 = at([nums, t4, a3])
+    t0 = at(nums, t4, a3)
     a6 = t0[0]
     a7 = a1 - a6
 
     # --- look the complement up, probing from its canonical slot ---
-    t3 = mod([a7, a2])
+    t3 = mod(a7, a2)
     t5 = 1
     while t5 != 0:
-        t0 = at([used, t3, a3])
+        t0 = at(used, t3, a3)
         t2 = t0[0]
         if t2 == 0:
             t5 = 0
         if t2 != 0:
-            t0 = at_offset([keys, t1])
+            t0 = at_offset(keys, t1)
             t2 = t0[0]
             if t2 == a7:
-                t0 = at_offset([vals, t1])
+                t0 = at_offset(vals, t1)
                 a4 = t0[0]
                 a5 = t4
                 t5 = 0
@@ -66,17 +66,17 @@ while t4 < a0:
             t3 = t3 % a2
 
     # --- insert this value at its own canonical slot ---
-    t3 = mod([a6, a2])
+    t3 = mod(a6, a2)
     t5 = 1
     while t5 != 0:
-        t0 = at([used, t3, a3])
+        t0 = at(used, t3, a3)
         t2 = t0[0]
         if t2 == 0:
             t2 = t2 + 1
             t0[0] = t2
-            t0 = at_offset([keys, t1])
+            t0 = at_offset(keys, t1)
             t0[0] = a6
-            t0 = at_offset([vals, t1])
+            t0 = at_offset(vals, t1)
             t0[0] = t4
             t5 = 0
         if t5 != 0:

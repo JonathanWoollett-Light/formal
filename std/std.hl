@@ -89,39 +89,39 @@ def exit(code: i64):
         ecall
     unreachable
 
-# at([arr, i, size]): the address of element i of the variable arr, with
+# at(arr, i, size): the address of element i of the variable arr, with
 # elements `size` bytes wide. `size` and `i` are registers (there is no
 # multiply-immediate). The element is then read or written through the
 # result with `p[0]`. Clobbers t0 and t1; leaves the byte offset in t1, which
 # `at_offset` reuses for a parallel array. Do not pass t0 as `i` (the result
 # overwrites it before it is used).
-def at([arr, i, size]: [[..], i64, i64]):
+def at(arr: [..], i: i64, size: i64):
     t1 = i * size
     t0 = &arr
     return t0 + t1
 
-# at_offset([arr, off]): the address `off` bytes into the variable arr: a byte
+# at_offset(arr, off): the address `off` bytes into the variable arr: a byte
 # array's element `off`, or the offset a preceding `at` left in t1 (the same
 # element of a parallel array). Clobbers t0.
-def at_offset([arr, off]: [[..], i64]):
+def at_offset(arr: [..], off: i64):
     t0 = &arr
     return t0 + off
 
-# mod([k, cap]): Python's `%`, the canonical non-negative remainder
+# mod(k, cap): Python's `%`, the canonical non-negative remainder
 # ((k % cap) + cap) % cap. RISC-V `rem` takes the dividend's sign, so a bare
 # `%` on a negative key indexes a table backwards. `cap` is a register (no
 # remainder-immediate). Clobbers t3.
-def mod([k, cap]: [i64, i64]):
+def mod(k: i64, cap: i64):
     t3 = k % cap
     t3 = t3 + cap
     return t3 % cap
 
-# fetch_add([old, counter, v]): old = counter; counter = counter + v, in one
+# fetch_add(old, counter, v): old = counter; counter = counter + v, in one
 # atomic step (`amoadd.w`), the lock-free way harts claim a rank from a shared
 # u32 counter. `old` is the register that receives the previous value (an asm
 # line cannot be a `return`, so it is an argument); `v` is a register or an
 # integer. Clobbers t0, t1 and writes old. Bare-metal and Linux alike.
-def fetch_add([old, counter, v]: [i64, [..], i64]):
+def fetch_add(old: i64, counter: [..], v: i64):
     t0 = &counter
     t1 = v
     asm:

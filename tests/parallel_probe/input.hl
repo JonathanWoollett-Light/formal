@@ -5,11 +5,11 @@ rank_counter: global u32
 done_counter: global u32
 slots: global [u32]*2
 
-fetch_add([a3, rank_counter, 1])
+fetch_add(a3, rank_counter, 1)
 
 a4 = a3 + 1
 t5 = 4
-t0 = at([slots, a3, t5])
+t0 = at(slots, a3, t5)
 t0[0] = a4
 
 # Release fence: make this hart's slot write globally visible BEFORE it bumps
@@ -19,7 +19,7 @@ t0[0] = a4
 # agree with the proof (`fannkuch_v2` documents the same pattern).
 asm:
     fence rw, rw
-fetch_add([t2, done_counter, 1])
+fetch_add(t2, done_counter, 1)
 a0 = 1
 if t2 == a0:
     t0 = &slots

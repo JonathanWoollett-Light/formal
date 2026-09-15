@@ -80,7 +80,7 @@ while t1 != t3:
     t1 = t1 + 1
 
 # claim a unique rank h via an atomic fetch-add on the zero-init counter.
-fetch_add([a3, rank_counter, 1])
+fetch_add(a3, rank_counter, 1)
 # remember the rank (for the slot index) and seed the first block c = h.
 t0 = &myrank
 t0[0] = a3
@@ -224,7 +224,7 @@ while t0 < a2:
 t0 = &myrank
 t1 = t0[0]
 t2 = 4
-t0 = at([cs_slots, t1, t2])
+t0 = at(cs_slots, t1, t2)
 t0[0] = a6
 # atomically max this hart's partial into the global max: a lock-free reduction.
 # amomax is a SINGLE instruction, so -- unlike a compare-and-select max in the
@@ -240,7 +240,7 @@ asm:
 # The verifier explores all interleavings (SC), but QEMU MTTCG is weakly ordered.
 asm:
     fence rw, rw
-fetch_add([t2, done_counter, 1])
+fetch_add(t2, done_counter, 1)
 a0 = 1
 if t2 == a0:
     # Acquire fence: order the done-counter read before the slot reads below.

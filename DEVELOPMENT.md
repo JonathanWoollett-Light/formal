@@ -919,7 +919,7 @@ Errors are `TranslateError { line, message }` (1-based line; no panics).
 
 **A runtime index** is still built from the register-register multiply and add:
 `arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0] = v`, or
-with std `p = at([arr, i, size]); p[0] = v` (see
+with std `p = at(arr, i, size); p[0] = v` (see
 the `indexed` test). Keeping that explicit means the cost (a `mul` + an `add`)
 stays visible in the source, and the element access at the end costs nothing
 extra: for a pointee of uniform element width the resolution does not depend on
@@ -1130,10 +1130,10 @@ destination. The library today:
 | `print(msg: i64)`               | writes a non-negative integer in decimal                 | a0 a1 a2 a7 t0 t1 t2 t5  |
 | `println(x)`                    | `print(x)` then a newline                                | as `print`               |
 | `exit(code: i64)`               | ends the process (Linux `exit`, syscall 93)              | a0 a7                    |
-| `p = at([arr, i, size])`        | the address of element `i` of `arr`, `size` bytes each   | t0 t1 (offset left in t1)|
-| `p = at_offset([arr, off])`     | the address `off` bytes into `arr`                       | t0                       |
-| `r = mod([k, cap])`             | the canonical non-negative remainder                     | t3                       |
-| `fetch_add([old, counter, v])`  | `old = counter; counter += v` atomically (`amoadd.w`)    | t0 t1, writes `old`      |
+| `p = at(arr, i, size)`          | the address of element `i` of `arr`, `size` bytes each   | t0 t1 (offset left in t1)|
+| `p = at_offset(arr, off)`       | the address `off` bytes into `arr`                       | t0                       |
+| `r = mod(k, cap)`               | the canonical non-negative remainder                     | t3                       |
+| `fetch_add(old, counter, v)`    | `old = counter; counter += v` atomically (`amoadd.w`)    | t0 t1, writes `old`      |
 
 `print` is **two overloads**, one per category, so `print("hi")` lowers to a
 byte-walk + `write` (syscall 64) and `print(42)` / `print(a6)` to an integer
@@ -1568,7 +1568,7 @@ can hold every language to the same output.
   havoced value spans `-3..3` (the interval transfer in `rem_by_constant`,
   [src/verifier_types.rs](src/verifier_types.rs), models exactly this), and
   only the `((i % d) + d) % d` canonical form narrows to `0..3`. The test now
-  writes it as std's `mod([a0, t2])`, and the address as `at([arr, a1, t2])`.
+  writes it as std's `mod(a0, t2)`, and the address as `at(arr, a1, t2)`.
 - `assume` ([tests/assume/](tests/assume/)): the `forget` + `assume:` idiom --
   `forget a0` havocs the value, `assume: a0 = 5` narrows it for a bounded proof;
   neither directive appears in the binary.
@@ -2707,7 +2707,7 @@ landed; the rest is the agreed direction):
   compile time** (never a runtime check): interval containment at the access
   site, `check_load_at`'s byte-bounds check lifted to element granularity.
   The scratch-register question that blocked the affine index is answered
-  for the std spelling, `p = at([arr, i, size])`, which owns `t0` and `t1`
+  for the std spelling, `p = at(arr, i, size)`, which owns `t0` and `t1`
   and says so in its clobber list; folding that into `x[i]` syntax proper
   stays open.
   Because types are static, `len` is a per-state constant, so intervals

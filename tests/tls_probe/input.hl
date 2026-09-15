@@ -10,7 +10,7 @@ done_counter: global u32
 slots: global [u32]*2
 mine: thread u32
 
-fetch_add([a3, rank_counter, 1])
+fetch_add(a3, rank_counter, 1)
 
 # mine (thread-local) = rank + 1, then read it back.
 t0 = &mine
@@ -20,7 +20,7 @@ a5 = t0[0]
 
 # slots[rank] = mine
 t5 = 4
-t0 = at([slots, a3, t5])
+t0 = at(slots, a3, t5)
 t0[0] = a5
 
 # the last finisher sums the slots and writes the digit to the UART.
@@ -31,7 +31,7 @@ t0[0] = a5
 # agree with the proof (`fannkuch_v2` documents the same pattern).
 asm:
     fence rw, rw
-fetch_add([t2, done_counter, 1])
+fetch_add(t2, done_counter, 1)
 a0 = 1
 if t2 == a0:
     t0 = &slots

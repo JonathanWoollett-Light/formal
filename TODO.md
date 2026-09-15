@@ -29,7 +29,7 @@ Short, medium and long terms things to do.
   - `fill`, `iota`, `copy`, `swap`, `sum2`: fannkuch-only, and `swap`/`sum2`
     would take `a`-registers as std scratch. Two `fill` sites are unsafe
     anyway (fannkuch_v2's loop bound is the value scratch).
-  - `at([p, i, size])` with the base already in a register: seven sites, but
+  - `at(p, i, size)` with the base already in a register: seven sites, but
     a second clobber set (`t3`) under the same name as the label form.
   - `max([acc, v])`: an in-place first argument needs a way to mark a mutated
     parameter before it reads honestly.

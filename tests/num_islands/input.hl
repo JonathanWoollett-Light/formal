@@ -45,29 +45,29 @@ a5 = 0
 # body; a `def` is inlined, so naming it costs exactly what writing it out four
 # times costs. Clobbers t0, t1 and t2, which the caller re-derives.
 def visit(cell):
-    t0 = at([grid, cell, a1])
+    t0 = at(grid, cell, a1)
     t2 = t0[0]
     if t2 != 0:
         t2 = 0
         t0[0] = t2
-        t0 = at([stack, a4, a1])
+        t0 = at(stack, a4, a1)
         t0[0] = cell
         a4 = a4 + 1
 
 # --- scan for an unsunk island, then flood it ---
 while a5 < a0:
-    t0 = at([grid, a5, a1])
+    t0 = at(grid, a5, a1)
     t2 = t0[0]
     if t2 != 0:
         a3 = a3 + 1
         t2 = 0
         t0[0] = t2
-        t0 = at([stack, a4, a1])
+        t0 = at(stack, a4, a1)
         t0[0] = a5
         a4 = a4 + 1
         while a4 != 0:
             a4 = a4 - 1
-            t0 = at([stack, a4, a1])
+            t0 = at(stack, a4, a1)
             a6 = t0[0]
             t4 = a6 % a2
             # up: only when the cell is not in the first row

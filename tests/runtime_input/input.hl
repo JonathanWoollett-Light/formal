@@ -9,8 +9,8 @@ arr: [u32]*4
 a0 = 12
 forget a0           # verifier: a0 = any; runtime: a0 = 12 (emits nothing)
 t2 = 4
-a1 = mod([a0, t2])  # 0..3, the canonical nonnegative remainder
-t5 = at([arr, a1, t2])    # &arr[((a0 % 4) + 4) % 4]
+a1 = mod(a0, t2)  # 0..3, the canonical nonnegative remainder
+t5 = at(arr, a1, t2)    # &arr[((a0 % 4) + 4) % 4]
 a2 = 7
 t5[0] = a2        # arr[((a0 % 4) + 4) % 4] = 7  (in bounds for any a0)
 exit(0)

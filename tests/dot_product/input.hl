@@ -27,8 +27,8 @@ a1 = 0
 a2 = 3
 a5 = 4
 while a1 < a2:
-    t2 = at([x, a1, a5])
-    t3 = at_offset([y, t1])
+    t2 = at(x, a1, a5)
+    t3 = at_offset(y, t1)
     a3 = t2[0]
     a4 = t3[0]
     a3 = a3 * a4
