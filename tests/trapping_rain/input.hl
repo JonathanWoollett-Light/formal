@@ -27,13 +27,9 @@ a6 = 0
 
 # --- close in from both ends, taking water from the shorter side ---
 while a2 < a3:
-    t1 = a2 * a0
-    t0 = &h
-    t0 = t0 + t1
+    t0 = at([h, a2, a0])
     t2 = t0[0]
-    t1 = a3 * a0
-    t0 = &h
-    t0 = t0 + t1
+    t0 = at([h, a3, a0])
     t3 = t0[0]
     if t2 < t3:
         if t2 >= a4:
@@ -55,6 +51,5 @@ t0 = 6
 require a6 == t0
 
 # `print` clobbers a0-a2/a7/t0-t2/t5; a6 survives it.
-print(a6)
-print("\n")
+println(a6)
 exit(0)
