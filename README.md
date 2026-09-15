@@ -184,5 +184,6 @@ A few terms show up in those reports:
 
 [tools/vscode-formal/](tools/vscode-formal/) highlights `.hl` files in Visual
 Studio Code. It is a grammar, not a language server, so there is nothing to
-build or run: symlink the folder into `~/.vscode/extensions/` and reload. Its
+build or run: link the folder into `~/.vscode/extensions/` (a junction on
+Windows, which needs no administrator rights) and reload. Its
 [README](tools/vscode-formal/README.md) has the two commands.

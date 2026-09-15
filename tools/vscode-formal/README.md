@@ -15,11 +15,14 @@ language grows a keyword.
 ## Install
 
 There is no build step and nothing to download. VS Code loads any folder in
-its extensions directory that has a `package.json`, so copy or link this one:
+its extensions directory that has a `package.json`, so link this one there.
+On Windows use a directory **junction**: a symbolic link needs administrator
+rights or Developer Mode, a junction needs neither, and VS Code follows it the
+same way.
 
 ```powershell
 # Windows (PowerShell, from the repository root)
-New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.vscode\extensions\formal.vscode-formal-0.1.0" -Target "$PWD\tools\vscode-formal"
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.vscode\extensions\formal.vscode-formal-0.1.0" -Target "$PWD\tools\vscode-formal"
 ```
 
 ```sh
@@ -27,13 +30,18 @@ New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.vscode\extensions\forma
 ln -s "$PWD/tools/vscode-formal" ~/.vscode/extensions/formal.vscode-formal-0.1.0
 ```
 
-Then reload the window (`Developer: Reload Window`). `.hl` files pick up the
-`formal` language automatically; the language mode indicator in the status
-bar shows it, and `#` toggles a line comment.
+`code --list-extensions` should now print `formal.vscode-formal`. Then reload
+any open window (`Developer: Reload Window`); VS Code scans its extensions
+directory at startup, so a window opened before the link will not see it
+until then. `.hl` files pick up the `formal` language automatically; the
+language mode indicator in the status bar shows it, and `#` toggles a line
+comment.
 
-A symbolic link means edits to the grammar here take effect on the next
-reload, which is the right setup while the language is still moving. A copy
-works the same but has to be refreshed by hand.
+A link means edits to the grammar here take effect on the next reload, which
+is the right setup while the language is still moving. A copy
+(`Copy-Item -Recurse` / `cp -r` to the same destination) works the same but
+has to be refreshed by hand. To remove it, delete the link; the repository
+folder is untouched.
 
 ## What is coloured
 
