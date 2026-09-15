@@ -46,6 +46,23 @@ Short, medium and long terms things to do.
   rewrite sites in the audit, but the natural rule also refuses `exit(a0)`
   and `print(t0)`, which are correct. Needs flow analysis or a narrower rule.
 - Zero-arity `def f():` and a call `f()`; today a `def` needs a parameter.
+- State convergence in the verifier: a visited set in the pooled, rayon and
+  MPI engines (hash ownership in MPI). Measured 75 to 99.9% of steps repeated
+  on every multi-hart test, `uart_hello` 15 s to 0.05 s, outputs identical;
+  design and numbers in DEVELOPMENT.md 11, driver in `examples/converge.rs`.
+- The pooled `step` refuses `three_harts` (`bnez register has no value`) where
+  the oracle passes it, and `parallel_oracle_crosscheck` pins the two engines
+  equal only on its own program. Widen it to every multi-hart test.
+- `cargo build --release` does not compile: seven `debug_assert!` read loop
+  counters declared under `#[cfg(debug_assertions)]` (ast.rs 152, 184, 196,
+  673, 697; verifier.rs 903, 1171). The tests get their speed from
+  `[profile.test] opt-level = 3`, which keeps the assertions on. Declare the
+  counters unconditionally.
+- std functions could end in `forget` of each clobbered scratch register. It
+  enforces the clobber contract (a caller reading one gets an unknown value)
+  and canonicalises the post-call state for convergence once branches fork.
+  Emits nothing, but adds `#~` lines to every print-using dialect.s, so
+  re-derive deliberately.
 - An array pattern with a known element type and unknown length, `[u8, ..]`,
   is the form `print` really wants: today it takes `[..]`, any array, and its
   NUL walk only means anything over bytes. Deliberately not added yet: an

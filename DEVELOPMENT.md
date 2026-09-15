@@ -92,6 +92,8 @@ cargo fmt             # formats the code
 cargo clippy          # lints the code
 cargo run --example translate -- tests/uart_hello/input.hl tests/uart_hello/dialect.s
                       # regenerate a test's stored dialect from its hl source
+cargo run --profile test --example converge -- --uart uart_hello 1 2
+                      # how much of a verification is repeated states (§11)
 cargo nextest run --run-ignored all -E 'test(factory_default_linux)'
                       # factory-default setup e2e in a VM (§6.2; ~3 min)
 ```
@@ -191,7 +193,8 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 ├── examples/
 │   ├── translate.rs           # regenerate a test's `dialect.s` via `hl::translate`
 │   ├── compile.rs             # scratch driver: an `hl` file -> dialect + assembly
-│   └── update_website.rs      # re-inject `metrics.prom` into `index.html` (§6.1)
+│   ├── update_website.rs      # re-inject `metrics.prom` into `index.html` (§6.1)
+│   └── converge.rs            # measure repeated verifier states (§11)
 ├── tests/                     # integration tests, one folder per pinned behaviour (§6)
 │   ├── common/mod.rs          # the shared test helpers
 │   ├── <name>/                # `main.rs` + its assets (`input.hl`, `dialect.s`,
@@ -1987,7 +1990,10 @@ the base: keep shared mutation rare, keep branches determinate, annotate types
 (`uart_hello` at 13 racy UART writes × 2 harts is already ~2·10⁶ steps).
 
 Planned (unimplemented) scaling modes trade soundness or precision for those
-exponents; see [§11](#11-design-notes--roadmap).
+exponents; see [§11](#11-design-notes--roadmap). Most of `h^r` as explored
+today is repetition rather than distinct states: the state-convergence note in
+§11 measured 75 to 99.9% of steps on the multi-hart tests as revisits of a
+state already explored.
 
 ### 7.1 Parallel decoupling
 
@@ -2594,6 +2600,73 @@ work in the Linux stream: a hosted hart-id primitive so `mhartid`-reading progra
 (`descriptor_read_union`) can move; `partial_variable_access` (multi-hart TLS, no
 `mhartid`/MMIO) is now hostable and could move; and hosted variants of the racy /
 MMIO programs.
+
+### State convergence (measured, not implemented)
+
+Two interleavings that reach the same continuation (state, per-hart fronts,
+active hart) under one configuration have identical futures: `step` is a
+function of that continuation and the AST, and its outputs are grow-only
+unions, so exploring the second is pure repetition. Nothing notices today.
+The sequential `Explorerer` is a tree with parent pointers and 21 tests pin
+its exact traces, so it stays as it is; the pointer-free engines are where a
+visited set belongs.
+
+Where the repetition comes from, in this verifier:
+
+- **Racy instructions that commute.** Two harts writing different addresses,
+  both reading, or writing a volatile device whose contents are not modelled
+  (the UART). Every ordering of two independent `k`-step stretches is
+  explored, though only `(k+1)^2` states exist. This is the whole story today,
+  because an indeterminate branch is a refusal, not a fork: a single-hart
+  verification is one path (`two_sum`: 460 steps, 460 states).
+- **After fork-on-indeterminate (Phase 2), the branch-then-join shape.** Arms
+  that differ only in registers later overwritten or forgotten rejoin at one
+  state, and a loop whose exit is indeterminate terminates exactly when its
+  head state repeats. `ecall` already havocs `a0`; a std function ending in
+  `forget` of each clobbered scratch register would make the post-call state
+  canonical, so two calls printing different strings still converge.
+
+Measured with `cargo run --profile test --example converge -- [--uart] <test>
+<harts>...`, which drives the pooled engine twice, without and with a visited
+set keyed on the continuation's `postcard` bytes (every state type serialises
+from `BTreeMap`s and `Vec`s, so equal states give equal bytes). The six
+outputs were identical in every run, which is the soundness claim checked
+rather than argued:
+
+| Program (harts)           | Steps      | Distinct | Saved  |
+| ------------------------- | ---------- | -------- | ------ |
+| `uart_hello` (1, 2)       | 2,111,437  | 6,098    | 99.7%  |
+| `hpc_demo` (1, 2)         | 499,601    | 407      | 99.9%  |
+| `parallel_probe` (2)      | 4,679      | 445      | 90.5%  |
+| `heap_regions` (1, 2)     | 1,021      | 99       | 90.3%  |
+| `fannkuch_v2` (2)         | 24,359     | 6,017    | 75.3%  |
+| `racy_increment` (1, 2)   | 716        | 184      | 74.3%  |
+| `racy_store_*` (1, 2)     | 67         | 43       | 35.8%  |
+| `two_sum` (1)             | 460        | 460      | 0%     |
+
+`uart_hello` at two harts went from 15.4 s to 0.05 s. The visited set costs
+about 1.9 µs a step (serialise, SHA-256, insert: 12.3 s to 16.4 s over 2.1 M
+steps, against 5.8 µs for the step itself), so it pays for itself once a
+quarter of the steps are repeats; every multi-hart program above clears that,
+and a single-hart program is a few hundred steps whichever way. The set holds
+one 32-byte digest per distinct state.
+
+The implementation, when it is taken up: in `verify_configuration_pooled`, a
+`HashSet<[u8; 32]>` checked before `step`, a dozen lines and what the example
+does. In the rayon wave backend, deduplicate each wave's successors between
+waves, single-threaded, keeping the set across waves. In the MPI backends, own
+a continuation by `hash % size` rather than by frontier index, so each rank's
+local set is complete for what it owns; under work-stealing a stolen item
+changes owner and the set becomes approximate, acceptable because the
+duplicates are produced together on one rank. No output changes:
+`parallel_oracle_crosscheck` already pins these engines against the oracle by
+the outputs. Two things found on the way: the pooled `step` refuses
+`three_harts` (`bnez register has no value`) where the oracle passes it, and
+the crosscheck covers only its own program, so it should be widened to every
+multi-hart test before that engine is relied on; and beyond a visited set the
+next classic wins are symmetry reduction (a canonical hart order for identical
+harts) and independence-based partial-order reduction, which avoids generating
+the duplicate rather than pruning it after one step.
 
 ### Scaling modes (designed, not implemented)
 
