@@ -179,3 +179,10 @@ A few terms show up in those reports:
   Rust, Zig, Lean, and Ada/SPARK.
 - **[index.html](index.html)**: the project page, one static file with no
   build step.
+
+## Editor support
+
+[tools/vscode-formal/](tools/vscode-formal/) highlights `.hl` files in Visual
+Studio Code. It is a grammar, not a language server, so there is nothing to
+build or run: symlink the folder into `~/.vscode/extensions/` and reload. Its
+[README](tools/vscode-formal/README.md) has the two commands.

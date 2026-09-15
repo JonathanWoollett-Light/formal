@@ -1,0 +1,35 @@
+{
+  "name": "vscode-formal",
+  "displayName": "formal",
+  "description": "Syntax highlighting for the formal high-level dialect (.hl files).",
+  "version": "0.1.0",
+  "publisher": "formal",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "formal",
+        "aliases": [
+          "formal",
+          "hl"
+        ],
+        "extensions": [
+          ".hl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "formal",
+        "scopeName": "source.formal",
+        "path": "./syntaxes/formal.tmLanguage.json"
+      }
+    ]
+  }
+}

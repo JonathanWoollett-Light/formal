@@ -1,0 +1,115 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "formal",
+  "scopeName": "source.formal",
+  "comment": "Mirrors the Prism `formal` grammar in index.html; keep the two in step.",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#def-header" },
+    { "include": "#define" },
+    { "include": "#keyword" },
+    { "include": "#type" },
+    { "include": "#register" },
+    { "include": "#number" },
+    { "include": "#builtin-call" },
+    { "include": "#call" },
+    { "include": "#operator" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.formal",
+      "match": "#.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.formal",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.formal", "match": "\\\\." }
+      ]
+    },
+    "def-header": {
+      "comment": "`def name(` : the keyword and the function being defined",
+      "match": "^\\s*(def)\\s+([A-Za-z_]\\w*)(?=\\s*\\()",
+      "captures": {
+        "1": { "name": "storage.type.function.formal" },
+        "2": { "name": "entity.name.function.formal" }
+      }
+    },
+    "define": {
+      "comment": "`name: [locality] type` at the start of a line defines a variable; block headers that also end in a colon are keywords and are excluded",
+      "match": "^\\s*(?!(?:asm|assume|def|if|while)\\b)([A-Za-z_]\\w*)(:)(?=\\s|$)",
+      "captures": {
+        "1": { "name": "variable.other.definition.formal" },
+        "2": { "name": "punctuation.separator.annotation.formal" }
+      }
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.formal",
+          "match": "\\b(?:if|while|return|require|fail|unreachable|forget|assume|asm)\\b"
+        },
+        {
+          "name": "storage.modifier.locality.formal",
+          "match": "\\b(?:global|thread)\\b"
+        },
+        {
+          "name": "keyword.other.formal",
+          "match": "\\b(?:typeof|section)\\b"
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.formal",
+          "match": "\\b(?:u8|i8|u16|i16|u32|i32|u64|i64)\\b"
+        },
+        {
+          "comment": "`_` leaves a type or locality to the verifier; `..` in a pattern accepts any array",
+          "name": "support.type.placeholder.formal",
+          "match": "(?<![\\w])_(?![\\w])|\\.\\."
+        }
+      ]
+    },
+    "register": {
+      "comment": "the fourteen registers the dialect names: these are the CPU registers themselves",
+      "name": "variable.language.register.formal",
+      "match": "\\b(?:t[0-5]|a[0-7])\\b"
+    },
+    "number": {
+      "name": "constant.numeric.formal",
+      "match": "\\b(?:0x[0-9a-fA-F_]+|0b[01_]+|\\d[\\d_]*)\\b"
+    },
+    "builtin-call": {
+      "comment": "`type(x)` and `csr(x)` are assignment forms, not defs",
+      "name": "support.function.builtin.formal",
+      "match": "\\b(?:type|csr)(?=\\s*\\()"
+    },
+    "call": {
+      "name": "entity.name.function.call.formal",
+      "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"
+    },
+    "operator": {
+      "patterns": [
+        {
+          "comment": "address-of, before a name",
+          "name": "keyword.operator.address.formal",
+          "match": "&(?=[A-Za-z_])"
+        },
+        {
+          "comment": "two-character comparisons before the single characters, or `!=` splits",
+          "name": "keyword.operator.formal",
+          "match": "[!=<>]=|[-+*/%=<>]"
+        }
+      ]
+    },
+    "punctuation": {
+      "name": "punctuation.formal",
+      "match": "[\\[\\](),:]"
+    }
+  }
+}

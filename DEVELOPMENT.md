@@ -201,7 +201,9 @@ and the `excluded`/`counter`/`hash`/`last_out` fields behind
 ├── scripts/
 │   └── build-run.sh           # `as`/`ld` + boot `target/gen/*.s` in QEMU
 ├── tools/
-│   └── qemu-plugin/           # `formal_stats.c`: measures instructions + memory (§6)
+│   ├── qemu-plugin/           # `formal_stats.c`: measures instructions + memory (§6)
+│   └── vscode-formal/         # editor highlighting for `.hl`: a TextMate grammar
+│                              #   mirroring index.html's Prism one; see its README
 ├── assets/                    # scratch inputs (`one.s`, `two.s`)
 ├── deploy/                    # k8s + Kubeflow MPI Operator target for `hpc` (§7)
 ├── comparison.md              # vs Python/C/C++/Rust/Zig/Lean/Ada-SPARK
