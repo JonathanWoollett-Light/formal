@@ -45,8 +45,8 @@ _l4:
     li a7, 64
     ecall
     li t5, 42
-    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local2
+    #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local1
     addi t0, t0, 20
     li t1, 10
     li a2, 0
@@ -91,8 +91,8 @@ _l9:
     li a7, 64
     ecall
     li t5, 0
-    #$ __local4 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local4
+    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local2
     addi t0, t0, 20
     li t1, 10
     li a2, 0

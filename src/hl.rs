@@ -1469,7 +1469,7 @@ fn split_index<'a>(text: &'a str) -> Result<Option<(&'a str, Index<'a>)>, String
         }
         if is_register(index) {
             return Err(format!(
-                "a runtime index `{register}[{index}]` is not supported yet: compute the address (`t = {index} * <element size>`, `p = {register} + t`) and index that with `p[0]`"
+                "a runtime index `{register}[{index}]` is not supported yet: compute the address with std's `at` (`p = at([arr, {index}, size])`) or by hand (`t = {index} * <element size>`, `p = {register} + t`) and index that with `p[0]`"
             ));
         }
         let value = parse_int(index).ok_or_else(|| format!("invalid index `{index}`"))?;

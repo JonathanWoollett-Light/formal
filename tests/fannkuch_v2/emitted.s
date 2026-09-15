@@ -317,8 +317,8 @@ _l41:
     li a7, 64
     ecall
     addi t5, a3, 0
-    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local2
+    #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local1
     add t0, t0, tp  # thread-local
     addi t0, t0, 1
     li t1, 10
@@ -369,8 +369,8 @@ _l46:
     li a7, 64
     ecall
     addi t5, a6, 0
-    #$ __local4 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local4
+    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local2
     add t0, t0, tp  # thread-local
     addi t0, t0, 1
     li t1, 10
@@ -437,10 +437,10 @@ rank_counter:
 __local0:
     .zero 1
     .zero 7
-__local2:
+__local1:
     .zero 1
     .zero 7
-__local4:
+__local2:
     .zero 1
     .zero 7
 __str0:

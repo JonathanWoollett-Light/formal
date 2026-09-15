@@ -120,7 +120,9 @@ width comes from the type rather than the call site, and an index past the end
 is rejected at compile time. A runtime index is still written out (`t = i * 4`,
 `p = &arr + t`, then `p[0]`), so its cost stays visible. Memory with no type of
 its own (a device address, a raw region) is read and written with the byte slice
-`t0[a:b]`, which states its own width. The standard library provides `exit` and
+`t0[a:b]`, which states its own width. The standard library provides `exit`,
+`println`, `at`/`at_offset` (element addressing), `mod` (the canonical
+non-negative remainder), `fetch_add` (an atomic rank claim), and
 a `print` that is **polymorphic over its argument** -- `print("hi")` writes a
 string, `print(42)` writes an integer, chosen at compile time with no runtime
 cost. Two verifier-only directives reason about runtime input: `forget x` makes

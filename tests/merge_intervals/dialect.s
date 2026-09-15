@@ -189,8 +189,8 @@ _l23:
     add t4, t4, t3
     #[ a6, 0(t4)
     addi t5, a6, 0
-    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local2
+    #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local1
     addi t0, t0, 20
     li t1, 10
     li a2, 0

@@ -1083,15 +1083,36 @@ translator prepends [std/std.hl](std/std.hl) (the `STD` constant,
 prepending it to a program that calls nothing from it leaves the lowering
 byte-for-byte unchanged (this is why every existing test's `dialect.s` is
 unaffected). User error line numbers stay 1-based (the prelude length is
-subtracted). The library functions today are `print(msg)` and `exit(code)`
-(end the process, syscall 93); both use `ecall`, so they target a hosted (Linux)
-process, not bare metal. **`print` is polymorphic over its argument's type,
-resolved at compile time** (see the `if typeof` dispatch above): `print("hi")`
-lowers to a byte-walk + `write` (syscall 64); `print(42)` / `print(a6)` lower to
-an integer formatter (peel decimal digits with `/`/`%`, write the slice). The
-unmatched arm is never translated, so there is no runtime type check and no
-separate `print_int`. See `linux_hello` / `print_poly` ([§6](#6-integration-tests-tests))
-and the contrast with `uart_hello` (which pokes the QEMU UART with raw assembly).
+subtracted). Every std function is inlined into the caller's register file, so its
+**clobber list** is its contract: the registers it writes besides the
+destination. The library today:
+
+| Function                        | Does                                                    | Clobbers                 |
+| ------------------------------- | ------------------------------------------------------- | ------------------------ |
+| `print(msg: [u8])`              | writes a NUL-terminated string (Linux `write`)           | a0 a1 a2 a7 t0           |
+| `print(msg: i64)`               | writes a non-negative integer in decimal                 | a0 a1 a2 a7 t0 t1 t2 t5  |
+| `println(x)`                    | `print(x)` then a newline                                | as `print`               |
+| `exit(code: i64)`               | ends the process (Linux `exit`, syscall 93)              | a0 a7                    |
+| `p = at([arr, i, size])`        | the address of element `i` of `arr`, `size` bytes each   | t0 t1 (offset left in t1)|
+| `p = at_offset([arr, off])`     | the address `off` bytes into `arr`                       | t0                       |
+| `r = mod([k, cap])`             | the canonical non-negative remainder                     | t3                       |
+| `fetch_add([old, counter, v])`  | `old = counter; counter += v` atomically (`amoadd.w`)    | t0 t1, writes `old`      |
+
+`print` is **two overloads**, one per category, so `print("hi")` lowers to a
+byte-walk + `write` (syscall 64) and `print(42)` / `print(a6)` to an integer
+formatter (peel decimal digits with `/`/`%`, write the slice); only the taken
+overload is translated, so there is no runtime type check and no separate
+`print_int`. `print`, `println` and `exit` use `ecall`, so they target a
+hosted (Linux) process; `at`, `at_offset`, `mod` and `fetch_add` are plain
+instructions and work bare-metal too. `at` is the std spelling of the
+runtime index the language does not yet fold into `x[i]`: `size` and `i`
+are registers (there is no multiply-immediate), the element is then read or
+written through the result with `p[0]`, and `t0` must not be passed as `i`
+because the result overwrites it first. `mod` exists because RISC-V `rem`
+takes the dividend's sign, so a bare `%` on a negative key indexes a table
+backwards. See `linux_hello` / `print_poly` / `def_overloads`
+([§6](#6-integration-tests-tests)) and the contrast with `uart_hello` (which
+pokes the QEMU UART with raw assembly).
 
 The integer arm lays a zero digit down before the peeling loop, because that
 loop never runs for a zero argument and `print(0)` would otherwise write an
@@ -1500,9 +1521,9 @@ can hold every language to the same output.
   register clobbers: the count and cursor move to registers `print` leaves alone.
 - `print_poly` ([tests/print_poly/](tests/print_poly/)): the **polymorphic
   `print`** -- `print("Hi ")` + `print(42)` + `print(7)` -> `Hi 427`, the string
-  arm and the integer arm of one `print` selected by the compile-time `if typeof`
-  dispatch (and two integer prints exercising body-local-label hygiene). Asserts
-  no directive leaks into the binary.
+  overload and the integer overload of `print` selected by overload dispatch
+  (and two integer prints exercising body-local-label hygiene). Asserts no
+  directive leaks into the binary.
 - `runtime_input` ([tests/runtime_input/](tests/runtime_input/)): a value the
   verifier cannot see, via `forget` -- it proves `arr[((a0 % 4) + 4) % 4]` in
   bounds for *every* `a0` while the runtime keeps `a0 = 12`. The double-rem is
@@ -2647,6 +2668,10 @@ landed; the rest is the agreed direction):
   `x[i]` carries the implicit obligation `0 <= i < len(x)` **verified at
   compile time** (never a runtime check): interval containment at the access
   site, `check_load_at`'s byte-bounds check lifted to element granularity.
+  The scratch-register question that blocked the affine index is answered
+  for the std spelling, `p = at([arr, i, size])`, which owns `t0` and `t1`
+  and says so in its clobber list; folding that into `x[i]` syntax proper
+  stays open.
   Because types are static, `len` is a per-state constant, so intervals
   suffice; no relational domain is needed until symbolic-size allocation.
 - **Architecture: a verifier-resolved index directive.** The stateless
@@ -2682,7 +2707,7 @@ landed; the rest is the agreed direction):
   predefined def header (`d = a + b` gathers as `(dest, lhs, rhs)`; `+=` is
   the `dest == lhs` case of the *same* definition, never a second one);
   scalar cases stay single-instruction primitives; future non-scalar cases
-  dispatch through the existing `if typeof` monomorphization. Dereference is
+  dispatch through overloads (the `if typeof` primitive underneath). Dereference is
   deliberately **not** an operator: bracketed places already factor `*x = a`
   correctly (the place gathers `x`; the statement side of `=` picks load vs
   store), and `&` stays a builtin.

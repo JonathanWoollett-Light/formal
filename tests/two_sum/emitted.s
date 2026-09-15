@@ -184,8 +184,8 @@ _l18:
     li a7, 64
     ecall
     addi t5, a5, 0
-    #$ __local2 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
-    la t0, __local2
+    #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
+    la t0, __local1
     addi t0, t0, 1
     li t1, 10
     li a2, 0
@@ -237,7 +237,7 @@ __halt:
 __local0:
     .zero 1
     .balign 8
-__local2:
+__local1:
     .zero 1
     .balign 8
 __str0:
