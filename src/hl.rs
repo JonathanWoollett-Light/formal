@@ -40,6 +40,13 @@
 //!     wfi
 //! ```
 //!
+//! A `def` takes one thing. Several values travel as a tuple of tokens,
+//! `f([a0, a1])` against `def f([a, b]: [i64, i64]):`, which is a two-entry
+//! substitution map and materialises nothing. Several `def`s of one name are
+//! overloads, resolved here by arity and by each argument's category (a
+//! register or integer is a scalar, a variable name or string an array); two
+//! that could both fit some call are refused where the second is defined.
+//!
 //! A `def` is inlined, so `return <value>` is not a jump: it is the assignment
 //! to whatever the call site asked for. `def double(x): return x + x` called
 //! as `a1 = double(a0)` is the single line `add a1, a0, a0`. It is therefore
@@ -153,15 +160,61 @@ struct Line {
     number: usize,
     indent: usize,
     text: String,
+    /// From the prepended standard library, so an error can say so.
+    std: bool,
 }
 
-/// An inline function captured from a `def`: its single parameter name and the
-/// body lines. The body is translated afresh (with the parameter substituted)
-/// at each call site, so there is no calling convention, stack, or `ret`.
+/// What the stateless front-end can tell about a call argument: a register
+/// or an integer literal is a scalar value; a label or a string literal names
+/// storage. Nothing finer (a register's width is not knowable here), so this
+/// is also all a type pattern can dispatch on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Scalar,
+    Array,
+}
+
+/// One overload of an inline function. `def f([a, b]: [i32, i32]):` is a
+/// tuple pattern of two names with two type patterns; `def f(x):` is a bare
+/// pattern of one untyped name. A call is matched against every overload of
+/// its name by arity, tuple-ness and each element's [`Kind`] (`None` matches
+/// either), and exactly one must fit. The body is translated afresh at each
+/// call with every pattern name substituted, so there is still no calling
+/// convention, stack, or `ret`: several overloads are one function with a
+/// compile-time arm per signature, the `if typeof` dispatch written as
+/// headers.
 #[derive(Clone)]
-struct FuncDef {
-    param: String,
+struct Overload {
+    params: Vec<String>,
+    tuple: bool,
+    kinds: Vec<Option<Kind>>,
     body: Vec<Line>,
+    /// The parameter text as written, for error messages.
+    spec: String,
+    /// Where it was defined: `line N`, or `std/std.hl line N`.
+    origin: String,
+}
+
+impl Overload {
+    /// The signature as the user wrote it.
+    fn signature(&self, name: &str) -> String {
+        format!("{name}({})", self.spec)
+    }
+
+    /// Whether some call could fit both overloads: same shape, same arity,
+    /// and at every position the two kinds could be the same (an untyped or
+    /// `_` position accepts either kind). Two overlapping overloads would make
+    /// every such call ambiguous, so the second is refused where it is
+    /// written, and a call then fits at most one.
+    fn overlaps(&self, other: &Overload) -> bool {
+        self.tuple == other.tuple
+            && self.kinds.len() == other.kinds.len()
+            && self
+                .kinds
+                .iter()
+                .zip(&other.kinds)
+                .all(|(a, b)| a.is_none() || b.is_none() || a == b)
+    }
 }
 
 /// Translates `hl` source into the annotated RISC-V dialect. Pure text to
@@ -199,6 +252,7 @@ pub fn translate(source: &str) -> Result<String, TranslateError> {
             number,
             indent: line.len() - stripped.len(),
             text: stripped.to_string(),
+            std: index < std_lines,
         });
     }
 
@@ -264,7 +318,7 @@ struct Translator {
     /// numbering (and thus the pinned translations of callers that take a
     /// different `if typeof` arm).
     locals: usize,
-    functions: HashMap<String, FuncDef>,
+    functions: HashMap<String, Vec<Overload>>,
     /// Inlining depth, a guard against a `def` that calls itself.
     depth: usize,
     /// The call being inlined, innermost last. Empty outside a `def`.
@@ -392,43 +446,91 @@ impl Translator {
                 "`def` inlining nested too deep (a recursive call?)".to_string()
             ));
         }
-        let binding = if arg.starts_with('"') {
-            let bytes = parse_string_literal(arg).map_err(err)?;
-            let label = self.fresh_string();
-            self.emit_string_storage(&label, &bytes);
-            label
-        } else if parse_int(arg).is_some() || is_register(arg) {
-            // An integer literal or a register binds directly (a scalar value, so
-            // the parameter's `if typeof == i64` arm is taken).
-            arg.to_string()
-        } else {
-            return Err(err(format!(
-                "a call argument must be a \"string\", an integer, or a register, got `{arg}`"
-            )));
+        // The argument is one element, or a tuple `[e1, e2, ...]` of them.
+        let (elements, tuple) = match arg.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            Some(inner) => (split_top_level(inner, ','), true),
+            None => (vec![arg], false),
         };
+        if tuple && elements.len() < 2 {
+            return Err(err(format!(
+                "a tuple argument needs at least two elements; `{name}(e)` passes one"
+            )));
+        }
+        // Laying a string down (`emit_string_storage`) writes t0 and t1, so
+        // a tuple that also passes either register would bind a value the
+        // string just overwrote.
+        if elements.iter().any(|e| e.trim().starts_with('"'))
+            && elements.iter().any(|e| matches!(e.trim(), "t0" | "t1"))
+        {
+            return Err(err(
+                "a tuple argument may not mix a string literal with `t0` or `t1`: laying the string down clobbers them"
+                    .to_string(),
+            ));
+        }
+        // Each element binds to a token: a string literal is laid down in fresh
+        // storage and binds to its label; an integer, a register or a label
+        // binds as written. Its kind is what the overloads dispatch on.
+        let mut bindings = Vec::with_capacity(elements.len());
+        let mut kinds = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let element = element.trim();
+            if element.starts_with('"') {
+                let bytes = parse_string_literal(element).map_err(err)?;
+                let label = self.fresh_string();
+                self.emit_string_storage(&label, &bytes);
+                bindings.push(label);
+                kinds.push(Kind::Array);
+            } else if parse_int(element).is_some() || is_register(element) {
+                bindings.push(element.to_string());
+                kinds.push(Kind::Scalar);
+            } else if is_reserved(element) {
+                return Err(err(format!(
+                    "`{element}` is a reserved word, not a variable"
+                )));
+            } else if is_label(element) {
+                bindings.push(element.to_string());
+                kinds.push(Kind::Array);
+            } else {
+                return Err(err(format!(
+                    "a call argument must be a string, an integer, a register or a variable name, got `{element}`"
+                )));
+            }
+        }
 
-        let func = match self.functions.get(name) {
-            Some(func) => func.clone(),
-            None => return Err(err(format!("unknown function `{name}`"))),
+        let Some(overloads) = self.functions.get(name) else {
+            return Err(err(format!("unknown function `{name}`")));
+        };
+        let fitting: Vec<&Overload> = overloads
+            .iter()
+            .filter(|o| {
+                o.tuple == tuple
+                    && o.kinds.len() == kinds.len()
+                    && o.kinds
+                        .iter()
+                        .zip(&kinds)
+                        .all(|(want, got)| want.is_none_or(|w| w == *got))
+            })
+            .collect();
+        // Overlapping overloads are refused where they are defined, so at
+        // most one fits here.
+        debug_assert!(fitting.len() <= 1);
+        let Some(func) = fitting.first().map(|o| (*o).clone()) else {
+            let signatures: Vec<String> = overloads.iter().map(|o| o.signature(name)).collect();
+            return Err(err(format!(
+                "no overload of `{name}` takes `{arg}` ({}); defined: {}",
+                describe_kinds(&kinds, tuple),
+                signatures.join(", ")
+            )));
         };
         // Hygiene: give each call's body-local definitions (`name: <locality> ...`)
         // a fresh label, so repeated calls do not collide on storage -- e.g.
         // `print`'s integer scratch buffer, which two `print(int)`s would otherwise
         // both define. Each fresh name is substituted through the body alongside the
-        // parameter binding.
-        let mut subs: Vec<(String, String)> = vec![(func.param.clone(), binding)];
-        for l in &func.body {
-            if let Some((decl, rest)) = l.text.trim().split_once(':') {
-                let decl = decl.trim();
-                let rest = rest.trim_start();
-                // Any define, by the same test the statement dispatcher uses:
-                // a bare label, then a non-empty annotation. Matching only
-                // `thread`/`global` here missed a define that elides its
-                // locality, and two calls then shared one buffer.
-                if is_label(decl) && !rest.is_empty() {
-                    subs.push((decl.to_string(), self.fresh_local()));
-                }
-            }
+        // parameter bindings.
+        let mut subs: Vec<(String, String)> = func.params.iter().cloned().zip(bindings).collect();
+        for decl in body_defines(&func.body) {
+            let fresh = self.fresh_local();
+            subs.push((decl.to_string(), fresh));
         }
         let inlined: Vec<Line> = func
             .body
@@ -439,6 +541,7 @@ impl Translator {
                     number: l.number,
                     indent: l.indent,
                     text,
+                    std: l.std,
                 }
             })
             .collect();
@@ -466,7 +569,10 @@ impl Translator {
         // mistake worth naming: with `if typeof` dispatch it also catches the
         // case where the arm that *would* have returned was not the one taken.
         if destination.is_some() && !slot.is_some_and(|slot| slot.fired) {
-            return Err(err(format!("`{name}` does not return a value")));
+            return Err(err(format!(
+                "the overload `{}` taken here does not return a value",
+                func.signature(name)
+            )));
         }
         Ok(())
     }
@@ -655,6 +761,12 @@ impl Translator {
             // Reuse the type-expression parser (the one `define` uses) to validate
             // and canonicalise the literal; a leading `[` marks an array type.
             let resolved = translate_type(type_text.trim()).map_err(err)?;
+            if resolved == "_" {
+                return Err(err(
+                    "`if typeof x == _` is always taken: `_` matches a scalar and an array alike, so drop the `if typeof`"
+                        .to_string(),
+                ));
+            }
             let type_is_array = resolved.trim_start().starts_with('[');
             let operand_is_array = parse_int(operand).is_none() && !is_register(operand);
             if operand_is_array == type_is_array {
@@ -704,16 +816,12 @@ impl Translator {
             let inner = header
                 .strip_suffix(')')
                 .ok_or_else(|| err("a `def` needs `name(param)`".to_string()))?;
-            let (name, param) = inner
+            let (name, spec) = inner
                 .split_once('(')
                 .ok_or_else(|| err("a `def` needs `name(param)`".to_string()))?;
             let name = name.trim();
-            let param = param.trim();
             if !is_label(name) {
                 return Err(err(format!("invalid function name `{name}`")));
-            }
-            if !is_label(param) {
-                return Err(err(format!("invalid parameter name `{param}`")));
             }
             // `t0 = type(x)` and `t0 = csr(x)` are assignment forms, and the
             // call branch above runs first, so a def by either name would
@@ -723,14 +831,43 @@ impl Translator {
                     "`{name}` is a builtin, so a `def` cannot take that name"
                 )));
             }
+            let spec = spec.trim();
+            let ParameterSpec {
+                params,
+                tuple,
+                kinds,
+            } = parse_parameter_spec(spec).map_err(err)?;
             let body = self.capture_body(lines, position, line)?;
-            self.functions.insert(
-                name.to_string(),
-                FuncDef {
-                    param: param.to_string(),
-                    body,
+            // A parameter that the body also defines would have the define
+            // renamed to the argument (`a0: [u8*4]`) by the same substitution
+            // that binds the parameter.
+            if let Some(clash) = body_defines(&body).find(|d| params.iter().any(|p| p == d)) {
+                return Err(err(format!(
+                    "parameter `{clash}` is also defined in the body of `{name}`: rename one of them"
+                )));
+            }
+            let new = Overload {
+                params,
+                tuple,
+                kinds,
+                body,
+                spec: spec.to_string(),
+                origin: if line.std {
+                    format!("std/std.hl line {}", line.number)
+                } else {
+                    format!("line {}", line.number)
                 },
-            );
+            };
+            let overloads = self.functions.entry(name.to_string()).or_default();
+            if let Some(twin) = overloads.iter().find(|o| o.overlaps(&new)) {
+                return Err(err(format!(
+                    "`def {}` overlaps `def {}` ({}): both accept the same call, and the front-end dispatches on arity and on scalar-versus-array only",
+                    new.signature(name),
+                    twin.signature(name),
+                    twin.origin
+                )));
+            }
+            overloads.push(new);
             return Ok(());
         }
 
@@ -768,6 +905,19 @@ impl Translator {
                     "`return` inside an `if`/`while` would have to jump over the rest of the body, which this language cannot do; set a register and `return` it from the tail instead"
                         .to_string(),
                 ));
+            }
+            // Nothing may follow a `return`: the statement after it would still
+            // run. The one exception is the next arm of a compile-time
+            // `if typeof`, at a shallower indent, since only one arm is ever
+            // translated.
+            if let Some(next) = lines.get(*position) {
+                let next_arm = next.indent < line.indent && next.text.starts_with("if typeof ");
+                if !next_arm {
+                    return Err(err(format!(
+                        "`return` must be the last statement of its body (only another `if typeof` arm may follow), but `{}` does",
+                        next.text
+                    )));
+                }
             }
             // Validated whether or not the caller wanted the value, so a typo
             // in a dropped return is still an error.
@@ -885,11 +1035,19 @@ fn join_open_brackets(lines: Vec<Line>) -> Vec<Line> {
 }
 
 fn bracket_depth(text: &str) -> i32 {
-    text.chars().fold(0, |depth, c| match c {
-        '[' => depth + 1,
-        ']' => depth - 1,
-        _ => depth,
-    })
+    let (mut depth, mut quoted, mut escaped) = (0, false, false);
+    for c in text.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
 }
 
 /// A register comparison: `Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`.
@@ -1267,6 +1425,13 @@ fn translate_assignment(lhs: &str, rhs: &str) -> Result<String, String> {
         return Ok(format!("    addi {lhs}, {rhs}, 0"));
     }
 
+    // `t1 = nums[0]` indexes a variable directly, the load-side twin of
+    // the store `place_error` already catches.
+    if let Some((label, _)) = rhs.split_once('[') {
+        if is_label(label.trim()) {
+            return Err(place_error(rhs));
+        }
+    }
     Err(format!("unrecognized right-hand side `{rhs}`"))
 }
 
@@ -1304,9 +1469,7 @@ fn split_index<'a>(text: &'a str) -> Result<Option<(&'a str, Index<'a>)>, String
         }
         if is_register(index) {
             return Err(format!(
-                "a runtime index `{register}[{index}]` is not supported yet: \
-                 compute the address (`t = {index} * <element size>`, \
-                 `p = {register} + t`) and index that with `p[0]`"
+                "a runtime index `{register}[{index}]` is not supported yet: compute the address (`t = {index} * <element size>`, `p = {register} + t`) and index that with `p[0]`"
             ));
         }
         let value = parse_int(index).ok_or_else(|| format!("invalid index `{index}`"))?;
@@ -1337,7 +1500,7 @@ fn place_error(place: &str) -> String {
     match place.split_once('[') {
         Some((label, _)) if is_label(label.trim()) => format!(
             "`{place}` indexes a variable directly: take its address first \
-             (`t0 = &{}`), then index the register (`t0[0] = ...`)",
+             (`t0 = &{}`), then index the register (`t0[0]`)",
             label.trim()
         ),
         _ => format!("`{place}` is not a register"),
@@ -1388,6 +1551,180 @@ fn parse_string_literal(arg: &str) -> Result<Vec<u8>, String> {
 /// Replaces whole-token occurrences of `from` with `to` in `text` (an
 /// identifier bounded by non-identifier characters), to bind a `def`
 /// parameter to a call's argument when inlining the body.
+/// What a `def` header declares between its parentheses: the pattern names,
+/// whether the pattern is a tuple, and the dispatch kind of each position
+/// (`None` for untyped or `_`).
+struct ParameterSpec {
+    params: Vec<String>,
+    tuple: bool,
+    kinds: Vec<Option<Kind>>,
+}
+
+/// Parses what sits between a `def`'s parentheses: `x`, `x: TYPE`, `[a, b]`
+/// or `[a, b]: [T1, T2]`.
+fn parse_parameter_spec(spec: &str) -> Result<ParameterSpec, String> {
+    let (pattern, type_text) = match split_top_level(spec, ':').as_slice() {
+        [pattern] => (pattern.trim(), None),
+        [pattern, ty] => (pattern.trim(), Some(ty.trim())),
+        _ => {
+            return Err(format!(
+                "expected `name` or `name: TYPE` in `def ...({spec})`"
+            ))
+        }
+    };
+    let (names, tuple): (Vec<&str>, bool) =
+        match pattern.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            Some(inner) => (
+                split_top_level(inner, ',')
+                    .into_iter()
+                    .map(str::trim)
+                    .collect(),
+                true,
+            ),
+            None => (vec![pattern], false),
+        };
+    if names.is_empty() {
+        return Err("a `def` needs at least one parameter".to_string());
+    }
+    if tuple && names.len() < 2 {
+        return Err(format!(
+            "a one-name tuple pattern `{pattern}` is just `{}`: write `def f({})`",
+            names.first().copied().unwrap_or(""),
+            names.first().copied().unwrap_or("")
+        ));
+    }
+    for name in &names {
+        if !is_label(name) {
+            return Err(format!("invalid parameter name `{name}`"));
+        }
+        if is_register(name) || is_reserved(name) {
+            return Err(format!(
+                "parameter `{name}` is a reserved word (a register, a type, a locality, `_` or `typeof`)"
+            ));
+        }
+    }
+    if let Some((_, twice)) = names
+        .iter()
+        .enumerate()
+        .find(|(i, n)| names[..*i].contains(n))
+    {
+        return Err(format!(
+            "parameter `{twice}` is named twice in `def ...({spec})`"
+        ));
+    }
+    let kinds = match type_text {
+        None => vec![None; names.len()],
+        Some(ty) if tuple => {
+            let inner = ty
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .ok_or_else(|| {
+                    format!("a tuple pattern needs a tuple type `[T, ...]`, got `{ty}`")
+                })?;
+            let parts = split_top_level(inner, ',');
+            if parts.len() != names.len() {
+                return Err(format!(
+                    "the pattern `{pattern}` names {} parameters but its type `{ty}` lists {}",
+                    names.len(),
+                    parts.len()
+                ));
+            }
+            parts
+                .iter()
+                .map(|p| kind_of_type(p.trim()))
+                .collect::<Result<_, _>>()?
+        }
+        Some(ty) => vec![kind_of_type(ty)?],
+    };
+    Ok(ParameterSpec {
+        params: names.into_iter().map(str::to_string).collect(),
+        tuple,
+        kinds,
+    })
+}
+
+/// The dispatch kind a type pattern stands for, validated with the same
+/// parser `define` uses: a scalar type is a `Scalar`, a list type an `Array`,
+/// and `_` matches either.
+fn kind_of_type(ty: &str) -> Result<Option<Kind>, String> {
+    if ty == "_" {
+        return Ok(None);
+    }
+    // `[_]` is "any array", legal only here: a define needs a real type.
+    if ty == "[_]" {
+        return Ok(Some(Kind::Array));
+    }
+    translate_type(ty).map_err(|e| format!("invalid parameter type `{ty}`: {e}"))?;
+    Ok(Some(if ty.starts_with('[') {
+        Kind::Array
+    } else {
+        Kind::Scalar
+    }))
+}
+
+/// A token that names a type, a locality, `_` or the `typeof` keyword: none
+/// may be a parameter name (the substitution would rewrite body annotations)
+/// or a call argument (it is not a variable).
+fn is_reserved(token: &str) -> bool {
+    SCALARS.contains(&token) || LOCALITIES.contains(&token) || token == "typeof"
+}
+
+/// The body's defines (`name: <annotation>`), by the same test the statement
+/// dispatcher uses: a bare label, then a non-empty annotation. Matching only
+/// `thread`/`global` here once missed a define that elided its locality.
+fn body_defines(body: &[Line]) -> impl Iterator<Item = &str> {
+    body.iter().filter_map(|l| {
+        let (decl, rest) = l.text.trim().split_once(':')?;
+        let decl = decl.trim();
+        (is_label(decl) && !rest.trim().is_empty()).then_some(decl)
+    })
+}
+
+/// A call's shape for the no-overload message: `a scalar`, `an array`, or
+/// `[scalar, array]` for a tuple.
+fn describe_kinds(kinds: &[Kind], tuple: bool) -> String {
+    let word = |k: &Kind| match k {
+        Kind::Scalar => "scalar",
+        Kind::Array => "array",
+    };
+    if tuple {
+        let inner: Vec<&str> = kinds.iter().map(word).collect();
+        format!("[{}]", inner.join(", "))
+    } else {
+        match kinds.first() {
+            Some(Kind::Scalar) => "a scalar".to_string(),
+            _ => "an array".to_string(),
+        }
+    }
+}
+
+/// Splits on `separator` at bracket depth zero and outside string literals,
+/// so `[a, "x, y"], b` splits into two, not three. Empty pieces are dropped.
+fn split_top_level(text: &str, separator: char) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let (mut depth, mut quoted, mut escaped, mut start) = (0i32, false, false, 0);
+    for (at, c) in text.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '[' | '(' => depth += 1,
+            ']' | ')' => depth -= 1,
+            _ if c == separator && depth == 0 => {
+                pieces.push(&text[start..at]);
+                start = at + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    pieces.push(&text[start..]);
+    pieces
+        .into_iter()
+        .filter(|p| !p.trim().is_empty())
+        .collect()
+}
+
 /// Whether `text` contains a parenthesis outside a string literal, which is
 /// how a call that is only part of a larger expression is told from one that
 /// is the whole of it.
@@ -1420,7 +1757,21 @@ fn substitute_tokens(text: &str, subs: &[(String, String)]) -> String {
     order.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
+    let (mut quoted, mut escaped) = (false, false);
     while at < text.len() {
+        // Text inside a string literal is never a token to substitute.
+        let ch = text[at..].chars().next().unwrap();
+        if quoted || ch == '"' {
+            match ch {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = !quoted,
+                _ => {}
+            }
+            out.push(ch);
+            at += ch.len_utf8();
+            continue;
+        }
         let before_ok = at == 0 || !is_ident(text[..at].chars().next_back().unwrap());
         let matched = before_ok
             .then(|| {

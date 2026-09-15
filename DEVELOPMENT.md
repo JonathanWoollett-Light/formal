@@ -974,11 +974,42 @@ the ordering is load-bearing only while the raw form exists.)
 stored dialect files are regenerated with it when the translator or an
 `input.hl` changes.
 
-**Functions and the standard library.** `def <name>(<param>):` + an indented
-body declares an **inline** function (one parameter for now). There is no
-calling convention, stack, or `ret`: a call `<name>(<arg>)` is expanded in
-place, binding the parameter to the argument by whole-token substitution before
-the body is translated afresh:
+**Functions and the standard library.** `def <name>(<pattern>[: <type>]):`
++ an indented body declares an **inline** function. There is no calling
+convention, stack, or `ret`: a call `<name>(<arg>)` is expanded in place,
+binding each parameter to its argument by whole-token substitution before the
+body is translated afresh. The pattern is one name, or a **tuple** of two or
+more, `[a, b]`, which a call matches with a tuple argument `f([a0, a1])`: a
+tuple argument is a list of *tokens*, so destructuring is just a substitution
+map with one entry per name, and nothing is materialised in memory. That is
+how a function takes several values, and why `def` never grew a second
+parameter: a function takes one thing, and a tuple is one thing.
+
+Several `def`s of one name are **overloads**, resolved at translate time.
+Each argument element has a **category** the stateless front-end can see: a
+register or an integer literal is a *scalar*, a variable name or a string
+literal is an *array*. Nothing finer, since a register's width is unknowable
+here. A type in the header stands for a category: a scalar type name (`i64`,
+`u8`, ...) matches a scalar, a list type or `[_]` matches an array, and `_` or
+no type matches either. **A scalar type name checks only the category**:
+`def f(x: u8)` accepts a register holding anything, and `[u8*13]` says
+nothing about length; the names are documentation the reader can trust that
+far and no further. An overload fits a call when the shapes agree (tuple or
+not), the arities agree, and every position's category matches. Exactly one
+must fit. Two overloads that could both fit some call are refused where the
+second is **defined**, not at each call: same shape and arity, and at every
+position the two types could name the same category. This also ends the old
+silent behaviour where a second `def` of the same name replaced the first,
+and it means a user `def print(x)` is an error naming the std overload it
+overlaps rather than a quiet replacement.
+
+`if typeof` stays as the primitive underneath (§ below), but it is not the
+same thing: two `if typeof` arms of the same category both translate, while
+two overloads of the same category are refused. `if typeof x == _` is refused
+as always taken. Only the **taken** overload's body is scanned for its local
+defines, so a `__localN` hygiene label is consumed once per taken body.
+
+Each element of an argument binds as follows:
 
 - a **string** argument `"literal"` is laid down in fresh thread-local storage
   (`__str0`, `__str1`, …: the `#$` define plus a `li`/`sb` per byte, NUL
@@ -988,7 +1019,20 @@ the body is translated afresh:
   the body becomes the number, as `exit` uses it);
 - a **register** argument binds the parameter to that register (a scalar value,
   so the body's `if typeof param == i64` arm is taken), used to print a computed
-  value, e.g. `print(a6)`.
+  value, e.g. `print(a6)`;
+- a **variable name** binds the parameter to that label (an array), so the body
+  may take its address with `&param` exactly as it does a string's. The
+  front-end has no symbol table and cannot check the name is defined: define it
+  before you pass it, and the verifier is the authority. Indexing a variable
+  directly, `t1 = nums[0]`, is refused on both the load and the store side with
+  the same "take its address first" message.
+
+A tuple argument may not mix a string literal with `t0` or `t1`: laying the
+string down writes both before the body runs. Parameter names may not be a
+register, a type name, a locality, `_` or `typeof` (the substitution would
+rewrite body annotations), may not repeat, and may not equal a name the body
+defines. Text inside a string literal is never substituted, so `def f(n):
+print("\n")` leaves the escape alone.
 
 The body is **hygienic**: any local definition in it (`name: …`, by the same
 test the statement dispatcher uses, so an elided locality counts) is renamed to
@@ -1014,15 +1058,18 @@ for a value from a body that produces none (`a0 = f(1)` where `f` never
 returns) is an error, which under `if typeof` also catches the case where the
 arm that would have returned is not the arm taken.
 
-`return` is confined to the body's **tail**. A `return` inside an `if` or a
-`while` is refused, because skipping the rest of the body needs a jump to a
-label the source never wrote, and the language has neither `goto` nor `break`;
-the message says to compute the result into a register and return that. A
-compile-time `if typeof` arm is exempt, since it is spliced with no branch, so
-its tail is still the body's tail: that is what lets a polymorphic `def` end
-each arm in its own `return`. The front-end tracks this by counting **runtime**
-blocks only. The cost of the restriction is the flag idiom that `two_sum`
-already uses for its probe loops, and the emitted code is the same either way.
+`return` is confined to the body's **tail**, and it must be the **last**
+statement of its body: anything after it would still run. A `return` inside
+an `if` or a `while` is refused, because skipping the rest of the body needs a
+jump to a label the source never wrote, and the language has neither `goto`
+nor `break`; the message says to compute the result into a register and
+return that. A compile-time `if typeof` arm is exempt, since it is spliced
+with no branch, so its tail is still the body's tail, and the only thing that
+may follow a `return` is the next `if typeof` arm: that is what lets a
+polymorphic `def` end each arm in its own `return`. The front-end tracks this
+by counting **runtime** blocks only. The cost of the restriction is the flag
+idiom that `two_sum` already uses for its probe loops, and the emitted code
+is the same either way.
 
 A call must be the **whole** right-hand side: `t0 = f(a0) + f(a0)` is refused,
 because evaluating a call inside a larger expression needs a scratch register

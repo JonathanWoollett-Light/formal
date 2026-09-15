@@ -99,6 +99,95 @@ const MALFORMED: &[(&str, &str)] = &[
         "def csr(x):\n    return x\nexit(0)\n",
         "a `def` may not shadow the builtin `csr`",
     ),
+    // Overloads: headers and calls.
+    (
+        "def f(x: u9):\n    t0 = x\nf(1)\nexit(0)\n",
+        "invalid parameter type",
+    ),
+    (
+        "def f([a, a]):\n    t0 = a\nf([1, 2])\nexit(0)\n",
+        "a parameter named twice",
+    ),
+    (
+        "def f([t0, x]):\n    t1 = x\nf([1, 2])\nexit(0)\n",
+        "a register as a parameter name",
+    ),
+    (
+        "def f(u8):\n    t0 = 1\nf(1)\nexit(0)\n",
+        "a type name as a parameter name",
+    ),
+    (
+        "def f(_):\n    t0 = 1\nf(1)\nexit(0)\n",
+        "`_` as a parameter name",
+    ),
+    (
+        "def f(buf):\n    buf: [u8*4]\nf(1)\nexit(0)\n",
+        "a parameter that the body also defines",
+    ),
+    (
+        "def f([a, b]: [i64]):\n    t0 = a\nf([1, 2])\nexit(0)\n",
+        "tuple type shorter than the pattern",
+    ),
+    (
+        "def f([a, b]: i64):\n    t0 = a\nf([1, 2])\nexit(0)\n",
+        "a tuple pattern with a non-tuple type",
+    ),
+    (
+        "def f([x]):\n    t0 = x\nf([1])\nexit(0)\n",
+        "a one-name tuple pattern",
+    ),
+    (
+        "def f(x: i64):\n    t0 = x\ndef f(y):\n    t0 = y\nexit(0)\n",
+        "overlapping overloads",
+    ),
+    (
+        "def print(x):\n    t0 = x\nexit(0)\n",
+        "a user `def` overlapping a std one",
+    ),
+    (
+        "def f(x: i64):\n    t0 = x\nf(\"s\")\nexit(0)\n",
+        "a string where a scalar is typed",
+    ),
+    (
+        "def f(x: [u8]):\n    t0 = &x\nf(5)\nexit(0)\n",
+        "an integer where an array is typed",
+    ),
+    (
+        "def f([a, b]):\n    t0 = a\nf(1)\nexit(0)\n",
+        "one argument to a tuple pattern",
+    ),
+    (
+        "def f(x):\n    t0 = x\nf([1])\nexit(0)\n",
+        "a one-element tuple argument",
+    ),
+    (
+        "def f([a, b]):\n    t2 = &a\nf([\"s\", t0])\nexit(0)\n",
+        "a string next to t0 in a tuple",
+    ),
+    (
+        "def f(x):\n    t0 = x\nf(u8)\nexit(0)\n",
+        "a reserved word as an argument",
+    ),
+    (
+        "def f([a, b]):\n    t0 = a\nf([1, 2)\nexit(0)\n",
+        "an unterminated tuple argument",
+    ),
+    (
+        "def f(x):\n    return x\nx = f(1)\nexit(0)\n",
+        "a call assigned to a non-register",
+    ),
+    (
+        "def f(x):\n    return x\n    t0 = 1\na0 = f(1)\nexit(0)\n",
+        "a statement after `return`",
+    ),
+    (
+        "def f(x):\n    if typeof x == _:\n        t0 = x\nf(1)\nexit(0)\n",
+        "`_` in an `if typeof`",
+    ),
+    (
+        "arr: [u8*2]\nt0 = arr[0]\nexit(0)\n",
+        "indexing a variable on the load side",
+    ),
     // Structured-statement headers and conditions.
     (
         "if t0 == t1:\nexit(0)\n",
