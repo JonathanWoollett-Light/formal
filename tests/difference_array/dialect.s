@@ -16,13 +16,13 @@
 _l0:
     bge a0, a1, _l1
     mul t1, a0, a5
-    la t2, arr
-    add t2, t2, t1
+    la t0, arr
+    add t2, t0, t1
     #[ a3, 0(t2)
     #[ a4, 1(t2)
     sub a4, a4, a3
-    la t3, diff
-    add t3, t3, t1
+    la t0, diff
+    add t3, t0, t1
     #] a4, 0(t3)
     add a2, a2, a4
     addi a0, a0, 1

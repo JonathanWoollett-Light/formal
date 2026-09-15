@@ -17,7 +17,7 @@
 # Registers: a0 = the amount, a1 = element size (4), a2 = the coin count,
 #            a3 = the sentinel then the answer, a4 = the coin index,
 #            a5 = the coin's value, a6 = v, t0 = an address,
-#            t1/t2 = byte offsets, t3 = the candidate, t4 = dp[v].
+#            t1 = the byte offset `at` leaves, t3 = the candidate, t4 = dp[v].
 
 coins: [u32]*3 = [1, 2, 5]
 dp: [u32]*12
@@ -33,30 +33,22 @@ t1 = 0
 t0[0] = t1
 t2 = 1
 while t2 <= a0:
-    t1 = t2 * a1
-    t0 = &dp
-    t0 = t0 + t1
+    t0 = at([dp, t2, a1])
     t0[0] = a3
     t2 = t2 + 1
 
 # --- relax the table once per coin, upward so a coin can repeat ---
 a4 = 0
 while a4 < a2:
-    t1 = a4 * a1
-    t0 = &coins
-    t0 = t0 + t1
+    t0 = at([coins, a4, a1])
     a5 = t0[0]
     a6 = a5
     while a6 <= a0:
         t1 = a6 - a5
-        t2 = t1 * a1
-        t0 = &dp
-        t0 = t0 + t2
+        t0 = at([dp, t1, a1])
         t3 = t0[0]
         t3 = t3 + 1
-        t2 = a6 * a1
-        t0 = &dp
-        t0 = t0 + t2
+        t0 = at([dp, a6, a1])
         t4 = t0[0]
         if t3 < t4:
             t0[0] = t3
@@ -64,14 +56,11 @@ while a4 < a2:
     a4 = a4 + 1
 
 # --- the proof: 11 takes exactly 3 coins from [1 2 5] ---
-t1 = a0 * a1
-t0 = &dp
-t0 = t0 + t1
+t0 = at([dp, a0, a1])
 a3 = t0[0]
 t0 = 3
 require a3 == t0
 
 # `print` clobbers a0-a2/a7/t0-t2/t5; a3 survives it.
-print(a3)
-print("\n")
+println(a3)
 exit(0)

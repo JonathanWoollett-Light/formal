@@ -37,8 +37,8 @@ _l2:
     bge a6, a5, _l4
     #] a6, 0(t0)
     #] a5, 1(t0)
-    la t2, ends
-    add t2, t2, t1
+    la t0, ends
+    add t2, t0, t1
     #[ t3, 0(t2)
     #[ t4, 1(t2)
     #] t4, 0(t2)
@@ -134,9 +134,9 @@ _l16:
     li a3, 0
 _l17:
     bge a3, a4, _l18
-    mul t3, a3, a5
-    la t4, outs
-    add t4, t4, t3
+    mul t1, a3, a5
+    la t0, outs
+    add t4, t0, t1
     #[ a6, 0(t4)
     addi t5, a6, 0
     #$ __local0 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]
@@ -184,9 +184,9 @@ _l23:
     la a1, __str0
     li a7, 64
     ecall
-    mul t3, a3, a5
-    la t4, oute
-    add t4, t4, t3
+    mul t1, a3, a5
+    la t0, oute
+    add t4, t0, t1
     #[ a6, 0(t4)
     addi t5, a6, 0
     #$ __local1 thread [u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8 u8]

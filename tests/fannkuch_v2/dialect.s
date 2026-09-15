@@ -199,15 +199,15 @@ _l7:
     la t0, myrank
     #[ t1, 0(t0)
     li t2, 4
-    mul t3, t1, t2
+    mul t1, t1, t2
     la t0, cs_slots
-    add t0, t0, t3
+    add t0, t0, t1
     #] a6, 0(t0)
     la t0, max_global
     amomax.w t1, a5, (t0)
+    fence rw, rw
     la t0, done_counter
     li t1, 1
-    fence rw, rw
     amoadd.w t2, t1, (t0)
     li a0, 1
     bne t2, a0, _l36

@@ -80,10 +80,7 @@ while t1 != t3:
     t1 = t1 + 1
 
 # claim a unique rank h via an atomic fetch-add on the zero-init counter.
-t0 = &rank_counter
-t1 = 1
-asm:
-    amoadd.w a3, t1, (t0)
+fetch_add([a3, rank_counter, 1])
 # remember the rank (for the slot index) and seed the first block c = h.
 t0 = &myrank
 t0[0] = a3
@@ -227,9 +224,7 @@ while t0 < a2:
 t0 = &myrank
 t1 = t0[0]
 t2 = 4
-t3 = t1 * t2
-t0 = &cs_slots
-t0 = t0 + t3
+t0 = at([cs_slots, t1, t2])
 t0[0] = a6
 # atomically max this hart's partial into the global max: a lock-free reduction.
 # amomax is a SINGLE instruction, so -- unlike a compare-and-select max in the
@@ -243,11 +238,9 @@ asm:
 # Release fence: make this hart's slot writes globally visible BEFORE it bumps the
 # done counter, so the finisher (which observes the bump) is guaranteed to see them.
 # The verifier explores all interleavings (SC), but QEMU MTTCG is weakly ordered.
-t0 = &done_counter
-t1 = 1
 asm:
     fence rw, rw
-    amoadd.w t2, t1, (t0)
+fetch_add([t2, done_counter, 1])
 a0 = 1
 if t2 == a0:
     # Acquire fence: order the done-counter read before the slot reads below.
@@ -270,8 +263,7 @@ if t2 == a0:
     print("\nPfannkuchen(")
     print(a3)
     print(") = ")
-    print(a6)
-    print("\n")
+    println(a6)
 
 # every hart converges here; `unreachable` ends its thread (the finisher has
 # already printed), so the process exits once the last thread is done.

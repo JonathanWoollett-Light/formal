@@ -10,10 +10,7 @@ done_counter: global u32
 slots: global [u32]*2
 mine: thread u32
 
-t0 = &rank_counter
-t1 = 1
-asm:
-    amoadd.w a3, t1, (t0)
+fetch_add([a3, rank_counter, 1])
 
 # mine (thread-local) = rank + 1, then read it back.
 t0 = &mine
@@ -23,9 +20,7 @@ a5 = t0[0]
 
 # slots[rank] = mine
 t5 = 4
-t2 = a3 * t5
-t0 = &slots
-t0 = t0 + t2
+t0 = at([slots, a3, t5])
 t0[0] = a5
 
 # the last finisher sums the slots and writes the digit to the UART.
@@ -34,11 +29,9 @@ t0[0] = a5
 # see it. The verifier explores all interleavings under sequential consistency,
 # but QEMU MTTCG is weakly ordered, so the fence is what makes the runtime
 # agree with the proof (`fannkuch_v2` documents the same pattern).
-t0 = &done_counter
-t1 = 1
 asm:
     fence rw, rw
-    amoadd.w t2, t1, (t0)
+fetch_add([t2, done_counter, 1])
 a0 = 1
 if t2 == a0:
     t0 = &slots

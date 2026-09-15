@@ -19,8 +19,8 @@
 _l0:
     bge a1, a2, _l1
     mul t1, a1, a5
-    la t2, arr
-    add t2, t2, t1
+    la t0, arr
+    add t2, t0, t1
     #[ t3, 0(t2)
     bnez t3, _l2
     addi a0, a0, 1

@@ -21,10 +21,10 @@
 _l0:
     bge a1, a2, _l1
     mul t1, a1, a5
-    la t2, x
-    add t2, t2, t1
-    la t3, y
-    add t3, t3, t1
+    la t0, x
+    add t2, t0, t1
+    la t0, y
+    add t3, t0, t1
     #[ a3, 0(t2)
     #[ a4, 0(t3)
     mul a3, a3, a4

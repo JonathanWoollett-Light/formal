@@ -36,16 +36,13 @@ a2 = 0
 while a2 < a0:
     a3 = 0
     while a3 < a4:
-        t1 = a3 * a1
-        t0 = &starts
-        t0 = t0 + t1
+        t0 = at([starts, a3, a1])
         a5 = t0[0]
         a6 = t0[1]
         if a5 > a6:
             t0[0] = a6
             t0[1] = a5
-            t2 = &ends
-            t2 = t2 + t1
+            t2 = at_offset([ends, t1])
             t3 = t2[0]
             t4 = t2[1]
             t2[0] = t4
@@ -61,23 +58,17 @@ a6 = t0[0]
 a2 = 0
 a3 = 1
 while a3 < a0:
-    t1 = a3 * a1
-    t0 = &starts
-    t0 = t0 + t1
+    t0 = at([starts, a3, a1])
     a7 = t0[0]
-    t0 = &ends
-    t0 = t0 + t1
+    t0 = at_offset([ends, t1])
     t5 = t0[0]
     if a7 <= a6:
         if t5 > a6:
             a6 = t5
     if a7 > a6:
-        t1 = a2 * a1
-        t0 = &outs
-        t0 = t0 + t1
+        t0 = at([outs, a2, a1])
         t0[0] = a5
-        t0 = &oute
-        t0 = t0 + t1
+        t0 = at_offset([oute, t1])
         t0[0] = a6
         a2 = a2 + 1
         a5 = a7
@@ -85,12 +76,9 @@ while a3 < a0:
     a3 = a3 + 1
 
 # the interval still open when the sweep ends is the last one out
-t1 = a2 * a1
-t0 = &outs
-t0 = t0 + t1
+t0 = at([outs, a2, a1])
 t0[0] = a5
-t0 = &oute
-t0 = t0 + t1
+t0 = at_offset([oute, t1])
 t0[0] = a6
 a2 = a2 + 1
 
@@ -125,17 +113,12 @@ a4 = a2
 a5 = 4
 a3 = 0
 while a3 < a4:
-    t3 = a3 * a5
-    t4 = &outs
-    t4 = t4 + t3
+    t4 = at([outs, a3, a5])
     a6 = t4[0]
     print(a6)
     print(" ")
-    t3 = a3 * a5
-    t4 = &oute
-    t4 = t4 + t3
+    t4 = at([oute, a3, a5])
     a6 = t4[0]
-    print(a6)
-    print("\n")
+    println(a6)
     a3 = a3 + 1
 exit(0)

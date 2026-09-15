@@ -37,14 +37,14 @@ _l2:
 _l4:
     blt a0, a6, _l5
     sub t1, a6, a5
-    mul t2, t1, a1
+    mul t1, t1, a1
     la t0, dp
-    add t0, t0, t2
+    add t0, t0, t1
     lwu t3, 0(t0)  # #[ t3, 0(t0)
     addi t3, t3, 1
-    mul t2, a6, a1
+    mul t1, a6, a1
     la t0, dp
-    add t0, t0, t2
+    add t0, t0, t1
     lwu t4, 0(t0)  # #[ t4, 0(t0)
     sw t3, 0(t0)  # #] t3, 0(t0)
 _l6:

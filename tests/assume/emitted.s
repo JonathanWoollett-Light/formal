@@ -6,9 +6,9 @@ _start:
 _l0:
     beq a2, a0, _l1
     li t3, 4
-    mul t4, a2, t3
-    la t5, arr
-    add t5, t5, t4
+    mul t1, a2, t3
+    la t0, arr
+    add t5, t0, t1
     sw a2, 0(t5)  # #] a2, 0(t5)
     addi a2, a2, 1
     j _l0

@@ -20,8 +20,8 @@ _l2:
     add t2, a0, a0
 _l5:
     bge t2, a1, _l6
-    la t4, flags
-    add t4, t4, t2
+    la t0, flags
+    add t4, t0, t2
     li t3, 1
     #] t3, 0(t4)
     add t2, t2, a0

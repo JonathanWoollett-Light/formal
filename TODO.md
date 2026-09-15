@@ -22,36 +22,34 @@ Short, medium and long terms things to do.
   Merge Two Sorted Lists) and heaps (Top K Frequent Elements). Both need a
   memory region and an allocator first, so they are a second wave after the
   five kernels that landed.
-- Standard-library candidates, from an audit of every `tests/*/input.hl` for
-  code that is repeated inline and should be shared. `print(0)` was the first
-  finding and is fixed; the release fence missing from `parallel_probe` and
-  `tls_probe` was the second and is fixed. What is left, most valuable first,
-  with the tests each would rewrite. None is urgent: a `def` is inlined, so
-  every one of these emits byte-identical code either way, and the win is
-  readability, not size.
-  - `claim(p)`: the atomic fetch-add-1 rank claim, four hand-written copies
-    (`parallel_probe`, `tls_probe`, `fannkuch_v2`, `atomic_claim`). Worth most
-    because it hides an `asm:` block, the least checkable construct in the
-    language, and the three parallel tests already agree on `a3` as the
-    destination.
-  - `putc(c)`: write one byte to the QEMU UART, three copies of the bare
-    `0x10000000` (`parallel_probe`, `tls_probe`, `uart_hello`). Needs a
-    decision first: `std` is Linux-targeted today (`print` and `exit` both
-    `ecall`), so this would be its first bare-metal entry.
-  - `sum2(p)`: sum two adjacent slots, three byte-identical copies
-    (`parallel_probe`, `tls_probe`, `fannkuch_v2`). Narrow, so only worth it
-    if the parallel reduction shape stays.
-  - `cswap(p)` (adjacent compare-and-swap) and `bucket(x)` (the canonical
-    non-negative remainder `((i % d) + d) % d`) each have exactly one call site
-    today (`bubble_sort`, `runtime_input`). Deliberately **not** added: one
-    call site is not a shared utility. `merge_intervals` looked like a second
-    `cswap` site and is not, because it swaps a second array in lockstep on
-    the first array's comparison.
-  Of the three biggest repetitions in the suite, which are not `def`-shaped at
-  all, the array-literal initialiser has landed (`name: thread [u32]*4 =
-  [...]`). The other two are still open and designed in DEVELOPMENT.md 11: the
-  runtime index `x[i]` (23 occurrences across 14 tests) and an immediate on the
-  right of a condition (46 occurrences across 33 tests).
+- Standard-library candidates still open, after the audit of every
+  `tests/*/input.hl`. Landed: `at`, `at_offset`, `mod`, `fetch_add`,
+  `println`, and `print` as two overloads; 19 tests rewritten to use them.
+  Deliberately deferred, with the reason each waits:
+  - `fill`, `iota`, `copy`, `swap`, `sum2`: fannkuch-only, and `swap`/`sum2`
+    would take `a`-registers as std scratch. Two `fill` sites are unsafe
+    anyway (fannkuch_v2's loop bound is the value scratch).
+  - `at([p, i, size])` with the base already in a register: seven sites, but
+    a second clobber set (`t3`) under the same name as the label form.
+  - `max([acc, v])`: an in-place first argument needs a way to mark a mutated
+    parameter before it reads honestly.
+  - `expect([v, k])` (`require` against a literal): about 50 sites, but the
+    right fix is `require a3 == 3` in the language, which needs the scratch
+    decision DEVELOPMENT.md 11 already tracks; a `t0` scratch is live at a
+    dozen of the sites.
+  - `uart_digit`: bare-metal and QEMU-specific, two twin probes.
+  Left hand-written on purpose, each with a comment: bubble_sort's two index
+  computations (the index lives in `t0`, which `at` overwrites), atomic_add
+  (pins the raw `amoadd.w`), fannkuch_v2's two `cnt`/`work` fills.
+- A translate-time check that a register argument is not also a register
+  the body writes (other than a parameter) would have caught all five unsafe
+  rewrite sites in the audit, but the natural rule also refuses `exit(a0)`
+  and `print(t0)`, which are correct. Needs flow analysis or a narrower rule.
+- Zero-arity `def f():` and a call `f()`; today a `def` needs a parameter.
+- The other two big repetitions are still open and designed in
+  DEVELOPMENT.md 11: the runtime index `x[i]` folded into syntax (`at` is its
+  std spelling and owns `t0`/`t1`), and an immediate on the right of a
+  condition (46 occurrences across 33 tests).
 - Roll the array-literal initialiser through the 13 tests that still lay their
   fixtures down a store at a time. The five kernels use it; `bubble_sort`,
   `sieve`, `binary_search`, `signed_bytes`, `dot_product` and the rest do not.

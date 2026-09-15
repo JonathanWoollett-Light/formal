@@ -12,9 +12,7 @@ assume:
 a2 = 0              # i
 while a2 != a0:
     t3 = 4
-    t4 = a2 * t3
-    t5 = &arr
-    t5 = t5 + t4    # &arr[i]  (i concrete each iteration)
+    t5 = at([arr, a2, t3])    # &arr[i]  (i concrete each iteration)
     t5[0] = a2    # arr[i] = i
     a2 = a2 + 1
 exit(0)

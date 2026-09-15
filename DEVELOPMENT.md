@@ -918,7 +918,8 @@ line ending (`\r\n` on Windows, which the dialect parser requires there).
 Errors are `TranslateError { line, message }` (1-based line; no panics).
 
 **A runtime index** is still built from the register-register multiply and add:
-`arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0] = v` (see
+`arr[i] = v` (u32 elements) is written `t = i * 4; p = &arr + t; p[0] = v`, or
+with std `p = at([arr, i, size]); p[0] = v` (see
 the `indexed` test). Keeping that explicit means the cost (a `mul` + an `add`)
 stays visible in the source, and the element access at the end costs nothing
 extra: for a pointee of uniform element width the resolution does not depend on
@@ -1530,7 +1531,8 @@ can hold every language to the same output.
   load-bearing: RISC-V `rem` takes the dividend's sign, so a single `% 4` on a
   havoced value spans `-3..3` (the interval transfer in `rem_by_constant`,
   [src/verifier_types.rs](src/verifier_types.rs), models exactly this), and
-  only the `((i % d) + d) % d` canonical form narrows to `0..3`.
+  only the `((i % d) + d) % d` canonical form narrows to `0..3`. The test now
+  writes it as std's `mod([a0, t2])`, and the address as `at([arr, a1, t2])`.
 - `assume` ([tests/assume/](tests/assume/)): the `forget` + `assume:` idiom --
   `forget a0` havocs the value, `assume: a0 = 5` narrows it for a bounded proof;
   neither directive appears in the binary.
