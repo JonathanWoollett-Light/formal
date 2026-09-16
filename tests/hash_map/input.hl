@@ -1,0 +1,147 @@
+# A hash map from std: a Swiss table (abseil's raw_hash_set in its portable
+# byte-wise form) over u32 keys, proven at compile time. Capacity 16 is two
+# windows of 8. Under h = key * 40503, start = h / 128 % 16 and H2 = h % 128:
+#
+#   key   start  H2   slot    role
+#   1     12     55   12      first in the window
+#   10    12     38   13      H1 collision
+#   19    12     21   14      H1 collision; updated in place later
+#   28    12     4    15      H1 collision
+#   2049  12     55   0       shares H2 with 1: a false positive, then the wrap
+#   86    12     122  1       removed (DELETED: runs 5 + 5), reinserted in place
+#   95    12     105  2       still found after the removal
+#   104   12     88   3       fills the window
+#   113   12     71   4       spills to the second window, start (12 + 8) % 16
+#   30    4      114  5       its own start is 4, taken by 113; removed last
+#   2     8      110  8       removed (EMPTY: runs 0 + 2)
+#   11    8      93   9       found in the lane after the EMPTY one
+#   122   12     54   absent  no H2 match: two windows, EMPTY in the second
+#   4097  12     55   absent  two false positives (1 and 2049)
+#   39    4      97   absent  its window holds an EMPTY: the walk stops after one
+#
+# The three removals take the erase rule's three shapes. 86 at slot 1: 5 full
+# bytes backwards from index 16 (the clone of slot 0, then 15..12; 11 is EMPTY)
+# and 5 forwards (1..5; 6 is EMPTY), 10 >= 8, so DELETED, which find(113) must
+# probe past (its first window has no EMPTY) and the reinsert reuses, reading
+# lane 5 of window 12 through the clone at index 17. 2 at slot 8: 0 backwards
+# (7 is EMPTY) and 2 forwards (8, 9; 10 is EMPTY), so EMPTY, after which
+# find(11) reaches lane 1 past that EMPTY lane 0. 30 at slot 5: backwards from
+# index 20 (the clone of slot 4) the run is 20..16 then 15, 14, 13, eight full
+# bytes, the cap of hm_run, plus 1 forwards, so DELETED. Every byte and clone
+# is pinned directly (ctrl_is) as well as through what find returns.
+#
+# Registers: a0 = key, a1 = val, a6 = cap, a4/a5 = results; hm_* clobber
+#            t0-t5 and a2-a5.
+
+ctrl: [u8*24]
+keys: [u32*16]
+vals: [u32*16]
+
+# Insert (or assign) and prove the slot the key landed in.
+def put(k, v, slot):
+    a0 = k
+    a1 = v
+    a5 = hm_insert(ctrl, keys, vals, a0, a1, a6)
+    t0 = slot
+    require a5 == t0
+
+# Look a key up and prove its slot and value; leaves a5 alone.
+def get(k, slot, v):
+    a0 = k
+    a4 = hm_find(ctrl, keys, a0, a6)
+    t0 = slot
+    require a4 == t0
+    t0 = at_offset(vals, t1)
+    t2 = t0[0]
+    t0 = v
+    require t2 == t0
+
+# Prove a key is not in the table.
+def absent(k):
+    a0 = k
+    a4 = hm_find(ctrl, keys, a0, a6)
+    require a4 == a6
+
+# Remove a key and prove the slot it held.
+def drop(k, slot):
+    a0 = k
+    a5 = hm_remove(ctrl, keys, a0, a6)
+    t0 = slot
+    require a5 == t0
+
+# Prove control byte i (an array index, so a clone can be named) holds b.
+def ctrl_is(i, b):
+    t0 = &ctrl
+    t1 = t0[i]
+    t2 = b
+    require t1 == t2
+
+a6 = 16
+hm_init(ctrl, a6)
+
+put(1, 100, 12)
+put(10, 110, 13)
+put(19, 190, 14)
+put(28, 280, 15)
+put(2049, 20490, 0)
+put(86, 860, 1)
+put(95, 950, 2)
+put(104, 1040, 3)
+put(113, 1130, 4)
+put(30, 300, 5)
+put(2, 20, 8)
+put(11, 111, 9)
+
+get(1, 12, 100)
+get(2049, 0, 20490)
+get(113, 4, 1130)
+get(30, 5, 300)
+get(2, 8, 20)
+get(11, 9, 111)
+absent(122)
+absent(4097)
+absent(39)
+
+# an existing key: the value is replaced in the same slot
+put(19, 191, 14)
+get(19, 14, 191)
+
+# remove 86: right 5 + left 5 >= 8, so DELETED, in the byte and its clone
+drop(86, 1)
+ctrl_is(1, 254)
+ctrl_is(17, 254)
+get(113, 4, 1130)
+absent(86)
+get(95, 2, 950)
+
+# reinsert into the deleted slot, found through its clone; H2(86) is 122
+put(86, 861, 1)
+get(86, 1, 861)
+ctrl_is(1, 122)
+ctrl_is(17, 122)
+
+# remove 2: right 2 + left 0 < 8, so EMPTY; 11 is then found past that lane
+drop(2, 8)
+ctrl_is(8, 128)
+get(11, 9, 111)
+absent(2)
+
+# remove 30: the backward run through the clones is 8 full bytes (hm_run's
+# cap), plus 1 forwards, so DELETED
+drop(30, 5)
+ctrl_is(5, 254)
+ctrl_is(21, 254)
+get(113, 4, 1130)
+absent(30)
+get(86, 1, 861)
+
+a3 = hm_len(ctrl, a6)
+t0 = 10
+require a3 == t0
+
+# `print` clobbers a0-a2/a7/t0-t2/t5; a3 and a5 (the last removal's slot)
+# survive it.
+print(a3)
+print(" ")
+println(a5)
+exit(0)

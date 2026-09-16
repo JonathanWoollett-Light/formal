@@ -126,3 +126,245 @@ def fetch_add(old: i64, counter: [..], v: i64):
     t1 = v
     asm:
         amoadd.w old, t1, (t0)
+
+# ---- hash map: a Swiss table (abseil's raw_hash_set, portable byte-wise form) ----
+# The caller declares ctrl: [u8*(cap + 8)], keys: [u32*cap], vals: [u32*cap]
+# (as plain digit counts) with cap a power of two >= 8, and passes cap in a
+# register on every call. A control byte is the key's H2 (0..127) when the slot
+# is full, 128 (EMPTY) or 254 (DELETED); ctrl[cap + j] clones byte j for j < 8,
+# so a window of 8 consecutive bytes never wraps. Keys and values are u32
+# (0 <= key < 2^32). Every hm_ def clobbers at most t0-t5 and a2-a5: a0, a1,
+# a6 and a7 are the caller's (keep key, val and cap in three of them), and no
+# register argument may be one of the def's clobbers: the bodies write scratch
+# before they finish reading their arguments.
+#
+# Faithful to abseil: the control-byte values, the power-of-two ring of windows
+# of 8, triangular probing (stride 8, 16, 24, ...; every window visited once),
+# the clones mirrored on every write, find comparing keys on every H2 match and
+# stopping at the first window holding an EMPTY byte (never at DELETED), insert
+# into the first EMPTY-or-DELETED slot in probe order, and the erase rule
+# (EMPTY when the run of non-EMPTY bytes through the slot is under 8, else
+# DELETED). Portable form: group operations are byte loops (no SIMD or SWAR;
+# the dialect has no bitwise ops), `%` and `/` stand for masks and shifts, the
+# hash is one multiply, and there is no growth (a full table is a `fail`), no
+# sentinel (cap = 2^n; hashbrown's layout) and no iteration. There is no
+# maximum load either: the table may fill to cap, and every walk is bounded to
+# cap / 8 windows instead of relying on an EMPTY byte to end it. The cost is
+# performance under churn, not correctness: a miss in a full or nearly full
+# table scans every lane, and since a removal writes EMPTY only when the run
+# through its slot is under 8, tombstones do not drain in a dense table.
+# abseil's rehash in place is the remedy, deferred for register pressure (a
+# second walk with a swap), not for want of allocation. At cap = 8 the erase
+# rule sees its one window twice and is conservative, DELETED where a larger
+# table writes EMPTY; harmless, since one window is always scanned in full.
+# Results are slot indices, `cap` meaning "not found".
+
+# hm_init(ctrl, cap): every control byte EMPTY (cap + 8 bytes), after checking
+# that cap is a power of two of at least 8: triangular probing visits every
+# window exactly once only then (cap = 24 would skip a window and `fail` with
+# free slots left). The verifier knows cap, so a wrong one is a compile-time
+# refusal; the checks' arithmetic is emitted (a few instructions, once per
+# table), their never-taken branches are not. A `thread` array starts as any
+# value and a `global` one as 0 (a valid H2), so the table is unusable until
+# this runs. Clobbers t0, t1, t2, t3.
+def hm_init(ctrl: [..], cap: i64):
+    require cap != 0
+    t2 = 8
+    t1 = cap % t2
+    require t1 == 0
+    t3 = 2
+    t2 = 1
+    t1 = cap
+    while t1 != t2:
+        t0 = t1 % t3
+        require t0 == 0
+        t1 = t1 / t3
+    t2 = 128
+    t1 = cap + 8
+    t0 = &ctrl
+    while t1 != 0:
+        t0[0] = t2
+        t0 = t0 + 1
+        t1 = t1 - 1
+
+# hm_hash(key): the hash the table splits into H1 (/ 128, the probe start) and
+# H2 (% 128, the control byte). An odd 16-bit constant: a u32 key's product
+# fits an i64 (an i64 overflow in `mul` panics the verifier) and H1 spreads
+# small keys over the windows. Multiplication cannot move high bits down, so H2
+# is a permutation of key % 128; a real mix needs xor/shift. Clobbers a4.
+def hm_hash(key: i64):
+    a4 = 40503
+    return key * a4
+
+# hm_set_ctrl(ctrl, slot, byte, cap): a slot's control byte and, when the slot
+# is in the first window (slot < 8), its clone at ctrl[cap + slot]. `slot` and
+# `byte` are registers. Clobbers t0, t1, a4.
+def hm_set_ctrl(ctrl: [..], slot: i64, byte: i64, cap: i64):
+    t0 = at_offset(ctrl, slot)
+    t0[0] = byte
+    a4 = 8
+    if slot < a4:
+        t1 = cap + slot
+        t0 = at_offset(ctrl, t1)
+        t0[0] = byte
+
+# hm_find(ctrl, keys, key, cap): the slot holding key, or cap when absent. On a
+# hit t1 holds slot * 4, the slot's byte offset in keys and vals (as `at`
+# leaves its offset), so `p = at_offset(vals, t1); v = p[0]` reads the value.
+# Every lane of a window is checked before an EMPTY seen in it ends the walk
+# (a key can sit in a later lane of the same window); a DELETED byte never
+# ends it; the walk ends after cap / 8 windows. Clobbers t0-t5, a2, a3, a4.
+def hm_find(ctrl: [..], keys: [..], key: i64, cap: i64):
+    t3 = hm_hash(key)
+    t2 = 128
+    a2 = t3 / t2
+    a2 = a2 % cap                  # start: the first window
+    t3 = t3 % t2                   # H2
+    a4 = 8
+    a3 = 0                         # stride: 8, 16, 24, ... (triangular probing)
+    t5 = 1
+    while t5 != 0:
+        t4 = 0
+        while t4 < a4:
+            t1 = a2 + t4
+            t0 = at_offset(ctrl, t1)
+            t1 = t0[0]
+            if t1 == t2:
+                a3 = cap           # an EMPTY lane: the key cannot lie past this window
+            if t1 == t3:
+                t1 = a2 + t4
+                t1 = t1 % cap      # the candidate slot
+                t1 = t1 + t1
+                t1 = t1 + t1       # slot * 4
+                t0 = at_offset(keys, t1)
+                t0 = t0[0]
+                if t0 == key:
+                    a2 = a2 + t4
+                    a2 = a2 % cap  # the result
+                    t5 = 0
+                    t4 = a4        # leave the lane loop
+            t4 = t4 + 1
+        if t5 != 0:
+            a3 = a3 + a4
+            a2 = a2 + a3
+            a2 = a2 % cap
+            if a3 >= cap:          # every window visited (or an EMPTY was seen): absent
+                a2 = cap
+                t5 = 0
+    return a2
+
+# hm_first_free(ctrl, key, cap): the first EMPTY or DELETED slot on key's probe
+# sequence (where an insert of key goes), or cap when the table is full.
+# Clobbers t0-t5, a2, a3, a4.
+def hm_first_free(ctrl: [..], key: i64, cap: i64):
+    t3 = hm_hash(key)
+    t2 = 128
+    a2 = t3 / t2
+    a2 = a2 % cap
+    a4 = 8
+    a3 = 0
+    t5 = 1
+    while t5 != 0:
+        t4 = 0
+        while t4 < a4:
+            t1 = a2 + t4
+            t0 = at_offset(ctrl, t1)
+            t1 = t0[0]
+            if t1 >= t2:           # EMPTY or DELETED (there is no sentinel)
+                a2 = a2 + t4
+                a2 = a2 % cap
+                t5 = 0
+                t4 = a4
+            t4 = t4 + 1
+        if t5 != 0:
+            a3 = a3 + a4
+            a2 = a2 + a3
+            a2 = a2 % cap
+            if a3 >= cap:
+                a2 = cap           # no free slot anywhere
+                t5 = 0
+    return a2
+
+# hm_insert(ctrl, keys, vals, key, val, cap): vals[key] = val, inserting the
+# key when absent (into the first EMPTY or DELETED slot on its sequence, as
+# abseil's find_or_prepare_insert: a find, then a first-free walk) and
+# assigning in place when present; returns the key's slot. A full table is a
+# `fail`, so a program that inserts more keys than the table holds is refused
+# at compile time; there is no growth. Clobbers t0-t5, a2-a5.
+def hm_insert(ctrl: [..], keys: [..], vals: [..], key: i64, val: i64, cap: i64):
+    a5 = hm_find(ctrl, keys, key, cap)
+    if a5 == cap:
+        a5 = hm_first_free(ctrl, key, cap)
+        if a5 == cap:
+            fail
+        t3 = hm_hash(key)
+        t2 = 128
+        t3 = t3 % t2               # H2, the slot's new control byte
+        hm_set_ctrl(ctrl, a5, t3, cap)
+        t1 = a5 + a5
+        t1 = t1 + t1               # slot * 4
+        t0 = at_offset(keys, t1)
+        t0[0] = key
+    t0 = at_offset(vals, t1)       # t1 = slot * 4 from hm_find (a hit) or from above
+    t0[0] = val
+    return a5
+
+# hm_run(ctrl, first, step): how many consecutive control bytes from array
+# index `first` (a register), stepping by `step` (1 or -1), are not EMPTY; at
+# most 8. abseil's leading/trailing non-empty count of a window. Clobbers t0,
+# t1, t2, t5, a3, a4.
+def hm_run(ctrl: [..], first: i64, step: i64):
+    t2 = 128
+    a4 = 8
+    a3 = 0
+    t1 = first
+    t5 = 1
+    while t5 != 0:
+        t0 = at_offset(ctrl, t1)
+        t0 = t0[0]
+        if t0 == t2:
+            t5 = 0
+        if t5 != 0:
+            a3 = a3 + 1
+            t1 = t1 + step
+            if a3 == a4:
+                t5 = 0
+    return a3
+
+# hm_remove(ctrl, keys, key, cap): remove key; returns the slot it held, or cap
+# when absent. abseil's erase rule: the byte becomes EMPTY when no window
+# through the slot was ever full (the run of non-EMPTY bytes through it, from
+# the byte before the slot backwards plus from the slot forwards, is under 8),
+# else DELETED, so a later find still probes past it. Clobbers t0-t5, a2-a5.
+def hm_remove(ctrl: [..], keys: [..], key: i64, cap: i64):
+    a5 = hm_find(ctrl, keys, key, cap)
+    if a5 != cap:
+        a2 = a5 + cap
+        a2 = a2 - 8
+        a2 = a2 % cap              # the window ending just before the slot
+        a2 = a2 + 7                # its last lane: the byte before the slot
+        a2 = hm_run(ctrl, a2, -1)  # left: non-EMPTY bytes backwards from there
+        a3 = hm_run(ctrl, a5, 1)   # right: non-EMPTY bytes from the slot forwards
+        a3 = a3 + a2
+        a4 = 8
+        t3 = 254
+        if a3 < a4:
+            t3 = 128
+        hm_set_ctrl(ctrl, a5, t3, cap)
+    return a5
+
+# hm_len(ctrl, cap): the number of keys, by counting full control bytes.
+# O(cap): a def owns no storage that could hold a counter across calls.
+# Clobbers t0-t3, a2.
+def hm_len(ctrl: [..], cap: i64):
+    t2 = 128
+    t0 = &ctrl
+    t1 = cap
+    a2 = 0
+    while t1 != 0:
+        t3 = t0[0]
+        if t3 < t2:
+            a2 = a2 + 1
+        t0 = t0 + 1
+        t1 = t1 - 1
+    return a2

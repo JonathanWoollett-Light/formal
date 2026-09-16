@@ -12,7 +12,7 @@ pub unsafe fn remove_untouched(
     let mut next = *ast;
     let mut first = true;
     #[cfg(debug_assertions)]
-    let mut check = (0..1000).into_iter();
+    let mut check = (0..100_000).into_iter();
     while let Some(current) = next {
         debug_assert!(check.next().is_some());
         next = current.as_ref().next;
@@ -36,7 +36,7 @@ pub unsafe fn remove_branches(
     let mut next = *ast;
     let mut first = true;
     #[cfg(debug_assertions)]
-    let mut check = (0..1000).into_iter();
+    let mut check = (0..100_000).into_iter();
     while let Some(current) = next {
         debug_assert!(check.next().is_some());
         next = current.as_ref().next;

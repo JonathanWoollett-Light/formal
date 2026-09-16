@@ -179,7 +179,7 @@ pub fn new_ast(src: &[char], path: PathBuf) -> Option<NonNull<AstNode>> {
 
     let mut first = None;
     #[cfg(debug_assertions)]
-    let mut inner_check = (0..1000).into_iter();
+    let mut inner_check = (0..100_000).into_iter();
     while let Some(current) = front_opt {
         debug_assert!(inner_check.next().is_some());
         first = Some(current);

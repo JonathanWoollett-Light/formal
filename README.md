@@ -122,7 +122,9 @@ is rejected at compile time. A runtime index is still written out (`t = i * 4`,
 its own (a device address, a raw region) is read and written with the byte slice
 `t0[a:b]`, which states its own width. The standard library provides `exit`,
 `println`, `at`/`at_offset` (element addressing), `mod` (the canonical
-non-negative remainder), `fetch_add` (an atomic rank claim), and
+non-negative remainder), `fetch_add` (an atomic rank claim), a fixed-capacity
+hash map (`hm_init`/`hm_insert`/`hm_find`/`hm_remove`/`hm_len`, a Swiss table
+whose every operation is proven at compile time), and
 a `print` that is **polymorphic over its argument** -- `print("hi")` writes a
 string, `print(42)` writes an integer, chosen at compile time with no runtime
 cost. Two verifier-only directives reason about runtime input: `forget x` makes

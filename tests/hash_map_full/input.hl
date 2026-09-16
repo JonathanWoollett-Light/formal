@@ -1,0 +1,29 @@
+# The compile-time refusal of an oversubscribed table. Capacity 8 is one
+# window, and nine distinct keys go in: the ninth insert finds no key and then
+# no EMPTY or DELETED byte anywhere, so hm_insert reaches its `fail`, and the
+# verifier, which runs every insert concretely, refuses the program. A table
+# too small for its keys is a compile error, not a runtime one: with no
+# allocation there is no growth, and this is what stands in for it.
+
+ctrl: [u8*16]
+keys: [u32*8]
+vals: [u32*8]
+
+def put(k, v):
+    a0 = k
+    a1 = v
+    a5 = hm_insert(ctrl, keys, vals, a0, a1, a6)
+
+a6 = 8
+hm_init(ctrl, a6)
+
+put(1, 10)
+put(2, 20)
+put(3, 30)
+put(4, 40)
+put(5, 50)
+put(6, 60)
+put(7, 70)
+put(8, 80)
+put(9, 90)
+exit(0)

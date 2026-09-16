@@ -1815,7 +1815,7 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace backwards.
     let mut back = node;
     #[cfg(debug_assertions)]
-    let mut check = (0..1000).into_iter();
+    let mut check = (0..100_000).into_iter();
     while let Some(prev) = back.as_ref().prev {
         debug_assert!(check.next().is_some());
         if let Instruction::Label(LabelInstruction { tag }) = &prev.as_ref().as_ref().this {
@@ -1829,7 +1829,7 @@ unsafe fn find_label(node: NonNull<AstNode>, label: &Label) -> Option<NonNull<As
     // Trace forward.
     let mut front = node;
     #[cfg(debug_assertions)]
-    let mut check = (0..1000).into_iter();
+    let mut check = (0..100_000).into_iter();
     while let Some(next) = front.as_ref().next {
         debug_assert!(check.next().is_some());
         if let Instruction::Label(LabelInstruction { tag }) = &next.as_ref().as_ref().this {

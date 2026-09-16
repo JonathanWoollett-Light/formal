@@ -43,7 +43,7 @@ pub fn compress(root: &mut Option<NonNull<AstNode>>) {
         let mut originals = Vec::new();
         let mut next_opt = *root;
         #[cfg(debug_assertions)]
-        let mut check = (0..1000).into_iter();
+        let mut check = (0..100_000).into_iter();
         while let Some(next) = next_opt {
             debug_assert!(check.next().is_some());
             originals.push(next);
@@ -179,7 +179,7 @@ pub fn print_ast(root: Option<NonNull<AstNode>>) -> String {
     let mut next_opt = root;
     let mut string = String::new();
     #[cfg(debug_assertions)]
-    let mut check = (0..1000).into_iter();
+    let mut check = (0..100_000).into_iter();
     while let Some(next) = next_opt {
         debug_assert!(check.next().is_some());
         let as_ref = unsafe { next.as_ref() };

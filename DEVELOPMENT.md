@@ -1167,6 +1167,50 @@ arm clobbers `a0`, `a1`, `a2`, `a7` and `t0`; the integer arm those plus `t1`,
 `t2` and `t5`. `merge_intervals` ([§6](#6-integration-tests-tests)) is the
 worked example of a loop that prints from registers the call leaves alone.
 
+**The hash map.** The rest of std is a fixed-capacity **Swiss table**
+(abseil's `raw_hash_set` in its portable byte-wise form, on hashbrown's
+power-of-two layout) as nine `hm_*` defs over three arrays the program
+declares:
+
+| Function                                         | Does                                                         | Clobbers          |
+| ------------------------------------------------ | ------------------------------------------------------------ | ----------------- |
+| `hm_init(ctrl, cap)`                             | every byte EMPTY; refuses a `cap` not a power of two >= 8    | t0-t3             |
+| `h = hm_hash(key)`                               | `key * 40503`; H1 is `h / 128`, H2 is `h % 128`              | a4                |
+| `hm_set_ctrl(ctrl, slot, byte, cap)`             | `ctrl[slot] = byte`, and its clone when `slot < 8`           | t0 t1 a4          |
+| `s = hm_find(ctrl, keys, key, cap)`              | the key's slot, or `cap`; a hit leaves `slot * 4` in t1      | t0-t5 a2 a3 a4    |
+| `s = hm_first_free(ctrl, key, cap)`              | the first free (EMPTY or DELETED) slot for the key, or `cap` | t0-t5 a2 a3 a4    |
+| `s = hm_insert(ctrl, keys, vals, key, val, cap)` | `vals[key] = val`, inserting when absent; full is `fail`     | t0-t5 a2-a5       |
+| `n = hm_run(ctrl, first, step)`                  | non-EMPTY control bytes in a row from `first`, at most 8     | t0 t1 t2 t5 a3 a4 |
+| `s = hm_remove(ctrl, keys, key, cap)`            | removes the key (its byte EMPTY or DELETED), or `cap`        | t0-t5 a2-a5       |
+| `n = hm_len(ctrl, cap)`                          | the key count, by scanning the control bytes (O(cap))        | t0-t3 a2          |
+
+The program writes `ctrl: [u8*24]`, `keys: [u32*16]`, `vals: [u32*16]` for a
+capacity of 16 (plain digit counts: `cap + 8` control bytes, the 8 past the
+end cloning bytes `0..7` so a window of 8 never wraps; `hm_init` writes
+exactly `cap + 8` bytes, so a `ctrl` declared too short is an out-of-bounds
+store the verifier refuses, and it refuses a `cap` that is not a power of two
+of at least 8, the only shape triangular probing covers), keeps `cap` in a
+register the defs never touch
+and passes it on every call: it is the `%` divisor and the "absent" result,
+and neither accepts a literal. A control byte is the key's H2 (`0..127`) when
+the slot is full, 128 (EMPTY) or 254 (DELETED). Results are slot indices,
+`cap` meaning "absent"; a hit leaves `slot * 4` in `t1`, so the value is read
+as `p = at_offset(vals, t1); v = p[0]`, the `at` idiom. Every `hm_*` def
+clobbers at most `t0-t5` and `a2-a5`, so the convention is `a0 = key`,
+`a1 = val`, `a6 = cap` and `a7` for the caller's own state; `print` clobbers
+`a0-a2`, so only `a6` survives both a print and a map call. There is no
+growth: a full table is a `fail` inside `hm_insert`, which the verifier
+(running every insert concretely) turns into a compile-time refusal of a
+program that oversubscribes its table, the honest form when there is no
+allocation and the program sizes the table statically. `hm_hash`,
+`hm_set_ctrl`, `hm_first_free` and `hm_run` are the building blocks
+`hm_insert` and `hm_remove` are made of, public because a def cannot be
+hidden. Keys and values are u32 (the element width is capped at 4 bytes) and
+keys are non-negative. The `hash_map` test ([§6](#6-integration-tests-tests))
+is the worked example; [§11](#11-design-notes--roadmap) records what is
+faithful to abseil, what is the slower portable form, what is omitted, and
+the language features the rest waits on.
+
 <a id="52-the-risc-v-dialect-as-actually-parsed"></a>
 
 ### 5.2 The RISC-V dialect (as actually parsed)
@@ -1535,6 +1579,56 @@ can hold every language to the same output.
   pointer arithmetic in [§4.4](#44-symbolic-value--memory-model-srcverifier_typesrs)
   had to be generalised for. It also prints index `0`, so it covers
   `print_zero`'s arm end to end.
+- `hash_map` ([tests/hash_map/](tests/hash_map/)): the std hash map
+  ([§5.1](#51-the-hl-front-end)), a Swiss table over u32 keys with capacity
+  16 (two windows of 8), proven at compile time. Under `h = key * 40503`,
+  `start = h / 128 % 16` and `H2 = h % 128`, the keys and what each exercises:
+
+  | key  | start | H2  | slot   | what it exercises                                           |
+  | ---- | ----- | --- | ------ | ----------------------------------------------------------- |
+  | 1    | 12    | 55  | 12     | first in the window                                         |
+  | 10   | 12    | 38  | 13     | H1 collision                                                |
+  | 19   | 12    | 21  | 14     | H1 collision; later updated in place                        |
+  | 28   | 12    | 4   | 15     | H1 collision                                                |
+  | 2049 | 12    | 55  | 0      | shares H2 with 1: a false positive at lane 0, then the wrap |
+  | 86   | 12    | 122 | 1      | removed (DELETED, runs 5 + 5), reinserted into its slot     |
+  | 95   | 12    | 105 | 2      | still found after the removal                               |
+  | 104  | 12    | 88  | 3      | fills the window                                            |
+  | 113  | 12    | 71  | 4      | spills to the second window, start (12 + 8) % 16 = 4        |
+  | 30   | 4     | 114 | 5      | its own start is 4, taken by 113; removed last (DELETED)    |
+  | 2    | 8     | 110 | 8      | removed (EMPTY: runs 0 + 2)                                 |
+  | 11   | 8     | 93  | 9      | found in the lane after the EMPTY one                       |
+  | 122  | 12    | 54  | absent | a miss with no H2 match: two windows, EMPTY in the second   |
+  | 4097 | 12    | 55  | absent | a miss with two false positives (1 and 2049)                |
+  | 39   | 4     | 97  | absent | its window holds an EMPTY: the walk stops after one window  |
+
+  `put(k, v, slot)`, `get(k, slot, v)`, `absent(k)`, `drop(k, slot)` and
+  `ctrl_is(i, b)` are program-local defs (the `visit` pattern of
+  `num_islands`) that `require` the slot every insert lands in, the slot and
+  value every find returns, each miss, the slot every removal held, and a
+  control byte by index (so a clone can be named). The three removals take
+  the erase rule's three shapes. 86 from slot 1 counts 5 non-EMPTY bytes
+  forwards (indices 1..5; 6 is EMPTY) and 5 backwards from index 16 (the
+  clone of slot 0, then 15..12; 11 is EMPTY), so `10 >= 8` writes DELETED,
+  which `find(113)` must probe past (its first window has no EMPTY) and the
+  reinsert of 86 reuses, reading lane 5 of window 12 through the clone at
+  index 17; the byte and its clone are pinned at 254, then at H2 = 122 after
+  the reinsert. 2 from slot 8 counts 2 forwards and 0 backwards (7 is EMPTY),
+  so the byte becomes EMPTY, pinned at 128, and `find(11)` then reaches lane
+  1 past that EMPTY lane 0. 30 from slot 5 counts 8 backwards (index 20, the
+  clone of slot 4, down to 16, then 15..13: `hm_run`'s cap) and 1 forwards,
+  so DELETED again, pinned with its clone at 21. 14 inserts, 13 hits, 6 misses
+  (39 ends after one window: its window holds an EMPTY), 3 removals, 7 byte
+  pins; `hm_len` counts 10. Prints `10 5`, the key count and the last removed
+  slot. 6,984 verifier steps, 3,437 dialect lines (the first program past
+  1,000, [§9](#9-conventions--gotchas)), 2,205 emitted and 5,800 executed
+  instructions.
+- `hash_map_full` ([tests/hash_map_full/](tests/hash_map_full/)): the map's
+  compile-time refusal. Capacity 8 is one window and nine distinct keys go in:
+  the ninth insert finds no key and then no EMPTY or DELETED byte, reaches
+  `hm_insert`'s `fail`, and the program is `Invalid`. A table too small for its
+  keys is a compile error, not a runtime one; with no allocation there is no
+  growth, and this refusal stands in for it.
 - `trapping_rain` ([tests/trapping_rain/](tests/trapping_rain/)): Trapping Rain
   Water over `[0 1 0 2 1 0 1 3 2 1 2 1]`, `require`ing the total of 6. Two
   pointers closing in from both ends with a running maximum on each side. The
@@ -2358,10 +2452,15 @@ the `Explorerer` oracle, which fuses the sweep and search into one backtracking 
   by `copy_to_nonoverlapping`, never double-freed.
 - **Debug-only infinite-loop guards.** Many `while` loops over the lists carry
   `#[cfg(debug_assertions)] let mut check = (0..1000).into_iter();` with
-  `debug_assert!(check.next().is_some());` (and `(0..100_000)` in a couple of
-  places). These panic in debug builds if a loop exceeds the bound (cycle /
-  corruption guard) and are **compiled out in release**: release builds can loop
-  unboundedly on malformed structures. Preserve these when adding new traversals.
+  `debug_assert!(check.next().is_some());`. The walks whose length is the
+  **program's** (`new_ast`'s node chain, `compress`, `print_ast`, the two
+  optimizer passes and the verifier's `find_label`) use `(0..100_000)`, as
+  `new_ast`'s character loop does: a program may run past 1,000 dialect lines
+  (`hash_map` is 3,437, [§6](#6-integration-tests-tests)). These panic in
+  debug builds if a loop exceeds the bound (cycle / corruption guard) and are
+  **compiled out in release**: release builds can loop unboundedly on
+  malformed structures. Preserve these when adding new traversals, and size
+  the bound by what the loop walks.
 - **Error model: `verifier.rs` never panics.** Every former
   `todo!`/`unimplemented!`/`unreachable!`/`panic!`/`unwrap`/`expect` in
   [src/verifier.rs](src/verifier.rs) has been converted to return a
@@ -2626,7 +2725,8 @@ Where the repetition comes from, in this verifier:
   (the UART). Every ordering of two independent `k`-step stretches is
   explored, though only `(k+1)^2` states exist. This is the whole story today,
   because an indeterminate branch is a refusal, not a fork: a single-hart
-  verification is one path (`two_sum`: 460 steps, 460 states).
+  verification is one path (`two_sum`: 460 steps, 460 states; `hash_map`:
+  6,984 and 6,984).
 - **After fork-on-indeterminate (Phase 2), the branch-then-join shape.** Arms
   that differ only in registers later overwritten or forgotten rejoin at one
   state, and a loop whose exit is indeterminate terminates exactly when its
@@ -2651,6 +2751,7 @@ the set) takes; distinct is what the engines step now:
 | `racy_increment` (1, 2)   | 716        | 184      | 74.3%  |
 | `racy_store_*` (1, 2)     | 67         | 43       | 35.8%  |
 | `two_sum` (1)             | 460        | 460      | 0%     |
+| `hash_map` (1)            | 6,984      | 6,984    | 0%     |
 
 `uart_hello` at two harts went from 15.4 s to 0.05 s. The check costs about
 1.9 µs a continuation (serialise, SHA-256, insert) against 5.8 µs for the
@@ -3001,6 +3102,133 @@ expansion is trusted, as with the TLS `la`), and the signedness doctrine is
 **emit the load that matches the model** wherever the type is known, which is
 exactly where element indexing applies; a byte slice keeps the documented
 `lb`/`lh` sign-extension mismatch until the dialect has `lbu`/`lhu`.
+
+### Hash maps: the Swiss table in std (implemented, portable form)
+
+`std` has a hash map ([§5.1](#51-the-hl-front-end); the `hash_map` test in
+[§6](#6-integration-tests-tests)): abseil's `raw_hash_set` ported faithfully
+into the dialect as it stands, in the portable byte-wise form (`W = 8`) and on
+hashbrown's power-of-two layout. This section records what the port is, what
+it cost, and what the rest of the design waits on.
+
+**Layout.** `cap = 2^n >= 8`; `ctrl: [u8*(cap + 8)]`, `keys: [u32*cap]`,
+`vals: [u32*cap]`, declared by the program with plain digit counts, `cap`
+passed in a register on every call (the `%` divisor and the "absent" result,
+neither of which accepts a literal). A control byte is the key's H2 (`0..127`)
+when the slot is full, 128 (EMPTY) or 254 (DELETED), abseil's values so a
+later SWAR or SIMD group is a drop-in; bytes `cap .. cap + 7` clone bytes
+`0 .. 7`, so a window of 8 consecutive bytes never wraps (7 are needed, the
+8th lets the mirror test reuse the register holding 8). The hash is
+`h = key * 40503`, `H2 = h % 128`, `H1 = h / 128`, `start = H1 % cap`; the
+constant is a 16-bit odd number so a u32 key's product cannot overflow an i64
+(an overflowing `mul` panics the verifier, and the language has no wrapping
+arithmetic), which also means H2 is only a permutation of `key % 128`. Every
+`hm_*` def clobbers at most `t0-t5` and `a2-a5`, so the caller keeps key,
+value and `cap` in `a0`, `a1`, `a6` and has `a7` for its own state. The
+sentinel is dropped: its only role is ending iteration without a bound check,
+no iteration is offered, and keeping it would force `cap = 2^n - 1` and a
+third constant register in every free test. Position arithmetic is `x % cap`
+with every dividend non-negative (erase makes `slot - 8` positive first), so
+std's `mod` is not needed.
+
+**Faithful** to the specification (byte for byte with its portable
+formulation): the four control-byte classes and their values; the
+power-of-two ring of windows of 8 with triangular probing (`stride += 8`,
+`offset = (offset + stride) % cap`), lowest lane first, every window visited
+once in `cap / 8` probes; the clones mirrored on every write; `find` comparing
+keys on every H2 match, never stopping at DELETED, stopping at the first
+window that holds an EMPTY (after checking all of its lanes) and after
+`cap / 8` windows; `insert` as a find then a first-free walk into the first
+EMPTY-or-DELETED slot in probe order (tombstone reuse), assigning in place on
+an existing key; `erase` by the run-length rule (EMPTY iff the non-EMPTY run
+through the slot is under 8, else DELETED); `raw_hash_set`'s split of the
+hash into H1 = `h >> 7` and H2 = `h & 0x7F`, here `h / 128` and `h % 128`.
+Dropped from the faithful list: the 7/8 maximum load. The table may fill to
+`cap`, and termination rests on the `cap / 8`-window bound instead of on an
+EMPTY byte ending every walk. Correctness is unaffected (find and first-free
+agree on the probe sequence), performance under churn is: a miss in a full or
+nearly full table scans every lane, and since a removal writes EMPTY only
+when the run through its slot is under 8, every removal in a dense table
+writes DELETED and the EMPTY count never recovers, so a fixed table under
+insert-and-remove churn degrades to full scans on every miss. abseil's
+`drop_deletes_without_resize` (rehash in place: relabel every DELETED as
+EMPTY and every full byte as DELETED, then re-place each key with
+`hm_first_free`, swapping when the target is occupied) is the remedy that
+fits the static-capacity doctrine, needing loops, `hm_first_free`, `mod` and
+a swap, no allocation; it is deferred for register pressure and a second
+walk, and `hm_init` refuses a `cap` that is not a power of two of at least 8
+so the probe sequence always covers every window.
+
+**Portable form** (slower, each where a language feature is missing): group
+operations are 8-iteration byte loops (an `add`, `la`, `add`, `lbu` and two
+compares a lane) in place of SIMD or SWAR; `% cap` for `& (cap - 1)`, `/ 128`
+and `% 128` for a shift and a mask; the hash is one multiply, not a mix;
+`slot * 4` is two adds; `hm_len` is an O(cap) scan (a def owns no storage
+across calls, and nothing bundles a size with the arrays); the walks use the
+flag idiom, complementary `if` pairs and `t4 = a4` to leave the lane loop, and
+the stride register doubles as the "EMPTY seen" indicator, because a walk uses
+9 of the 14 registers the dialect names and insert or remove 10, with 3 more
+for key, value and `cap`; insert is two walks (find, then first-free), as in
+abseil, since a merged walk needs one more live register.
+
+**Omitted**, with the missing feature: growth, the 25/32 rule and
+`growth_left` (there is no allocation; the table is sized by the program and a
+full table is a `fail`, which the verifier, running every insert concretely,
+turns into a compile-time refusal of a program that oversubscribes it: the
+`hash_map_full` test); rehash in place (deferred for register pressure, see
+above, not for allocation); the sentinel and iteration; runtime keys (every key is verifier-exact: a
+`forget`-ed key makes `% cap` a range, a load through a ranged pointer is
+`ListMultiple` and a branch on it indeterminate); keys or values wider than 32
+bits (no `sd`), string keys and negative keys (a negative offset panics the
+verifier); a handle bundling `ctrl`/`keys`/`vals`/`cap`; small mode
+(`cap < 8`), the pointer salt and per-table seed, SOO, sampling.
+
+**Cost.** The `hash_map` test (14 inserts, 13 hits, 6 misses, 3 removals, 7
+control-byte pins) is 6,984 verifier steps (one path, no repeats: it sits
+beside `two_sum` in the state convergence table above), 3,437 dialect
+lines, 2,205 emitted instructions and 5,800 executed under `qemu-riscv64`.
+It is the first program past 1,000 dialect lines, which is what raised the debug-only loop guards over the AST
+from 1,000 to 100,000 nodes ([§9](#9-conventions--gotchas)); that is the one
+deviation from the design as written. `two_sum` keeps its hand-rolled table:
+its emitted code is what the website's numbers are harvested from, so it can
+adopt the std map only with a re-harvest
+([§6.1](#61-the-language-comparison-metrics-pipeline-testscomparisons)), and
+"the same program, every language" would then want the other five languages
+on a Swiss table too.
+
+**Language features the rest of the design waits on**, each with the phase
+that provides it:
+
+1. Bitwise ops and shifts (`and`/`andi`, `srli`/`slli`, `xor`): `% cap`
+   becomes a mask, `/ 128` and `% 128` a shift and a mask, `slot * 4` a
+   shift, and the group operations become the SWAR forms (`Match`,
+   `MatchEmpty`, `MatchEmptyOrDeleted` over one `u64` load). Phase 0.5, the
+   instruction batch (above).
+2. Wrapping arithmetic, or `mulhu`: a real mixing hash (a 64-bit odd
+   constant, an xor-shift finaliser) instead of a 16-bit multiply whose H2 is
+   a permutation of the low bits. Not scheduled; it belongs in Phase 0.5's
+   batch as a decision on what `mul` overflow means to the verifier.
+3. `sd`, the 8-byte element store: u64 keys and values, and pointer keys
+   (string keys through a byte compare). Phase 0.5.
+4. Runtime keys: a key the verifier does not know makes the probe start a
+   range, so the lane load needs the ranged typed-list `get` returning the
+   join of the covered elements (Phase 1b) and the compare on it needs
+   fork-on-indeterminate (Phase 2); a counted insert loop then has to prove
+   the table cannot fill, which the `fail` already demands.
+5. Growth (`resize` to `2 cap`): allocation, Phase 3 (arena `alloc`, under
+   the static-capacity doctrine above). Rehash in place needs no allocation
+   and waits only on register pressure (a second walk with a swap), so it is
+   the first of these to land when a program churns a table.
+6. A record type: a handle bundling `ctrl`, `keys`, `vals` and `cap` so a
+   call passes one thing, and a size field so `hm_len` is O(1). Not
+   scheduled; the mixed shapes of the typed-indexing design are records
+   without field names, so it is the natural next step of that work.
+7. `break` and `else` (front-end sugar of the Python-like layer, above), a
+   call inside an expression and a condition against an immediate (both the
+   open scratch-register decision under "Still open"), and a private `def`
+   (the four building blocks `hm_hash`, `hm_set_ctrl`, `hm_first_free`,
+   `hm_run` are public because a def cannot be hidden). None changes the
+   emitted code; they shorten the bodies.
 
 ### Parallelism & SIMD (landed, and the next steps)
 

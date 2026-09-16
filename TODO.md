@@ -24,7 +24,9 @@ Short, medium and long terms things to do.
   five kernels that landed.
 - Standard-library candidates still open, after the audit of every
   `tests/*/input.hl`. Landed: `at`, `at_offset`, `mod`, `fetch_add`,
-  `println`, and `print` as two overloads; 19 tests rewritten to use them.
+  `println`, `print` as two overloads (19 tests rewritten to use them), and
+  the hash map (`hm_*`, abseil's Swiss table in its portable form; the
+  `hash_map` test). Its gaps are the items below.
   Deliberately deferred, with the reason each waits:
   - `fill`, `iota`, `copy`, `swap`, `sum2`: fannkuch-only, and `swap`/`sum2`
     would take `a`-registers as std scratch. Two `fill` sites are unsafe
@@ -41,6 +43,36 @@ Short, medium and long terms things to do.
   Left hand-written on purpose, each with a comment: bubble_sort's two index
   computations (the index lives in `t0`, which `at` overwrites), atomic_add
   (pins the raw `amoadd.w`), fannkuch_v2's two `cnt`/`work` fills.
+- `two_sum` still uses its hand-rolled open-addressing table rather than
+  std's `hm_*` map: its emitted code is what the website's numbers are
+  harvested from, so adopting the map means a `BLESS=1` re-baseline plus a
+  re-harvest through the comparisons pipeline, and "the same program, every
+  language" would want the other five languages on a Swiss table too.
+- Hash map, bitwise ops (Phase 0.5): `and`/`andi`, `srli`/`slli` and `xor`
+  turn the map's `% cap`, `/ 128`, `% 128` and `slot * 4` into masks and
+  shifts and allow the SWAR group operations (`Match`, `MatchEmpty`,
+  `MatchEmptyOrDeleted` over one `u64` load) in place of the 8-byte loops.
+- Hash map, a mixing hash: needs wrapping arithmetic or `mulhu` (an i64
+  overflow in `mul` panics the verifier), so `hm_hash` is a 16-bit multiply
+  whose H2 is a permutation of `key % 128`. A decision for Phase 0.5's batch.
+- Hash map, u64 keys and values: needs `sd` (Phase 0.5); string keys need it
+  too (a pointer key and a byte compare).
+- Hash map, runtime keys: a `forget`-ed key makes the probe start a range, so
+  the lane load needs the ranged typed-list `get` (Phase 1b) and the compare
+  fork-on-indeterminate (Phase 2); the `fail` on a full table then demands a
+  counted insert loop.
+- Hash map, growth: `resize` to `2 cap` needs allocation (Phase 3, arena
+  `alloc`). Rehash in place (abseil's `drop_deletes_without_resize`) does not:
+  loops, `hm_first_free`, `mod` and a swap, held back by register pressure.
+  Without it a fixed table under insert-and-remove churn keeps its tombstones
+  and every miss scans all lanes; DEVELOPMENT.md 11 has the numbers.
+- Hash map, a handle: a record type bundling `ctrl`/`keys`/`vals`/`cap` (one
+  argument instead of four) with a size field for an O(1) `hm_len`; the
+  natural next step of the typed-indexing design's mixed shapes.
+- Hash map, shorter bodies: `break`/`else`, a call inside an expression, a
+  condition against an immediate (the scratch decision above) and a private
+  `def` (the building blocks `hm_hash`/`hm_set_ctrl`/`hm_first_free`/`hm_run`
+  are public). No change to the emitted code.
 - A translate-time check that a register argument is not also a register
   the body writes (other than a parameter) would have caught all five unsafe
   rewrite sites in the audit, but the natural rule also refuses `exit(a0)`
